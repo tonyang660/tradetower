@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BrainOutputV1",
+  "type": "object",
+  "required": ["persona", "bias", "confidence_score", "reasons"],
+  "properties": {
+    "persona": { "type": "string" },
+    "bias": { "type": "string", "enum": ["long", "short", "neutral"] },
+    "confidence_score": { "type": "number", "minimum": 0, "maximum": 100 },
+    "reasons": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

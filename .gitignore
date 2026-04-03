@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.local
+.env.staging
+.env.production
+.pytest_cache/
+.coverage
+dist/
+build/
+*.log
+.DS_Store
+volumes/

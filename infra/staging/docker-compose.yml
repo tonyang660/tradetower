@@ -1,0 +1,94 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: trading-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: trading_platform
+      POSTGRES_USER: trading
+      POSTGRES_PASSWORD: change_me
+    volumes:
+      - ./volumes/postgres:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  data-hub:
+    build: ../../services/data-hub
+    container_name: trading-data-hub
+    restart: unless-stopped
+    env_file:
+      - ../env/staging.env
+    ports:
+      - "8101:8080"
+
+  feature-factory:
+    build: ../../services/feature-factory
+    container_name: trading-feature-factory
+    restart: unless-stopped
+    env_file:
+      - ../env/staging.env
+    ports:
+      - "8102:8080"
+
+  candidate-filter:
+    build: ../../services/candidate-filter
+    container_name: trading-candidate-filter
+    restart: unless-stopped
+    env_file:
+      - ../env/staging.env
+    ports:
+      - "8103:8080"
+
+  brain-orchestrator:
+    build: ../../services/brain-orchestrator
+    container_name: trading-brain-orchestrator
+    restart: unless-stopped
+    env_file:
+      - ../env/staging.env
+    ports:
+      - "8104:8080"
+
+  trade-guardian:
+    build: ../../services/trade-guardian
+    container_name: trading-trade-guardian
+    restart: unless-stopped
+    env_file:
+      - ../env/staging.env
+    ports:
+      - "8105:8080"
+
+  risk-engine:
+    build: ../../services/risk-engine
+    container_name: trading-risk-engine
+    restart: unless-stopped
+    env_file:
+      - ../env/staging.env
+    ports:
+      - "8106:8080"
+
+  paper-execution:
+    build: ../../services/paper-execution
+    container_name: trading-paper-execution
+    restart: unless-stopped
+    env_file:
+      - ../env/staging.env
+    ports:
+      - "8107:8080"
+
+  evaluator:
+    build: ../../services/evaluator
+    container_name: trading-evaluator
+    restart: unless-stopped
+    env_file:
+      - ../env/staging.env
+    ports:
+      - "8108:8080"
+
+  api-gateway:
+    build: ../../services/api-gateway
+    container_name: trading-api-gateway
+    restart: unless-stopped
+    env_file:
+      - ../env/staging.env
+    ports:
+      - "8100:8080"
