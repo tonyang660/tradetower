@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  basic-checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify Python syntax
+        run: |
+          python -m compileall services shared tests
+
+      - name: Validate schema files are valid JSON
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          schema_dir = Path("schemas")
+          if not schema_dir.exists():
+              raise SystemExit("schemas/ directory does not exist")
+
+          for path in schema_dir.glob("*.json"):
+              with open(path, "r", encoding="utf-8") as f:
+                  json.load(f)
+              print(f"OK: {path}")
+          PY
