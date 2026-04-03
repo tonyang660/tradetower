@@ -1,1 +1,233 @@
-{}
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MarketSnapshotV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "symbol",
+    "snapshot_timestamp",
+    "source",
+    "timeframes"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "market_snapshot_v1"
+    },
+    "symbol": {
+      "type": "string",
+      "minLength": 1
+    },
+    "snapshot_timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timeframes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["5m", "15m", "1h", "4h"],
+      "properties": {
+        "5m": { "$ref": "#/definitions/timeframeBlock" },
+        "15m": { "$ref": "#/definitions/timeframeBlock" },
+        "1h": { "$ref": "#/definitions/timeframeBlock" },
+        "4h": { "$ref": "#/definitions/timeframeBlock" }
+      }
+    }
+  },
+  "definitions": {
+    "candle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timestamp", "open", "high", "low", "close", "volume"],
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "open": {
+          "type": "number"
+        },
+        "high": {
+          "type": "number"
+        },
+        "low": {
+          "type": "number"
+        },
+        "close": {
+          "type": "number"
+        },
+        "volume": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "indicators": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rsi",
+        "atr",
+        "ema_fast",
+        "ema_slow",
+        "macd",
+        "macd_signal",
+        "macd_histogram",
+        "volume_sma",
+        "price_vs_ema_fast_pct",
+        "price_vs_ema_slow_pct"
+      ],
+      "properties": {
+        "rsi": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "atr": {
+          "type": "number",
+          "minimum": 0
+        },
+        "ema_fast": {
+          "type": "number"
+        },
+        "ema_slow": {
+          "type": "number"
+        },
+        "macd": {
+          "type": "number"
+        },
+        "macd_signal": {
+          "type": "number"
+        },
+        "macd_histogram": {
+          "type": "number"
+        },
+        "volume_sma": {
+          "type": "number",
+          "minimum": 0
+        },
+        "price_vs_ema_fast_pct": {
+          "type": "number"
+        },
+        "price_vs_ema_slow_pct": {
+          "type": "number"
+        }
+      }
+    },
+    "structure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trend_direction",
+        "market_type",
+        "higher_highs",
+        "higher_lows",
+        "lower_highs",
+        "lower_lows",
+        "range_high",
+        "range_low",
+        "distance_to_range_high_pct",
+        "distance_to_range_low_pct"
+      ],
+      "properties": {
+        "trend_direction": {
+          "type": "string",
+          "enum": ["up", "down", "neutral"]
+        },
+        "market_type": {
+          "type": "string",
+          "enum": ["trend", "range", "transition"]
+        },
+        "higher_highs": {
+          "type": "boolean"
+        },
+        "higher_lows": {
+          "type": "boolean"
+        },
+        "lower_highs": {
+          "type": "boolean"
+        },
+        "lower_lows": {
+          "type": "boolean"
+        },
+        "range_high": {
+          "type": "number"
+        },
+        "range_low": {
+          "type": "number"
+        },
+        "distance_to_range_high_pct": {
+          "type": "number"
+        },
+        "distance_to_range_low_pct": {
+          "type": "number"
+        }
+      }
+    },
+    "volatility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "atr",
+        "atr_percent",
+        "volatility_state"
+      ],
+      "properties": {
+        "atr": {
+          "type": "number",
+          "minimum": 0
+        },
+        "atr_percent": {
+          "type": "number",
+          "minimum": 0
+        },
+        "volatility_state": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        }
+      }
+    },
+    "timeframeBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timeframe",
+        "window_size",
+        "candles",
+        "indicators",
+        "structure",
+        "volatility"
+      ],
+      "properties": {
+        "timeframe": {
+          "type": "string",
+          "enum": ["5m", "15m", "1h", "4h"]
+        },
+        "window_size": {
+          "type": "integer",
+          "const": 50
+        },
+        "candles": {
+          "type": "array",
+          "minItems": 50,
+          "maxItems": 50,
+          "items": { "$ref": "#/definitions/candle" }
+        },
+        "indicators": {
+          "$ref": "#/definitions/indicators"
+        },
+        "structure": {
+          "$ref": "#/definitions/structure"
+        },
+        "volatility": {
+          "$ref": "#/definitions/volatility"
+        }
+      }
+    }
+  }
+}
