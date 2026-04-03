@@ -1,0 +1,1748 @@
+{
+  "schema_version": "market_snapshot_v1",
+  "symbol": "BTCUSDT",
+  "snapshot_timestamp": "2026-04-03T21:06:01.083612Z",
+  "source": "feature-factory",
+  "timeframes": {
+    "5m": {
+      "timeframe": "5m",
+      "window_size": 50,
+      "candles": [
+        {
+          "timestamp": "2026-04-03T20:17:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:18:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:19:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:20:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:21:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:22:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:23:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:24:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:25:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:26:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:27:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:28:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:29:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:30:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:31:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:32:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:33:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:34:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:35:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:36:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:37:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:38:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:39:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:40:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:41:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:42:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:43:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:44:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:45:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:46:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:47:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:48:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:49:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:50:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:51:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:52:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:53:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:54:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:55:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:56:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:57:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:58:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:59:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:00:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:01:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:02:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:03:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:04:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:05:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:06:01.083880+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        }
+      ],
+      "indicators": {
+        "rsi": 50,
+        "atr": 10,
+        "ema_fast": 100,
+        "ema_slow": 105,
+        "macd": 1,
+        "macd_signal": 0.5,
+        "macd_histogram": 0.5,
+        "volume_sma": 1000,
+        "price_vs_ema_fast_pct": 0.5,
+        "price_vs_ema_slow_pct": -0.2
+      },
+      "structure": {
+        "trend_direction": "neutral",
+        "market_type": "range",
+        "higher_highs": false,
+        "higher_lows": false,
+        "lower_highs": false,
+        "lower_lows": false,
+        "range_high": 110,
+        "range_low": 90,
+        "distance_to_range_high_pct": 0.2,
+        "distance_to_range_low_pct": 0.8
+      },
+      "volatility": {
+        "atr": 10,
+        "atr_percent": 0.5,
+        "volatility_state": "medium"
+      }
+    },
+    "15m": {
+      "timeframe": "15m",
+      "window_size": 50,
+      "candles": [
+        {
+          "timestamp": "2026-04-03T20:17:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:18:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:19:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:20:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:21:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:22:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:23:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:24:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:25:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:26:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:27:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:28:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:29:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:30:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:31:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:32:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:33:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:34:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:35:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:36:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:37:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:38:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:39:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:40:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:41:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:42:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:43:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:44:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:45:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:46:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:47:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:48:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:49:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:50:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:51:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:52:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:53:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:54:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:55:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:56:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:57:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:58:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:59:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:00:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:01:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:02:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:03:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:04:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:05:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:06:01.084014+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        }
+      ],
+      "indicators": {
+        "rsi": 50,
+        "atr": 10,
+        "ema_fast": 100,
+        "ema_slow": 105,
+        "macd": 1,
+        "macd_signal": 0.5,
+        "macd_histogram": 0.5,
+        "volume_sma": 1000,
+        "price_vs_ema_fast_pct": 0.5,
+        "price_vs_ema_slow_pct": -0.2
+      },
+      "structure": {
+        "trend_direction": "neutral",
+        "market_type": "range",
+        "higher_highs": false,
+        "higher_lows": false,
+        "lower_highs": false,
+        "lower_lows": false,
+        "range_high": 110,
+        "range_low": 90,
+        "distance_to_range_high_pct": 0.2,
+        "distance_to_range_low_pct": 0.8
+      },
+      "volatility": {
+        "atr": 10,
+        "atr_percent": 0.5,
+        "volatility_state": "medium"
+      }
+    },
+    "1h": {
+      "timeframe": "1h",
+      "window_size": 50,
+      "candles": [
+        {
+          "timestamp": "2026-04-03T20:17:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:18:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:19:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:20:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:21:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:22:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:23:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:24:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:25:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:26:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:27:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:28:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:29:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:30:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:31:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:32:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:33:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:34:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:35:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:36:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:37:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:38:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:39:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:40:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:41:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:42:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:43:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:44:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:45:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:46:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:47:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:48:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:49:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:50:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:51:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:52:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:53:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:54:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:55:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:56:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:57:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:58:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:59:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:00:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:01:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:02:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:03:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:04:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:05:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:06:01.084130+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        }
+      ],
+      "indicators": {
+        "rsi": 50,
+        "atr": 10,
+        "ema_fast": 100,
+        "ema_slow": 105,
+        "macd": 1,
+        "macd_signal": 0.5,
+        "macd_histogram": 0.5,
+        "volume_sma": 1000,
+        "price_vs_ema_fast_pct": 0.5,
+        "price_vs_ema_slow_pct": -0.2
+      },
+      "structure": {
+        "trend_direction": "neutral",
+        "market_type": "range",
+        "higher_highs": false,
+        "higher_lows": false,
+        "lower_highs": false,
+        "lower_lows": false,
+        "range_high": 110,
+        "range_low": 90,
+        "distance_to_range_high_pct": 0.2,
+        "distance_to_range_low_pct": 0.8
+      },
+      "volatility": {
+        "atr": 10,
+        "atr_percent": 0.5,
+        "volatility_state": "medium"
+      }
+    },
+    "4h": {
+      "timeframe": "4h",
+      "window_size": 50,
+      "candles": [
+        {
+          "timestamp": "2026-04-03T20:17:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:18:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:19:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:20:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:21:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:22:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:23:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:24:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:25:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:26:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:27:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:28:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:29:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:30:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:31:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:32:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:33:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:34:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:35:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:36:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:37:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:38:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:39:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:40:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:41:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:42:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:43:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:44:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:45:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:46:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:47:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:48:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:49:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:50:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:51:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:52:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:53:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:54:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:55:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:56:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:57:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:58:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T20:59:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:00:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:01:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:02:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:03:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:04:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:05:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        },
+        {
+          "timestamp": "2026-04-03T21:06:01.084249+00:00Z",
+          "open": 100,
+          "high": 105,
+          "low": 95,
+          "close": 102,
+          "volume": 1000
+        }
+      ],
+      "indicators": {
+        "rsi": 50,
+        "atr": 10,
+        "ema_fast": 100,
+        "ema_slow": 105,
+        "macd": 1,
+        "macd_signal": 0.5,
+        "macd_histogram": 0.5,
+        "volume_sma": 1000,
+        "price_vs_ema_fast_pct": 0.5,
+        "price_vs_ema_slow_pct": -0.2
+      },
+      "structure": {
+        "trend_direction": "neutral",
+        "market_type": "range",
+        "higher_highs": false,
+        "higher_lows": false,
+        "lower_highs": false,
+        "lower_lows": false,
+        "range_high": 110,
+        "range_low": 90,
+        "distance_to_range_high_pct": 0.2,
+        "distance_to_range_low_pct": 0.8
+      },
+      "volatility": {
+        "atr": 10,
+        "atr_percent": 0.5,
+        "volatility_state": "medium"
+      }
+    }
+  }
+}
