@@ -17,9 +17,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install CI dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install jsonschema
+
       - name: Verify Python syntax
         run: |
-          python -m compileall services shared tests
+          python -m compileall services shared tests scripts
 
       - name: Validate schema files are valid JSON
         run: |
@@ -31,8 +36,44 @@ jobs:
           if not schema_dir.exists():
               raise SystemExit("schemas/ directory does not exist")
 
+          errors = []
+
           for path in schema_dir.glob("*.json"):
-              with open(path, "r", encoding="utf-8") as f:
-                  json.load(f)
-              print(f"OK: {path}")
+              try:
+                  with open(path, "r", encoding="utf-8") as f:
+                      json.load(f)
+                  print(f"OK: {path}")
+              except Exception as e:
+                  errors.append((path, str(e)))
+
+          if errors:
+              for path, err in errors:
+                  print(f"ERROR in {path}: {err}")
+              raise SystemExit("Schema validation failed")
+          PY
+
+      - name: Validate market snapshot fixture against schema
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from jsonschema import validate
+
+          schema_path = Path("schemas/market_snapshot_schema_v1.json")
+          fixture_path = Path("tests/fixtures/market_snapshot_v1_sample.json")
+
+          if not schema_path.exists():
+              raise SystemExit(f"Missing schema: {schema_path}")
+
+          if not fixture_path.exists():
+              raise SystemExit(f"Missing fixture: {fixture_path}")
+
+          with open(schema_path, "r", encoding="utf-8") as f:
+              schema = json.load(f)
+
+          with open(fixture_path, "r", encoding="utf-8") as f:
+              fixture = json.load(f)
+
+          validate(instance=fixture, schema=schema)
+          print("OK: market snapshot fixture matches schema")
           PY
