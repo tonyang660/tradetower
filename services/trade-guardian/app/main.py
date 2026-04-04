@@ -614,7 +614,9 @@ def maybe_finalize_trade(position: dict):
     query = """
     SELECT
         COALESCE(SUM((details_json->>'realized_pnl')::numeric), 0),
-        COALESCE(SUM((details_json->>'fee_paid')::numeric), 0)
+        COALESCE(SUM((details_json->>'fee_paid')::numeric), 0),
+        COALESCE(SUM(((details_json->>'fill_price')::numeric) * ((details_json->>'close_size')::numeric)), 0),
+        COALESCE(SUM((details_json->>'close_size')::numeric), 0)
     FROM guardian_events
     WHERE account_id = %s
       AND event_type IN ('TP1_HIT', 'TP2_HIT', 'TP3_HIT', 'STOP_LOSS_HIT')
@@ -624,7 +626,11 @@ def maybe_finalize_trade(position: dict):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(query, (position["account_id"], str(position["position_id"])))
-            pnl_sum, fees_sum = cur.fetchone()
+            pnl_sum, fees_sum, weighted_exit_numerator, total_closed_size = cur.fetchone()
+
+            avg_exit_price = None
+            if total_closed_size and float(total_closed_size) > 0:
+                avg_exit_price = float(weighted_exit_numerator) / float(total_closed_size)
 
             cur.execute(
                 """
@@ -640,7 +646,7 @@ def maybe_finalize_trade(position: dict):
                     opened_at,
                     closed_at
                 )
-                VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 RETURNING trade_id
                 """,
                 (
@@ -648,6 +654,7 @@ def maybe_finalize_trade(position: dict):
                     position["symbol"],
                     position["side"],
                     position["entry_price"],
+                    avg_exit_price,
                     position["original_size"],
                     float(pnl_sum or 0),
                     float(fees_sum or 0),
