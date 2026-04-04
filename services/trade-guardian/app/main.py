@@ -610,10 +610,11 @@ def close_position(position_id: int, tp1_hit=None, tp2_hit=None, tp3_hit=None):
             cur.execute(query, values)
         conn.commit()
 
-
 def maybe_finalize_trade(position: dict):
     query = """
-    SELECT COALESCE(SUM(realized_pnl), 0), COALESCE(SUM(fees_paid), 0)
+    SELECT
+        COALESCE(SUM((details_json->>'realized_pnl')::numeric), 0),
+        COALESCE(SUM((details_json->>'fee_paid')::numeric), 0)
     FROM guardian_events
     WHERE account_id = %s
       AND event_type IN ('TP1_HIT', 'TP2_HIT', 'TP3_HIT', 'STOP_LOSS_HIT')
@@ -654,6 +655,7 @@ def maybe_finalize_trade(position: dict):
                 )
             )
             trade_id = cur.fetchone()[0]
+
         conn.commit()
 
     return trade_id
