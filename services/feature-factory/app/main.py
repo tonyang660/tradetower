@@ -52,7 +52,7 @@ def fetch_candles(symbol: str, timeframe: str, limit: int):
         return None, payload.get("error", "data_hub_error")
 
     candles = payload.get("candles", [])
-    if len(candles) != WINDOW_SIZE:
+    if len(candles) != limit:
         return None, "insufficient_candle_data"
 
     return candles, None
