@@ -14,14 +14,27 @@ PORT = int(os.getenv("PORT", "8080"))
 DATA_HUB_BASE_URL = os.getenv("DATA_HUB_BASE_URL", "http://data-hub:8080")
 
 TIMEFRAMES = ["5m", "15m", "1h", "4h"]
-WINDOW_SIZE = 50
+
+FETCH_WINDOWS = {
+    "5m": 72,
+    "15m": 72,
+    "1h": 72,
+    "4h": 72,
+}
+
+EMIT_WINDOWS = {
+    "5m": 72,
+    "15m": 48,
+    "1h": 30,
+    "4h": 16,
+}
 
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def fetch_candles(symbol: str, timeframe: str, limit: int = WINDOW_SIZE):
+def fetch_candles(symbol: str, timeframe: str, limit: int):
     url = f"{DATA_HUB_BASE_URL}/candles"
     params = {
         "symbol": symbol,
@@ -198,19 +211,27 @@ def compute_volatility(df: pd.DataFrame, indicators: dict) -> dict:
 
 
 def build_timeframe_block(symbol: str, timeframe: str):
-    candles, error = fetch_candles(symbol, timeframe, WINDOW_SIZE)
+    fetch_limit = FETCH_WINDOWS[timeframe]
+    emit_limit = EMIT_WINDOWS[timeframe]
+
+    candles, error = fetch_candles(symbol, timeframe, fetch_limit)
     if error:
         return None, error
+
+    if len(candles) < fetch_limit:
+        return None, "insufficient_candle_data"
 
     df = to_dataframe(candles)
     indicators = compute_indicators(df)
     structure = compute_structure(df, indicators)
     volatility = compute_volatility(df, indicators)
 
+    emitted_candles = candles[-emit_limit:]
+
     return {
         "timeframe": timeframe,
-        "window_size": WINDOW_SIZE,
-        "candles": candles,
+        "window_size": emit_limit,
+        "candles": emitted_candles,
         "indicators": indicators,
         "structure": structure,
         "volatility": volatility,

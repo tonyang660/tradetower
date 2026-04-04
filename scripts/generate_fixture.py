@@ -1,38 +1,60 @@
 import json
 from datetime import datetime, timedelta, timezone
 
-def gen_candles():
+WINDOWS = {
+    "5m": 72,
+    "15m": 48,
+    "1h": 30,
+    "4h": 16,
+}
+
+
+def tf_delta(tf: str):
+    if tf == "5m":
+        return timedelta(minutes=5)
+    if tf == "15m":
+        return timedelta(minutes=15)
+    if tf == "1h":
+        return timedelta(hours=1)
+    if tf == "4h":
+        return timedelta(hours=4)
+    raise ValueError(f"Unsupported timeframe: {tf}")
+
+
+def gen_candles(tf: str, n: int):
     base_time = datetime.now(timezone.utc)
+    delta = tf_delta(tf)
     candles = []
 
-    for i in range(50):
-        t = base_time - timedelta(minutes=i)
+    for i in range(n):
+        t = base_time - delta * (n - 1 - i)
         candles.append({
-            "timestamp": t.isoformat() + "Z",
-            "open": 100,
-            "high": 105,
-            "low": 95,
-            "close": 102,
-            "volume": 1000
+            "timestamp": t.isoformat().replace("+00:00", "Z"),
+            "open": 100.0,
+            "high": 105.0,
+            "low": 95.0,
+            "close": 102.0,
+            "volume": 1000.0
         })
 
-    return list(reversed(candles))
+    return candles
 
 
-def make_tf(tf):
+def make_tf(tf: str):
+    n = WINDOWS[tf]
     return {
         "timeframe": tf,
-        "window_size": 50,
-        "candles": gen_candles(),
+        "window_size": n,
+        "candles": gen_candles(tf, n),
         "indicators": {
-            "rsi": 50,
-            "atr": 10,
-            "ema_fast": 100,
-            "ema_slow": 105,
-            "macd": 1,
+            "rsi": 50.0,
+            "atr": 10.0,
+            "ema_fast": 100.0,
+            "ema_slow": 105.0,
+            "macd": 1.0,
             "macd_signal": 0.5,
             "macd_histogram": 0.5,
-            "volume_sma": 1000,
+            "volume_sma": 1000.0,
             "price_vs_ema_fast_pct": 0.5,
             "price_vs_ema_slow_pct": -0.2
         },
@@ -43,13 +65,13 @@ def make_tf(tf):
             "higher_lows": False,
             "lower_highs": False,
             "lower_lows": False,
-            "range_high": 110,
-            "range_low": 90,
+            "range_high": 110.0,
+            "range_low": 90.0,
             "distance_to_range_high_pct": 0.2,
             "distance_to_range_low_pct": 0.8
         },
         "volatility": {
-            "atr": 10,
+            "atr": 10.0,
             "atr_percent": 0.5,
             "volatility_state": "medium"
         }

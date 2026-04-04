@@ -32,10 +32,10 @@
       "additionalProperties": false,
       "required": ["5m", "15m", "1h", "4h"],
       "properties": {
-        "5m": { "$ref": "#/definitions/timeframeBlock" },
-        "15m": { "$ref": "#/definitions/timeframeBlock" },
-        "1h": { "$ref": "#/definitions/timeframeBlock" },
-        "4h": { "$ref": "#/definitions/timeframeBlock" }
+        "5m": { "$ref": "#/definitions/timeframeBlock5m" },
+        "15m": { "$ref": "#/definitions/timeframeBlock15m" },
+        "1h": { "$ref": "#/definitions/timeframeBlock1h" },
+        "4h": { "$ref": "#/definitions/timeframeBlock4h" }
       }
     }
   },
@@ -192,7 +192,7 @@
         }
       }
     },
-    "timeframeBlock": {
+    "timeframeBlockBase": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -209,13 +209,10 @@
           "enum": ["5m", "15m", "1h", "4h"]
         },
         "window_size": {
-          "type": "integer",
-          "const": 50
+          "type": "integer"
         },
         "candles": {
           "type": "array",
-          "minItems": 50,
-          "maxItems": 50,
           "items": { "$ref": "#/definitions/candle" }
         },
         "indicators": {
@@ -228,6 +225,74 @@
           "$ref": "#/definitions/volatility"
         }
       }
+    },
+    "timeframeBlock5m": {
+      "allOf": [
+        { "$ref": "#/definitions/timeframeBlockBase" },
+        {
+          "properties": {
+            "timeframe": { "const": "5m" },
+            "window_size": { "const": 72 },
+            "candles": {
+              "type": "array",
+              "minItems": 72,
+              "maxItems": 72,
+              "items": { "$ref": "#/definitions/candle" }
+            }
+          }
+        }
+      ]
+    },
+    "timeframeBlock15m": {
+      "allOf": [
+        { "$ref": "#/definitions/timeframeBlockBase" },
+        {
+          "properties": {
+            "timeframe": { "const": "15m" },
+            "window_size": { "const": 48 },
+            "candles": {
+              "type": "array",
+              "minItems": 48,
+              "maxItems": 48,
+              "items": { "$ref": "#/definitions/candle" }
+            }
+          }
+        }
+      ]
+    },
+    "timeframeBlock1h": {
+      "allOf": [
+        { "$ref": "#/definitions/timeframeBlockBase" },
+        {
+          "properties": {
+            "timeframe": { "const": "1h" },
+            "window_size": { "const": 30 },
+            "candles": {
+              "type": "array",
+              "minItems": 30,
+              "maxItems": 30,
+              "items": { "$ref": "#/definitions/candle" }
+            }
+          }
+        }
+      ]
+    },
+    "timeframeBlock4h": {
+      "allOf": [
+        { "$ref": "#/definitions/timeframeBlockBase" },
+        {
+          "properties": {
+            "timeframe": { "const": "4h" },
+            "window_size": { "const": 16 },
+            "candles": {
+              "type": "array",
+              "minItems": 16,
+              "maxItems": 16,
+              "items": { "$ref": "#/definitions/candle" }
+            }
+          }
+        }
+      ]
     }
   }
 }
