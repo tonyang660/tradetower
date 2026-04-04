@@ -1,5 +1,5 @@
-CREATE TABLE IF NOT EXISTS accounts (≈
-    account_id SERIAL PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS accounts (
+    account_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     account_name TEXT NOT NULL UNIQUE,
     account_type TEXT NOT NULL CHECK (account_type IN ('paper', 'live')),
     starting_balance NUMERIC(18,8) NOT NULL,
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS account_balances (
 );
 
 CREATE TABLE IF NOT EXISTS positions (
-    position_id SERIAL PRIMARY KEY,
+    position_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     account_id INTEGER NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     symbol TEXT NOT NULL,
     side TEXT NOT NULL CHECK (side IN ('long', 'short')),
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS positions (
 );
 
 CREATE TABLE IF NOT EXISTS orders (
-    order_id SERIAL PRIMARY KEY,
+    order_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     account_id INTEGER NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     symbol TEXT NOT NULL,
     side TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 
 CREATE TABLE IF NOT EXISTS execution_reports (
-    execution_id SERIAL PRIMARY KEY,
+    execution_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     order_id INTEGER REFERENCES orders(order_id) ON DELETE SET NULL,
     account_id INTEGER NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     symbol TEXT NOT NULL,
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS execution_reports (
 );
 
 CREATE TABLE IF NOT EXISTS trades (
-    trade_id SERIAL PRIMARY KEY,
+    trade_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     account_id INTEGER NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     symbol TEXT NOT NULL,
     side TEXT NOT NULL CHECK (side IN ('long', 'short')),
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS trades (
 );
 
 CREATE TABLE IF NOT EXISTS guardian_events (
-    event_id SERIAL PRIMARY KEY,
+    event_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     account_id INTEGER NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     event_type TEXT NOT NULL,
     reason_code TEXT NOT NULL,
@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS guardian_events (
 );
 
 CREATE TABLE IF NOT EXISTS cycle_runs (
-    cycle_id SERIAL PRIMARY KEY,
+    cycle_id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     account_id INTEGER NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at TIMESTAMPTZ,
