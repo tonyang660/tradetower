@@ -6,9 +6,10 @@ services:
     environment:
       POSTGRES_DB: trading_platform
       POSTGRES_USER: trading
-      POSTGRES_PASSWORD: change_me
+      POSTGRES_PASSWORD: '!OrignalMath797!POSTGRES'
     volumes:
       - ./volumes/postgres:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
     ports:
       - "5432:5432"
 
