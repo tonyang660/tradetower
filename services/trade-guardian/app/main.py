@@ -1,6 +1,6 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta, date
 import json
 import os
 
@@ -26,6 +26,202 @@ def iso_now() -> str:
 def get_conn():
     return psycopg.connect(**DB_CONFIG)
 
+def utc_now():
+    return datetime.now(timezone.utc)
+
+
+def start_of_today_utc() -> datetime:
+    now = utc_now()
+    return datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+
+
+def start_of_week_utc() -> datetime:
+    now = utc_now()
+    monday = now.date() - timedelta(days=now.weekday())
+    return datetime(monday.year, monday.month, monday.day, tzinfo=timezone.utc)
+
+
+def next_monday_utc() -> datetime:
+    sow = start_of_week_utc()
+    return sow + timedelta(days=7)
+
+
+def sunday_end_utc() -> datetime:
+    return next_monday_utc() - timedelta(seconds=1)
+
+
+def get_realized_pnl_for_period(account_id: int, start_ts: datetime, end_ts: datetime | None = None) -> float:
+    if end_ts is None:
+        end_ts = utc_now()
+
+    query = """
+    SELECT COALESCE(SUM(realized_pnl), 0)
+    FROM trades
+    WHERE account_id = %s
+      AND closed_at IS NOT NULL
+      AND closed_at >= %s
+      AND closed_at <= %s
+    """
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (account_id, start_ts, end_ts))
+            value = cur.fetchone()[0]
+
+    return float(value or 0)
+
+
+def update_guardian_state_fields(account_id: int, fields: dict):
+    if not fields:
+        return
+
+    assignments = ", ".join(f"{k} = %s" for k in fields.keys())
+    values = list(fields.values())
+    values.append(account_id)
+
+    query = f"""
+    UPDATE guardian_state
+    SET {assignments},
+        updated_at = NOW()
+    WHERE account_id = %s
+    """
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, values)
+        conn.commit()
+
+
+def insert_guardian_event(account_id: int, event_type: str, reason_code: str, details: dict | None = None):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO guardian_events (account_id, event_type, reason_code, details_json, created_at)
+                VALUES (%s, %s, %s, %s::jsonb, NOW())
+                """,
+                (
+                    account_id,
+                    event_type,
+                    reason_code,
+                    json.dumps(details or {})
+                )
+            )
+        conn.commit()
+
+def evaluate_and_refresh_guardian_state(status: dict):
+    account_id = status["account_id"]
+    now = utc_now()
+
+    updates = {}
+
+    # --- Daily reset ---
+    today = now.date()
+    if status["daily_basis_date"] != str(today):
+        updates["daily_basis_date"] = today
+        updates["daily_basis_equity"] = status["equity"]
+        updates["daily_kill_switch"] = False
+
+        insert_guardian_event(
+            account_id,
+            "DAILY_BASIS_RESET",
+            "DAILY_RESET",
+            {
+                "daily_basis_date": str(today),
+                "daily_basis_equity": status["equity"]
+            }
+        )
+
+    # --- Weekly reset (Monday start) ---
+    current_week_start = start_of_week_utc().date()
+    if status["weekly_basis_start"] != str(current_week_start):
+        updates["weekly_basis_start"] = current_week_start
+        updates["weekly_basis_equity"] = status["equity"]
+        updates["weekly_kill_switch"] = False
+        updates["weekly_kill_switch_expires_at"] = None
+
+        insert_guardian_event(
+            account_id,
+            "WEEKLY_BASIS_RESET",
+            "WEEKLY_RESET",
+            {
+                "weekly_basis_start": str(current_week_start),
+                "weekly_basis_equity": status["equity"]
+            }
+        )
+
+    # --- Weekly kill switch expiry check ---
+    expires_at = status["weekly_kill_switch_expires_at"]
+    if status["weekly_kill_switch"] and expires_at is not None:
+        expiry_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        if now >= expiry_dt:
+            updates["weekly_kill_switch"] = False
+            updates["weekly_kill_switch_expires_at"] = None
+
+            insert_guardian_event(
+                account_id,
+                "WEEKLY_KILL_SWITCH_CLEARED",
+                "WEEKLY_KILL_SWITCH_EXPIRED",
+                {"expired_at": expires_at}
+            )
+
+    # Apply reset/expiry updates first
+    if updates:
+        update_guardian_state_fields(account_id, updates)
+        status = fetch_guardian_status(account_id)
+
+    # --- Daily net realized loss check ---
+    daily_realized_pnl = get_realized_pnl_for_period(account_id, start_of_today_utc())
+    daily_limit_amount = status["daily_basis_equity"] * (status["daily_loss_limit_pct"] / 100.0)
+
+    if daily_realized_pnl < 0 and abs(daily_realized_pnl) >= daily_limit_amount:
+        if not status["daily_kill_switch"]:
+            update_guardian_state_fields(account_id, {"daily_kill_switch": True})
+
+            insert_guardian_event(
+                account_id,
+                "DAILY_KILL_SWITCH_TRIGGERED",
+                "DAILY_MAX_LOSS_REACHED",
+                {
+                    "daily_realized_pnl": daily_realized_pnl,
+                    "daily_limit_amount": daily_limit_amount
+                }
+            )
+
+            status = fetch_guardian_status(account_id)
+
+    # --- Weekly net realized loss check ---
+    weekly_realized_pnl = get_realized_pnl_for_period(account_id, start_of_week_utc())
+    weekly_limit_amount = status["weekly_basis_equity"] * (status["weekly_loss_limit_pct"] / 100.0)
+
+    if weekly_realized_pnl < 0 and abs(weekly_realized_pnl) >= weekly_limit_amount:
+        if not status["weekly_kill_switch"]:
+            expiry_candidate = now + timedelta(hours=48)
+            sunday_cutoff = sunday_end_utc()
+            final_expiry = min(expiry_candidate, sunday_cutoff)
+
+            update_guardian_state_fields(
+                account_id,
+                {
+                    "weekly_kill_switch": True,
+                    "weekly_kill_switch_expires_at": final_expiry
+                }
+            )
+
+            insert_guardian_event(
+                account_id,
+                "WEEKLY_KILL_SWITCH_TRIGGERED",
+                "WEEKLY_MAX_LOSS_REACHED",
+                {
+                    "weekly_realized_pnl": weekly_realized_pnl,
+                    "weekly_limit_amount": weekly_limit_amount,
+                    "expires_at": final_expiry.isoformat().replace("+00:00", "Z")
+                }
+            )
+
+            status = fetch_guardian_status(account_id)
+
+    return status
 
 def fetch_guardian_status(account_id: int):
     query = """
@@ -174,6 +370,8 @@ class Handler(BaseHTTPRequestHandler):
                 account_id = int(query.get("account_id", ["1"])[0])
 
                 status = fetch_guardian_status(account_id)
+                if status:
+                    status = evaluate_and_refresh_guardian_state(status)
                 if not status:
                     self._send_json({
                         "ok": False,
@@ -212,6 +410,8 @@ class Handler(BaseHTTPRequestHandler):
                 account_id = int(payload.get("account_id", 1))
 
                 status = fetch_guardian_status(account_id)
+                if status:
+                    status = evaluate_and_refresh_guardian_state(status)
                 if not status:
                     self._send_json({
                         "ok": False,
