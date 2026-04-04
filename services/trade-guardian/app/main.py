@@ -980,7 +980,7 @@ class Handler(BaseHTTPRequestHandler):
                 }, status=500)
                 return
 
-        if self.path == "/execution/apply":
+        if self.path.startswith("/execution/apply"):
             try:
                 content_length = int(self.headers.get("Content-Length", "0"))
                 raw = self.rfile.read(content_length)
