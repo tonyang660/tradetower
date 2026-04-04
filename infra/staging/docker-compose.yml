@@ -31,6 +31,8 @@ services:
     restart: unless-stopped
     env_file:
       - ../env/staging.env
+    environment:
+      - DATA_HUB_BASE_URL=http://data-hub:8080
     ports:
       - "8102:8080"
 
