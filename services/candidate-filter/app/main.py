@@ -50,9 +50,8 @@ def determine_bias(snapshot: dict) -> str:
         return "short"
     return "neutral"
 
-
 def score_snapshot(snapshot: dict):
-    score = 0.0
+    total_score = 0.0
     reasons = []
 
     tf_5m = snapshot["timeframes"]["5m"]
@@ -62,15 +61,24 @@ def score_snapshot(snapshot: dict):
 
     bias = determine_bias(snapshot)
 
+    sub_scores = {
+        "bias_alignment": 0.0,
+        "momentum": 0.0,
+        "setup": 0.0,
+        "execution": 0.0,
+        "volatility": 0.0,
+    }
+
     # 1) Higher timeframe bias alignment (25)
     if bias != "neutral":
-        score += 25
+        sub_scores["bias_alignment"] = 25.0
         reasons.append("HTF_BIAS_ALIGN")
     else:
         reasons.append("HTF_BIAS_CONFLICT")
 
     # 2) Momentum quality (25)
-    momentum_points = 0
+    momentum_points = 0.0
+
     if tf_1h["indicators"]["macd_histogram"] > 0 and bias == "long":
         momentum_points += 10
     elif tf_1h["indicators"]["macd_histogram"] < 0 and bias == "short":
@@ -92,14 +100,15 @@ def score_snapshot(snapshot: dict):
         if tf_1h["indicators"]["price_vs_ema_fast_pct"] < 0:
             momentum_points += 3
 
-    score += momentum_points
+    sub_scores["momentum"] = momentum_points
+
     if momentum_points >= 15:
         reasons.append("MOMENTUM_SUPPORT")
     else:
         reasons.append("MOMENTUM_WEAK")
 
     # 3) Setup quality on 15m (25)
-    setup_points = 0
+    setup_points = 0.0
     market_type_15m = tf_15m["structure"]["market_type"]
     dir_15m = tf_15m["structure"]["trend_direction"]
 
@@ -117,14 +126,15 @@ def score_snapshot(snapshot: dict):
     elif bias == "short" and 30 <= rsi_15m <= 55:
         setup_points += 7
 
-    score += setup_points
+    sub_scores["setup"] = setup_points
+
     if setup_points >= 14:
         reasons.append("SETUP_QUALITY_OK")
     else:
         reasons.append("SETUP_QUALITY_WEAK")
 
     # 4) Execution readiness on 5m (15)
-    exec_points = 0
+    exec_points = 0.0
     dir_5m = tf_5m["structure"]["trend_direction"]
 
     if bias == "long" and dir_5m == "up":
@@ -137,33 +147,35 @@ def score_snapshot(snapshot: dict):
     elif bias == "short" and tf_5m["indicators"]["price_vs_ema_fast_pct"] < 0:
         exec_points += 7
 
-    score += exec_points
+    sub_scores["execution"] = exec_points
+
     if exec_points >= 8:
         reasons.append("EXECUTION_ALIGN")
     else:
         reasons.append("EXECUTION_CONFLICT")
 
     # 5) Volatility suitability (10)
-    vol_points = 0
+    vol_points = 0.0
     vol_state_15m = tf_15m["volatility"]["volatility_state"]
 
     if vol_state_15m == "medium":
-        vol_points = 10
+        vol_points = 10.0
         reasons.append("VOLATILITY_OK")
     elif vol_state_15m == "low":
-        vol_points = 3
+        vol_points = 3.0
         reasons.append("VOLATILITY_TOO_LOW")
     else:
-        vol_points = 5
+        vol_points = 5.0
         reasons.append("VOLATILITY_TOO_HIGH")
 
-    score += vol_points
+    sub_scores["volatility"] = vol_points
 
-    if score < MIN_SCORE:
+    total_score = round(sum(sub_scores.values()), 2)
+
+    if total_score < MIN_SCORE:
         reasons.append("LOW_CONVICTION")
 
-    return round(score, 2), bias, reasons
-
+    return total_score, bias, reasons, sub_scores
 
 def rank_symbols(symbols: list[str]):
     candidates = []
@@ -181,12 +193,13 @@ def rank_symbols(symbols: list[str]):
             })
             continue
 
-        score, bias, reasons = score_snapshot(snapshot)
+        score, bias, reasons, sub_scores = score_snapshot(snapshot)
 
         item = {
             "symbol": symbol,
             "score": score,
             "bias": bias,
+            "sub_scores": sub_scores,
             "reasons": reasons
         }
 
