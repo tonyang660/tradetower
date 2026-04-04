@@ -1,13 +1,13 @@
 import json
 import sys
 from pathlib import Path
-
 import urllib.request
+
 from jsonschema import validate
 
 
 SCHEMA_PATH = Path("schemas/market_snapshot_schema_v1.json")
-FEATURE_FACTORY_URL = "http://10.0.0.40:8102/snapshot/sample"
+FEATURE_FACTORY_URL = "http://10.0.0.40:8102/snapshot?symbol=BTCUSDT"
 
 
 def main():
@@ -18,7 +18,7 @@ def main():
         payload = json.loads(response.read().decode("utf-8"))
 
     validate(instance=payload, schema=schema)
-    print("OK: feature-factory output matches market snapshot schema")
+    print("OK: feature-factory live output matches market snapshot schema")
 
 
 if __name__ == "__main__":
