@@ -18,6 +18,10 @@ services:
     restart: unless-stopped
     env_file:
       - ../env/staging.env
+    environment:
+      - DATA_ROOT=/data
+    volumes:
+      - ./volumes/data-hub:/data
     ports:
       - "8101:8080"
 
