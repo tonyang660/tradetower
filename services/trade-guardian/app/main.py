@@ -978,27 +978,7 @@ class Handler(BaseHTTPRequestHandler):
                     "error": "internal_error",
                     "details": str(e)
                 }, status=500)
-                return
-
-        if self.path.startswith("/execution/apply"):
-            try:
-                content_length = int(self.headers.get("Content-Length", "0"))
-                raw = self.rfile.read(content_length)
-                payload = json.loads(raw.decode("utf-8"))
-
-                result = apply_execution_report(payload)
-
-                status_code = 200 if result.get("ok") else 400
-                self._send_json(result, status=status_code)
-                return
-
-            except Exception as e:
-                self._send_json({
-                    "ok": False,
-                    "error": "internal_error",
-                    "details": str(e)
-                }, status=500)
-                return        
+                return   
 
         self._send_json({
             "ok": False,
@@ -1070,6 +1050,26 @@ class Handler(BaseHTTPRequestHandler):
                     "details": str(e)
                 }, status=500)
                 return
+
+        if self.path == "/execution/apply":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8"))
+
+                result = apply_execution_report(payload)
+
+                status_code = 200 if result.get("ok") else 400
+                self._send_json(result, status=status_code)
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "internal_error",
+                    "details": str(e)
+                }, status=500)
+                return     
 
         self._send_json({
             "ok": False,
