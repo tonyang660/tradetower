@@ -42,6 +42,10 @@ services:
     restart: unless-stopped
     env_file:
       - ../env/staging.env
+    environment:
+      - FEATURE_FACTORY_BASE_URL=http://feature-factory:8080
+      - MAX_CANDIDATES=6
+      - MIN_SCORE=50
     ports:
       - "8103:8080"
 
