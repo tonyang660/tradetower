@@ -65,6 +65,12 @@ services:
     restart: unless-stopped
     env_file:
       - ../env/staging.env
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=trading_platform
+      - POSTGRES_USER=trading
+      - POSTGRES_PASSWORD='!OrignalMath797!POSTGRES'
     ports:
       - "8105:8080"
 
