@@ -9,6 +9,7 @@ import requests
 
 SERVICE_NAME = "candidate-filter"
 PORT = int(os.getenv("PORT", "8080"))
+TRADE_GUARDIAN_BASE_URL = os.getenv("TRADE_GUARDIAN_BASE_URL", "http://trade-guardian:8080")
 FEATURE_FACTORY_BASE_URL = os.getenv("FEATURE_FACTORY_BASE_URL", "http://feature-factory:8080")
 MAX_CANDIDATES = int(os.getenv("MAX_CANDIDATES", "6"))
 MIN_SCORE = float(os.getenv("MIN_SCORE", "50"))
@@ -34,6 +35,24 @@ def fetch_snapshot(symbol: str):
 
     return payload, None
 
+def has_open_position(account_id: int, symbol: str):
+    try:
+        response = requests.get(
+            f"{TRADE_GUARDIAN_BASE_URL}/position/open",
+            params={"account_id": account_id, "symbol": symbol},
+            timeout=10
+        )
+        payload = response.json()
+    except Exception:
+        return False, "trade_guardian_request_failed"
+
+    if payload.get("ok"):
+        return True, None
+
+    if payload.get("error") == "open_position_not_found":
+        return False, None
+
+    return False, payload.get("error", "trade_guardian_error")
 
 def determine_bias(snapshot: dict) -> str:
     tf_4h = snapshot["timeframes"]["4h"]
@@ -177,11 +196,44 @@ def score_snapshot(snapshot: dict):
 
     return total_score, bias, reasons, sub_scores
 
-def rank_symbols(symbols: list[str]):
+def rank_symbols(account_id: int, symbols: list[str]):
     candidates = []
     rejected = []
 
     for symbol in symbols:
+        open_pos, tg_error = has_open_position(account_id, symbol)
+        if tg_error:
+            rejected.append({
+                "symbol": symbol,
+                "score": 0.0,
+                "bias": "neutral",
+                "sub_scores": {
+                    "bias_alignment": 0.0,
+                    "momentum": 0.0,
+                    "setup": 0.0,
+                    "execution": 0.0,
+                    "volatility": 0.0,
+                },
+                "reasons": ["TRADE_GUARDIAN_UNAVAILABLE"]
+            })
+            continue
+
+        if open_pos:
+            rejected.append({
+                "symbol": symbol,
+                "score": 0.0,
+                "bias": "neutral",
+                "sub_scores": {
+                    "bias_alignment": 0.0,
+                    "momentum": 0.0,
+                    "setup": 0.0,
+                    "execution": 0.0,
+                    "volatility": 0.0,
+                },
+                "reasons": ["SYMBOL_ALREADY_HAS_OPEN_POSITION"]
+            })
+            continue        
+
         snapshot, error = fetch_snapshot(symbol)
 
         if error:
@@ -236,6 +288,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 query = parse_qs(urlparse(self.path).query)
                 symbols_param = query.get("symbols", [None])[0]
+                account_id = int(query.get("account_id", ["1"])[0])                
 
                 if not symbols_param:
                     self._send_json({
@@ -253,11 +306,12 @@ class Handler(BaseHTTPRequestHandler):
                     }, status=400)
                     return
 
-                candidates, rejected = rank_symbols(symbols)
+                candidates, rejected = rank_symbols(account_id, symbols)                
 
                 self._send_json({
                     "ok": True,
                     "generated_at": iso_now(),
+                    "account_id": account_id,
                     "max_candidates": MAX_CANDIDATES,
                     "min_score": MIN_SCORE,
                     "candidates": candidates,

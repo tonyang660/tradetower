@@ -440,6 +440,61 @@ def get_open_position(account_id: int, symbol: str):
 def fetch_open_position_for_api(account_id: int, symbol: str):
     return get_open_position(account_id, symbol)
 
+def fetch_all_open_positions(account_id: int):
+    query = """
+    SELECT
+        position_id,
+        account_id,
+        symbol,
+        side,
+        original_size,
+        remaining_size,
+        entry_price,
+        leverage,
+        stop_loss,
+        tp1_price,
+        tp2_price,
+        tp3_price,
+        tp1_hit,
+        tp2_hit,
+        tp3_hit,
+        opened_at,
+        status
+    FROM positions
+    WHERE account_id = %s
+      AND status = 'open'
+    ORDER BY opened_at ASC
+    """
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (account_id,))
+            rows = cur.fetchall()
+
+    results = []
+    for row in rows:
+        results.append({
+            "position_id": row[0],
+            "account_id": row[1],
+            "symbol": row[2],
+            "side": row[3],
+            "original_size": float(row[4]),
+            "remaining_size": float(row[5]),
+            "entry_price": float(row[6]),
+            "leverage": float(row[7]),
+            "stop_loss": float(row[8]) if row[8] is not None else None,
+            "tp1_price": float(row[9]) if row[9] is not None else None,
+            "tp2_price": float(row[10]) if row[10] is not None else None,
+            "tp3_price": float(row[11]) if row[11] is not None else None,
+            "tp1_hit": row[12],
+            "tp2_hit": row[13],
+            "tp3_hit": row[14],
+            "opened_at": row[15].isoformat().replace("+00:00", "Z") if row[15] else None,
+            "status": row[16],
+        })
+
+    return results
+
 def insert_execution_report(account_id: int, order_id, symbol: str, fill_price: float, filled_size: float,
                             fee_paid: float, slippage_bps: float, notes: str | None,
                             execution_type: str, position_side: str):
@@ -1057,6 +1112,28 @@ class Handler(BaseHTTPRequestHandler):
                     "details": str(e)
                 }, status=500)
                 return           
+
+        if self.path.startswith("/positions/open"):
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                account_id = int(query.get("account_id", ["1"])[0])
+
+                positions = fetch_all_open_positions(account_id)
+
+                self._send_json({
+                    "ok": True,
+                    "account_id": account_id,
+                    "positions": positions
+                })
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "internal_error",
+                    "details": str(e)
+                }, status=500)
+                return
 
         self._send_json({
             "ok": False,
