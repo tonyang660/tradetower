@@ -67,13 +67,18 @@ services:
       - ../env/staging.env
     ports:
       - "8105:8080"
-
+      
   risk-engine:
     build: ../../services/risk-engine
     container_name: trading-risk-engine
     restart: unless-stopped
     env_file:
       - ../env/staging.env
+    environment:
+      - TRADE_GUARDIAN_BASE_URL=http://trade-guardian:8080
+      - MAX_RISK_PCT=1.0
+      - MAX_LEVERAGE=15.0
+      - MIN_NOTIONAL_PCT_OF_MAX_DEPLOYABLE=1.0
     ports:
       - "8106:8080"
 
