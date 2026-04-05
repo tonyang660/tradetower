@@ -107,6 +107,27 @@ services:
     ports:
       - "8108:8080"
 
+  scheduler:
+    build:
+      context: ../..
+      dockerfile: services/scheduler/Dockerfile
+    container_name: trading-scheduler
+    restart: unless-stopped
+    env_file:
+      - ../env/staging.env
+    environment:
+      - API_GATEWAY_BASE_URL=http://api-gateway:8080
+      - DATA_HUB_BASE_URL=http://data-hub:8080
+      - TRADE_GUARDIAN_BASE_URL=http://trade-guardian:8080
+      - CANDIDATE_FILTER_BASE_URL=http://candidate-filter:8080
+      - PAPER_EXECUTION_BASE_URL=http://paper-execution:8080
+      - SYMBOL_UNIVERSE_PATH=/app/config/symbol_universe.json
+      - AUTO_LOOP_ENABLED=false
+      - LOOP_INTERVAL_SECONDS=300
+      - ACCOUNT_ID=1
+    ports:
+      - "8109:8080"
+
   api-gateway:
     build: ../../services/api-gateway
     container_name: trading-api-gateway
