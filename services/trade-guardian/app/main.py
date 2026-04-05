@@ -289,7 +289,7 @@ def fetch_guardian_status(account_id: int):
     }
 
 
-def compute_guard_check(status: dict):
+def compute_entry_guard_check(status: dict, symbol: str | None = None):
     reason_codes = []
 
     if not status["is_active"]:
@@ -310,8 +310,35 @@ def compute_guard_check(status: dict):
     if status["open_positions_count"] >= status["max_concurrent_positions"]:
         reason_codes.append("MAX_CONCURRENT_POSITIONS_REACHED")
 
+    if symbol:
+        existing_position = get_open_position(status["account_id"], symbol.upper())
+        if existing_position is not None:
+            reason_codes.append("SYMBOL_ALREADY_HAS_OPEN_POSITION")
+
     return {
         "trade_allowed": len(reason_codes) == 0,
+        "reason_codes": reason_codes
+    }
+
+
+def compute_maintenance_guard_check(status: dict, symbol: str | None = None):
+    reason_codes = []
+
+    if not status["is_active"]:
+        reason_codes.append("ACCOUNT_INACTIVE")
+
+    # Important rule:
+    # maintenance actions remain allowed even if trading is disabled,
+    # manual halt is active, or kill switches are active.
+    # We only require that the account exists and that an open position exists if symbol is provided.
+
+    if symbol:
+        existing_position = get_open_position(status["account_id"], symbol.upper())
+        if existing_position is None:
+            reason_codes.append("NO_OPEN_POSITION_FOR_SYMBOL")
+
+    return {
+        "maintenance_allowed": len(reason_codes) == 0,
         "reason_codes": reason_codes
     }
 
@@ -1038,17 +1065,19 @@ class Handler(BaseHTTPRequestHandler):
         }, status=404)
 
     def do_POST(self):
-        if self.path == "/guard/check":
+        if self.path == "/guard/check-entry":
             try:
                 content_length = int(self.headers.get("Content-Length", "0"))
                 raw = self.rfile.read(content_length)
                 payload = json.loads(raw.decode("utf-8")) if raw else {}
 
                 account_id = int(payload.get("account_id", 1))
+                symbol = payload.get("symbol")
 
                 status = fetch_guardian_status(account_id)
                 if status:
                     status = evaluate_and_refresh_guardian_state(status)
+
                 if not status:
                     self._send_json({
                         "ok": False,
@@ -1057,11 +1086,51 @@ class Handler(BaseHTTPRequestHandler):
                     }, status=404)
                     return
 
-                result = compute_guard_check(status)
+                result = compute_entry_guard_check(status, symbol=symbol)
 
                 self._send_json({
                     "ok": True,
                     "account_id": account_id,
+                    "symbol": symbol.upper() if symbol else None,
+                    **result
+                })
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "internal_error",
+                    "details": str(e)
+                }, status=500)
+                return
+
+        if self.path == "/guard/check-maintenance":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+
+                account_id = int(payload.get("account_id", 1))
+                symbol = payload.get("symbol")
+
+                status = fetch_guardian_status(account_id)
+                if status:
+                    status = evaluate_and_refresh_guardian_state(status)
+
+                if not status:
+                    self._send_json({
+                        "ok": False,
+                        "error": "account_not_found",
+                        "account_id": account_id
+                    }, status=404)
+                    return
+
+                result = compute_maintenance_guard_check(status, symbol=symbol)
+
+                self._send_json({
+                    "ok": True,
+                    "account_id": account_id,
+                    "symbol": symbol.upper() if symbol else None,
                     **result
                 })
                 return
