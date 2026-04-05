@@ -83,6 +83,12 @@ services:
     restart: unless-stopped
     env_file:
       - ../env/staging.env
+    environment:
+      - DATA_HUB_BASE_URL=http://data-hub:8080
+      - TRADE_GUARDIAN_BASE_URL=http://trade-guardian:8080
+      - LIMIT_FEE_PCT=0.02
+      - MARKET_FEE_PCT=0.06
+      - MARKET_SLIPPAGE_PCT=0.06
     ports:
       - "8107:8080"
 
