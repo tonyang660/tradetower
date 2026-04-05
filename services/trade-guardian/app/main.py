@@ -410,6 +410,9 @@ def get_open_position(account_id: int, symbol: str):
         "status": row[21],
     }
 
+def fetch_open_position_for_api(account_id: int, symbol: str):
+    return get_open_position(account_id, symbol)
+
 def insert_execution_report(account_id: int, order_id, symbol: str, fill_price: float, filled_size: float,
                             fee_paid: float, slippage_bps: float, notes: str | None,
                             execution_type: str, position_side: str):
@@ -987,7 +990,46 @@ class Handler(BaseHTTPRequestHandler):
                     "error": "internal_error",
                     "details": str(e)
                 }, status=500)
-                return   
+                return
+
+        if self.path.startswith("/position/open"):
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                account_id = int(query.get("account_id", ["1"])[0])
+                symbol = query.get("symbol", [None])[0]
+
+                if not symbol:
+                    self._send_json({
+                        "ok": False,
+                        "error": "missing_parameters",
+                        "required": ["symbol"]
+                    }, status=400)
+                    return
+
+                position = fetch_open_position_for_api(account_id, symbol.upper())
+
+                if not position:
+                    self._send_json({
+                        "ok": False,
+                        "error": "open_position_not_found",
+                        "account_id": account_id,
+                        "symbol": symbol.upper()
+                    }, status=404)
+                    return
+
+                self._send_json({
+                    "ok": True,
+                    "position": position
+                })
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "internal_error",
+                    "details": str(e)
+                }, status=500)
+                return           
 
         self._send_json({
             "ok": False,
