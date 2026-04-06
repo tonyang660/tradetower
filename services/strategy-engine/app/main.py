@@ -16,7 +16,6 @@ STRICT_SCORE_THRESHOLD = float(os.getenv("STRICT_SCORE_THRESHOLD", "75"))
 def iso_now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-
 def fetch_snapshot(symbol: str):
     try:
         r = requests.get(
@@ -28,8 +27,11 @@ def fetch_snapshot(symbol: str):
     except Exception as e:
         return None, f"feature_factory_request_failed: {str(e)}"
 
-    if not payload.get("ok"):
+    if r.status_code != 200:
         return None, payload.get("error", "feature_factory_error")
+
+    if payload.get("schema_version") != "market_snapshot_v2":
+        return None, "unexpected_snapshot_schema_version"
 
     return payload, None
 
@@ -37,355 +39,534 @@ def fetch_snapshot(symbol: str):
 def safe_get_tf(snapshot: dict, tf: str):
     return snapshot.get("timeframes", {}).get(tf, {})
 
+def safe_get_indicators(snapshot: dict, tf: str):
+    return safe_get_tf(snapshot, tf).get("indicators", {})
+
+
+def safe_get_structure(snapshot: dict, tf: str):
+    return safe_get_tf(snapshot, tf).get("structure", {})
+
+
+def safe_get_price_action(snapshot: dict, tf: str):
+    return safe_get_tf(snapshot, tf).get("price_action", {})
+
+
+def safe_get_volatility(snapshot: dict, tf: str):
+    return safe_get_tf(snapshot, tf).get("volatility", {})
+
+
+def clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def score_linear(value: float, low: float, high: float, max_points: float) -> float:
+    if value <= low:
+        return 0.0
+    if value >= high:
+        return max_points
+    return ((value - low) / (high - low)) * max_points
+
+
+def score_inverse(value: float, best_low: float, worst_high: float, max_points: float) -> float:
+    if value <= best_low:
+        return max_points
+    if value >= worst_high:
+        return 0.0
+    return ((worst_high - value) / (worst_high - best_low)) * max_points
+
+
+def bos_freshness_multiplier(timeframe: str, bars_ago: int) -> float:
+    if timeframe in ("5m", "15m"):
+        if bars_ago <= 2:
+            return 1.00
+        if bars_ago <= 5:
+            return 0.70
+        if bars_ago <= 10:
+            return 0.40
+        return 0.15
+
+    if timeframe == "1h":
+        if bars_ago <= 1:
+            return 1.00
+        if bars_ago <= 3:
+            return 0.80
+        if bars_ago <= 6:
+            return 0.55
+        return 0.25
+
+    # 4h or fallback
+    if bars_ago <= 1:
+        return 1.00
+    if bars_ago <= 2:
+        return 0.80
+    if bars_ago <= 4:
+        return 0.55
+    return 0.25
+
+
+def bos_quality_points(price_action: dict, expected_direction: str, timeframe: str, max_points: float) -> float:
+    bos_direction = price_action.get("recent_bos_direction", "none")
+    bos_failed = price_action.get("recent_bos_failed", False)
+    bars_ago = int(price_action.get("recent_bos_bars_ago", 999))
+    strength = float(price_action.get("recent_bos_strength", 0.0))
+
+    if bos_failed:
+        return 0.0
+    if bos_direction != expected_direction:
+        return 0.0
+
+    freshness = bos_freshness_multiplier(timeframe, bars_ago)
+    strength = clamp(strength, 0.0, 1.0)
+
+    return round(max_points * freshness * (0.35 + 0.65 * strength), 2)
 
 def derive_macro_bias(snapshot: dict):
     """
-    v1 macro bias = higher timeframe directional bias only.
+    v1.1 macro bias = higher timeframe directional bias using 4h + 1h.
+    Outputs: bullish / bearish / transition
     """
-    tf_4h = safe_get_tf(snapshot, "4h")
-    tf_1h = safe_get_tf(snapshot, "1h")
+    s4 = safe_get_structure(snapshot, "4h")
+    s1 = safe_get_structure(snapshot, "1h")
+    i4 = safe_get_indicators(snapshot, "4h")
+    i1 = safe_get_indicators(snapshot, "1h")
+    pa4 = safe_get_price_action(snapshot, "4h")
+    pa1 = safe_get_price_action(snapshot, "1h")
 
-    score_bull = 0
-    score_bear = 0
     reasons = []
 
-    for tf_name, tf in [("4h", tf_4h), ("1h", tf_1h)]:
-        indicators = tf.get("indicators", {})
-        structure = tf.get("structure", {})
+    # Hard transition triggers
+    if s4.get("structure_state") in ("transition", "chop") or s1.get("structure_state") in ("transition", "chop"):
+        reasons.append("HTF_STRUCTURE_UNSTABLE")
+        return "transition", 70, reasons
 
-        if indicators.get("ema_fast", 0) > indicators.get("ema_slow", 0):
-            score_bull += 1
-            reasons.append(f"{tf_name}_EMA_BULL")
-        elif indicators.get("ema_fast", 0) < indicators.get("ema_slow", 0):
-            score_bear += 1
-            reasons.append(f"{tf_name}_EMA_BEAR")
+    if pa1.get("recent_bos_failed", False):
+        reasons.append("HTF_BOS_FAILED")
+        return "transition", 72, reasons
 
-        if indicators.get("macd", 0) > indicators.get("macd_signal", 0):
-            score_bull += 1
-            reasons.append(f"{tf_name}_MACD_BULL")
-        elif indicators.get("macd", 0) < indicators.get("macd_signal", 0):
-            score_bear += 1
-            reasons.append(f"{tf_name}_MACD_BEAR")
+    swing4 = s4.get("swing_bias", "neutral")
+    swing1 = s1.get("swing_bias", "neutral")
+    if swing4 != "neutral" and swing1 != "neutral" and swing4 != swing1:
+        reasons.append("HTF_SWING_CONFLICT")
+        return "transition", 75, reasons
 
-        if structure.get("higher_highs") and structure.get("higher_lows"):
-            score_bull += 2
-            reasons.append(f"{tf_name}_HH_HL")
-        elif structure.get("lower_highs") and structure.get("lower_lows"):
-            score_bear += 2
-            reasons.append(f"{tf_name}_LH_LL")
+    bull = 0.0
+    bear = 0.0
 
-    if score_bull >= 5 and score_bear == 0:
-        return "bullish", min(95, 50 + score_bull * 8), reasons
-    if score_bear >= 5 and score_bull == 0:
-        return "bearish", min(95, 50 + score_bear * 8), reasons
+    # 4h weighting
+    if swing4 == "bullish":
+        bull += 18
+        reasons.append("4H_SWING_BULLISH")
+    elif swing4 == "bearish":
+        bear += 18
+        reasons.append("4H_SWING_BEARISH")
 
-    return "transition", 55, reasons
+    bull += score_linear(float(s4.get("trend_consistency_score", 0.0)), 55, 90, 15) if swing4 == "bullish" else 0.0
+    bear += score_linear(float(s4.get("trend_consistency_score", 0.0)), 55, 90, 15) if swing4 == "bearish" else 0.0
 
+    bull += score_linear(abs(float(i4.get("ema_separation_pct", 0.0))), 0.05, 0.30, 10) if swing4 == "bullish" else 0.0
+    bear += score_linear(abs(float(i4.get("ema_separation_pct", 0.0))), 0.05, 0.30, 10) if swing4 == "bearish" else 0.0
 
-def detect_price_action_state(tf: dict):
-    structure = tf.get("structure", {})
-    indicators = tf.get("indicators", {})
+    bull += bos_quality_points(pa4, "bullish", "4h", 8)
+    bear += bos_quality_points(pa4, "bearish", "4h", 8)
 
-    higher_highs = structure.get("higher_highs", False)
-    higher_lows = structure.get("higher_lows", False)
-    lower_highs = structure.get("lower_highs", False)
-    lower_lows = structure.get("lower_lows", False)
+    # 1h weighting
+    if swing1 == "bullish":
+        bull += 16
+        reasons.append("1H_SWING_BULLISH")
+    elif swing1 == "bearish":
+        bear += 16
+        reasons.append("1H_SWING_BEARISH")
 
-    ema_fast = indicators.get("ema_fast", 0)
-    ema_slow = indicators.get("ema_slow", 0)
-    price_vs_fast = indicators.get("price_vs_ema_fast_pct", 0)
-    price_vs_slow = indicators.get("price_vs_ema_slow_pct", 0)
-    macd = indicators.get("macd", 0)
-    macd_signal = indicators.get("macd_signal", 0)
+    bull += score_linear(float(s1.get("trend_consistency_score", 0.0)), 50, 90, 14) if swing1 == "bullish" else 0.0
+    bear += score_linear(float(s1.get("trend_consistency_score", 0.0)), 50, 90, 14) if swing1 == "bearish" else 0.0
 
-    bullish_structure = higher_highs and higher_lows
-    bearish_structure = lower_highs and lower_lows
+    bull += score_linear(abs(float(i1.get("ema_separation_pct", 0.0))), 0.08, 0.60, 10) if swing1 == "bullish" else 0.0
+    bear += score_linear(abs(float(i1.get("ema_separation_pct", 0.0))), 0.08, 0.60, 10) if swing1 == "bearish" else 0.0
 
-    bullish_trend_confirm = (
-        ema_fast > ema_slow and
-        price_vs_fast > 0 and
-        price_vs_slow > 0 and
-        macd > macd_signal
-    )
+    bull += bos_quality_points(pa1, "bullish", "1h", 9)
+    bear += bos_quality_points(pa1, "bearish", "1h", 9)
 
-    bearish_trend_confirm = (
-        ema_fast < ema_slow and
-        price_vs_fast < 0 and
-        price_vs_slow < 0 and
-        macd < macd_signal
-    )
+    if bull >= bear + 15 and bull >= 45:
+        return "bullish", round(clamp(bull, 0.0, 95.0), 2), reasons
 
-    if bullish_structure and bullish_trend_confirm:
-        return "bullish"
-    if bearish_structure and bearish_trend_confirm:
-        return "bearish"
-    if bullish_structure or bearish_structure:
-        return "mixed"
+    if bear >= bull + 15 and bear >= 45:
+        return "bearish", round(clamp(bear, 0.0, 95.0), 2), reasons
 
-    return "neutral"
-
-
-def detect_bos(snapshot: dict):
-    """
-    v1 BOS proxy:
-    We approximate BOS from structure/trend alignment and range-edge context
-    because explicit swing-break fields are not yet in the snapshot.
-    """
-    tf_15m = safe_get_tf(snapshot, "15m")
-    tf_5m = safe_get_tf(snapshot, "5m")
-
-    s15 = tf_15m.get("structure", {})
-    s5 = tf_5m.get("structure", {})
-    i15 = tf_15m.get("indicators", {})
-    i5 = tf_5m.get("indicators", {})
-
-    bullish_15 = s15.get("higher_highs") and s15.get("higher_lows") and i15.get("macd", 0) > i15.get("macd_signal", 0)
-    bearish_15 = s15.get("lower_highs") and s15.get("lower_lows") and i15.get("macd", 0) < i15.get("macd_signal", 0)
-
-    bullish_5 = s5.get("higher_highs") and s5.get("higher_lows") and i5.get("price_vs_ema_fast_pct", 0) > 0
-    bearish_5 = s5.get("lower_highs") and s5.get("lower_lows") and i5.get("price_vs_ema_fast_pct", 0) < 0
-
-    if bullish_15 and bullish_5:
-        return "bullish"
-    if bearish_15 and bearish_5:
-        return "bearish"
-    return "none"
-
+    reasons.append("MACRO_BIAS_UNCLEAR")
+    return "transition", 60, reasons
 
 def detect_regime(snapshot: dict, macro_bias: str):
-    tf_4h = safe_get_tf(snapshot, "4h")
-    tf_1h = safe_get_tf(snapshot, "1h")
-    tf_15m = safe_get_tf(snapshot, "15m")
-
-    pa_4h = detect_price_action_state(tf_4h)
-    pa_1h = detect_price_action_state(tf_1h)
-    pa_15m = detect_price_action_state(tf_15m)
-    bos = detect_bos(snapshot)
+    s4 = safe_get_structure(snapshot, "4h")
+    s1 = safe_get_structure(snapshot, "1h")
+    s15 = safe_get_structure(snapshot, "15m")
+    i1 = safe_get_indicators(snapshot, "1h")
+    pa15 = safe_get_price_action(snapshot, "15m")
+    pa5 = safe_get_price_action(snapshot, "5m")
 
     reasons = []
 
-    # Hard transition / chop logic
+    # Hard blocks first
     if macro_bias == "transition":
-        reasons.append("MACRO_BIAS_TRANSITION")
-        return "transition", 60, reasons
+        reasons.append("MACRO_TRANSITION")
+        return "transition", 72, reasons
+
+    if s15.get("structure_state") == "chop":
+        reasons.append("15M_CHOP")
+        return "chop", 70, reasons
+
+    if pa15.get("recent_bos_failed", False) or pa5.get("recent_bos_failed", False):
+        reasons.append("FAILED_INTRADAY_BOS")
+        return "transition", 75, reasons
 
     # Trend up
-    if macro_bias == "bullish" and pa_4h in ("bullish", "mixed") and pa_1h == "bullish":
-        if bos == "bullish":
-            reasons.extend(["BULLISH_MACRO", "HTF_BULLISH", "BOS_BULLISH"])
-            return "trend_up", 85, reasons
-        reasons.extend(["BULLISH_MACRO", "HTF_BULLISH"])
-        return "trend_up", 78, reasons
+    if (
+        macro_bias == "bullish"
+        and s4.get("swing_bias") == "bullish"
+        and s1.get("swing_bias") == "bullish"
+        and s1.get("structure_state") in ("clean_trend", "weak_trend")
+    ):
+        conf = (
+            float(s4.get("trend_consistency_score", 0.0)) * 0.45 +
+            float(s1.get("trend_consistency_score", 0.0)) * 0.55
+        )
+        reasons.extend(["BULLISH_MACRO", "HTF_BULLISH_STRUCTURE"])
+        return "trend_up", round(clamp(conf, 0.0, 95.0), 2), reasons
 
     # Trend down
-    if macro_bias == "bearish" and pa_4h in ("bearish", "mixed") and pa_1h == "bearish":
-        if bos == "bearish":
-            reasons.extend(["BEARISH_MACRO", "HTF_BEARISH", "BOS_BEARISH"])
-            return "trend_down", 85, reasons
-        reasons.extend(["BEARISH_MACRO", "HTF_BEARISH"])
-        return "trend_down", 78, reasons
+    if (
+        macro_bias == "bearish"
+        and s4.get("swing_bias") == "bearish"
+        and s1.get("swing_bias") == "bearish"
+        and s1.get("structure_state") in ("clean_trend", "weak_trend")
+    ):
+        conf = (
+            float(s4.get("trend_consistency_score", 0.0)) * 0.45 +
+            float(s1.get("trend_consistency_score", 0.0)) * 0.55
+        )
+        reasons.extend(["BEARISH_MACRO", "HTF_BEARISH_STRUCTURE"])
+        return "trend_down", round(clamp(conf, 0.0, 95.0), 2), reasons
 
     # Range
-    structure_15 = tf_15m.get("structure", {})
-    market_type_15 = structure_15.get("market_type", "")
-    if market_type_15 in ("range", "ranging") or (
-        pa_4h == "neutral" and pa_1h == "neutral" and bos == "none"
+    if (
+        s1.get("market_type") == "range"
+        and s15.get("market_type") in ("range", "transition")
+        and abs(float(i1.get("ema_separation_pct", 0.0))) < 0.25
+        and float(s1.get("trend_consistency_score", 0.0)) < 55
+        and (
+            pa15.get("recent_bos_direction") == "none"
+            or int(pa15.get("recent_bos_bars_ago", 999)) > 4
+        )
     ):
-        reasons.append("RANGE_BEHAVIOR")
-        return "range", 72, reasons
+        reasons.append("RANGE_BEHAVIOR_CONFIRMED")
+        return "range", 78, reasons
 
-    # Chop
-    if pa_4h == "neutral" and pa_1h == "neutral" and pa_15m == "neutral":
-        reasons.append("CHOPPY_BEHAVIOR")
-        return "chop", 65, reasons
-
-    reasons.append("MIXED_STRUCTURE")
-    return "transition", 62, reasons
+    # Default hard-safe fallback
+    reasons.append("REGIME_UNCLEAR")
+    return "transition", 68, reasons
 
 
 def score_trend_following(snapshot: dict, regime: str, macro_bias: str):
-    score = 0.0
-    reasons = []
-
     if regime not in ("trend_up", "trend_down"):
         return 0.0, ["REGIME_NOT_TREND"]
 
-    tf_4h = safe_get_tf(snapshot, "4h")
-    tf_1h = safe_get_tf(snapshot, "1h")
-    tf_15m = safe_get_tf(snapshot, "15m")
-    tf_5m = safe_get_tf(snapshot, "5m")
+    expected_direction = "bullish" if regime == "trend_up" else "bearish"
+    reasons = []
+    score = 0.0
 
-    i4 = tf_4h.get("indicators", {})
-    i1 = tf_1h.get("indicators", {})
-    i15 = tf_15m.get("indicators", {})
-    i5 = tf_5m.get("indicators", {})
-    s4 = tf_4h.get("structure", {})
-    s1 = tf_1h.get("structure", {})
-    s15 = tf_15m.get("structure", {})
-    s5 = tf_5m.get("structure", {})
+    s4 = safe_get_structure(snapshot, "4h")
+    s1 = safe_get_structure(snapshot, "1h")
+    s15 = safe_get_structure(snapshot, "15m")
 
-    bos = detect_bos(snapshot)
+    i4 = safe_get_indicators(snapshot, "4h")
+    i1 = safe_get_indicators(snapshot, "1h")
+    i15 = safe_get_indicators(snapshot, "15m")
+    i5 = safe_get_indicators(snapshot, "5m")
 
-    # Macro bias
-    if (regime == "trend_up" and macro_bias == "bullish") or (regime == "trend_down" and macro_bias == "bearish"):
+    pa1 = safe_get_price_action(snapshot, "1h")
+    pa15 = safe_get_price_action(snapshot, "15m")
+    pa5 = safe_get_price_action(snapshot, "5m")
+
+    v15 = safe_get_volatility(snapshot, "15m")
+
+    # 1. Macro alignment (0-15)
+    if (expected_direction == "bullish" and macro_bias == "bullish") or (expected_direction == "bearish" and macro_bias == "bearish"):
         score += 15
         reasons.append("MACRO_ALIGN")
 
-    # EMA alignment
-    ema_align_4h = i4.get("ema_fast", 0) > i4.get("ema_slow", 0) if regime == "trend_up" else i4.get("ema_fast", 0) < i4.get("ema_slow", 0)
-    ema_align_1h = i1.get("ema_fast", 0) > i1.get("ema_slow", 0) if regime == "trend_up" else i1.get("ema_fast", 0) < i1.get("ema_slow", 0)
-    if ema_align_4h and ema_align_1h:
-        score += 20
-        reasons.append("EMA_ALIGN")
+    # 2. HTF structure quality (0-20)
+    htf_structure_avg = (
+        float(s4.get("structure_quality_score", 0.0)) * 0.45 +
+        float(s1.get("structure_quality_score", 0.0)) * 0.55
+    )
+    score += (htf_structure_avg / 100.0) * 20
+    if htf_structure_avg >= 70:
+        reasons.append("HTF_STRUCTURE_STRONG")
+    elif htf_structure_avg >= 55:
+        reasons.append("HTF_STRUCTURE_OK")
 
-    # Structure quality
-    if regime == "trend_up":
-        if s4.get("higher_highs") and s4.get("higher_lows"):
-            score += 10
-            reasons.append("4H_HH_HL")
-        if s1.get("higher_highs") and s1.get("higher_lows"):
-            score += 10
-            reasons.append("1H_HH_HL")
-        if s15.get("higher_lows"):
-            score += 8
-            reasons.append("15M_PULLBACK_VALID")
+    # 3. EMA strength (0-15)
+    ema_strength = 0.0
+    ema_strength += score_linear(abs(float(i1.get("ema_separation_pct", 0.0))), 0.08, 0.60, 6)
+    ema_strength += score_linear(abs(float(i4.get("ema_separation_pct", 0.0))), 0.05, 0.30, 4)
+
+    if expected_direction == "bullish":
+        ema_strength += score_linear(float(i15.get("price_vs_ema_slow_pct", 0.0)), 0.20, 1.80, 5)
     else:
-        if s4.get("lower_highs") and s4.get("lower_lows"):
-            score += 10
-            reasons.append("4H_LH_LL")
-        if s1.get("lower_highs") and s1.get("lower_lows"):
-            score += 10
-            reasons.append("1H_LH_LL")
-        if s15.get("lower_highs"):
-            score += 8
-            reasons.append("15M_PULLBACK_VALID")
+        ema_strength += score_linear(abs(float(i15.get("price_vs_ema_slow_pct", 0.0))), 0.20, 1.80, 5)
 
-    # BOS
-    if (regime == "trend_up" and bos == "bullish") or (regime == "trend_down" and bos == "bearish"):
-        score += 12
-        reasons.append("BOS_ALIGN")
-    elif bos != "none":
-        score -= 12
+    score += ema_strength
+    if ema_strength >= 10:
+        reasons.append("EMA_STRENGTH_OK")
+
+    # 4. BOS quality & freshness (0-15)
+    bos_score = 0.0
+    bos_score += bos_quality_points(pa15, expected_direction, "15m", 10)
+    bos_score += bos_quality_points(pa1, expected_direction, "1h", 5)
+
+    # conflict / failed BOS penalty
+    if pa15.get("recent_bos_failed", False) or pa1.get("recent_bos_failed", False):
+        bos_score -= 8
+        reasons.append("BOS_FAILURE_RISK")
+
+    if (
+        pa15.get("recent_bos_direction") not in (expected_direction, "none")
+        or pa1.get("recent_bos_direction") not in (expected_direction, "none")
+    ):
+        bos_score -= 6
         reasons.append("BOS_CONFLICT")
 
-    # Momentum
-    macd_good = i1.get("macd", 0) > i1.get("macd_signal", 0) if regime == "trend_up" else i1.get("macd", 0) < i1.get("macd_signal", 0)
-    if macd_good:
-        score += 8
-        reasons.append("MACD_CONFIRM")
+    bos_score = clamp(bos_score, 0.0, 15.0)
+    score += bos_score
+    if bos_score >= 8:
+        reasons.append("BOS_FRESH_ALIGN")
 
-    # Price action / pullback quality
-    if regime == "trend_up":
-        if i5.get("price_vs_ema_fast_pct", 0) >= -0.5 and i15.get("price_vs_ema_fast_pct", 0) > 0:
-            score += 10
-            reasons.append("PULLBACK_NEAR_FAST_EMA")
+    # 5. Pullback quality (0-15)
+    pullback_score = 0.0
+
+    # 15m pullback is primary
+    pullback_state_15 = pa15.get("pullback_state", "no_pullback")
+    pullback_bars_15 = int(pa15.get("pullback_bars_ago", 999))
+    pullback_quality_15 = float(pa15.get("pullback_quality_score", 0.0))
+
+    if pullback_state_15 in ("shallow_pullback", "active_pullback"):
+        pullback_score += (pullback_quality_15 / 100.0) * 10
+        if pullback_bars_15 <= 3:
+            pullback_score += 3
+        reasons.append("PULLBACK_VALID")
+    elif pullback_state_15 == "no_pullback":
+        pullback_score += 2
+        reasons.append("NO_PULLBACK_YET")
+    elif pullback_state_15 in ("deep_pullback", "reversal_risk"):
+        reasons.append("PULLBACK_TOO_DEEP")
+
+    # 5m tactical freshness
+    pullback_state_5 = pa5.get("pullback_state", "no_pullback")
+    pullback_bars_5 = int(pa5.get("pullback_bars_ago", 999))
+    if pullback_state_5 in ("shallow_pullback", "active_pullback") and pullback_bars_5 <= 2:
+        pullback_score += 2
+
+    pullback_score = clamp(pullback_score, 0.0, 15.0)
+    score += pullback_score
+
+    # 6. Momentum quality (0-10)
+    momentum_score = 0.0
+    if expected_direction == "bullish":
+        momentum_score += score_linear(float(i1.get("macd_histogram_slope", 0.0)), 0.0, 40.0, 4)
+        momentum_score += score_linear(float(i15.get("macd_histogram_slope", 0.0)), 0.0, 20.0, 4)
+        if i15.get("rsi_state") not in ("oversold",):
+            momentum_score += 2
     else:
-        if i5.get("price_vs_ema_fast_pct", 0) <= 0.5 and i15.get("price_vs_ema_fast_pct", 0) < 0:
-            score += 10
-            reasons.append("PULLBACK_NEAR_FAST_EMA")
+        momentum_score += score_linear(abs(float(i1.get("macd_histogram_slope", 0.0))), 0.0, 40.0, 4)
+        momentum_score += score_linear(abs(float(i15.get("macd_histogram_slope", 0.0))), 0.0, 20.0, 4)
+        if i15.get("rsi_state") not in ("overbought",):
+            momentum_score += 2
 
-    # Volatility suitability
-    atr = i1.get("atr", 0)
-    if atr > 0:
-        score += 7
-        reasons.append("VOLATILITY_OK")
+    momentum_score = clamp(momentum_score, 0.0, 10.0)
+    score += momentum_score
+    if momentum_score >= 6:
+        reasons.append("MOMENTUM_CONFIRM")
 
-    return max(0.0, min(100.0, score)), reasons
+    # 7. Volatility suitability (0-10)
+    vol_state = v15.get("volatility_state", "medium")
+    expansion_state = pa15.get("expansion_state", "none")
 
+    volatility_score = 0.0
+    if vol_state == "medium":
+        volatility_score = 8.0
+    elif vol_state == "low":
+        volatility_score = 6.0
+    else:
+        volatility_score = 4.0
+
+    if expansion_state == "healthy_expansion":
+        volatility_score += 2.0
+    elif expansion_state == "overextended_expansion":
+        volatility_score -= 2.0
+
+    volatility_score = clamp(volatility_score, 0.0, 10.0)
+    score += volatility_score
+    if volatility_score >= 7:
+        reasons.append("VOLATILITY_SUITABLE")
+
+    return round(clamp(score, 0.0, 100.0), 2), reasons
+
+def determine_mean_reversion_side(snapshot: dict):
+    s15 = safe_get_structure(snapshot, "15m")
+    i15 = safe_get_indicators(snapshot, "15m")
+
+    dist_high = float(s15.get("distance_to_range_high_pct", 50.0))
+    dist_low = float(s15.get("distance_to_range_low_pct", 50.0))
+    rsi = float(i15.get("rsi", 50.0))
+
+    # Prefer the closer range edge first
+    if dist_low <= dist_high:
+        side = "long"
+        if rsi > 60 and dist_high < dist_low:
+            side = "short"
+    else:
+        side = "short"
+        if rsi < 40 and dist_low < dist_high:
+            side = "long"
+
+    return side
 
 def score_mean_reversion(snapshot: dict, regime: str):
-    score = 0.0
-    reasons = []
-
     if regime != "range":
-        return 0.0, ["REGIME_NOT_RANGE"]
+        return 0.0, ["REGIME_NOT_RANGE"], "none"
 
-    tf_1h = safe_get_tf(snapshot, "1h")
-    tf_15m = safe_get_tf(snapshot, "15m")
-    tf_5m = safe_get_tf(snapshot, "5m")
+    side = determine_mean_reversion_side(snapshot)
+    reasons = []
+    score = 0.0
 
-    i1 = tf_1h.get("indicators", {})
-    i15 = tf_15m.get("indicators", {})
-    s15 = tf_15m.get("structure", {})
-    s5 = tf_5m.get("structure", {})
+    s1 = safe_get_structure(snapshot, "1h")
+    s15 = safe_get_structure(snapshot, "15m")
+    i1 = safe_get_indicators(snapshot, "1h")
+    i15 = safe_get_indicators(snapshot, "15m")
+    pa15 = safe_get_price_action(snapshot, "15m")
+    v15 = safe_get_volatility(snapshot, "15m")
 
-    bos = detect_bos(snapshot)
+    dist_high = float(s15.get("distance_to_range_high_pct", 50.0))
+    dist_low = float(s15.get("distance_to_range_low_pct", 50.0))
+    rsi = float(i15.get("rsi", 50.0))
 
-    # Range quality
-    if s15.get("market_type") in ("range", "ranging", "sideways"):
-        score += 25
+    # 1. Range quality (0-25)
+    range_quality = 0.0
+    if s1.get("market_type") == "range":
+        range_quality += 12
+    if s15.get("market_type") == "range":
+        range_quality += 13
+    range_quality -= score_linear(float(s1.get("trend_consistency_score", 0.0)), 45, 80, 8)
+    range_quality = clamp(range_quality, 0.0, 25.0)
+    score += range_quality
+    if range_quality >= 16:
         reasons.append("RANGE_QUALITY_OK")
+
+    # 2. Boundary proximity (0-20)
+    if side == "long":
+        boundary_score = score_inverse(dist_low, 5, 35, 20)
+        if boundary_score >= 10:
+            reasons.append("NEAR_RANGE_LOW")
     else:
-        score += 12
-        reasons.append("RANGE_QUALITY_PARTIAL")
+        boundary_score = score_inverse(dist_high, 5, 35, 20)
+        if boundary_score >= 10:
+            reasons.append("NEAR_RANGE_HIGH")
+    score += boundary_score
 
-    # Distance to range edge
-    dist_high = s15.get("distance_to_range_high_pct", 50)
-    dist_low = s15.get("distance_to_range_low_pct", 50)
-    rsi = i15.get("rsi", 50)
+    # 3. RSI stretch (0-15)
+    if side == "long":
+        rsi_score = score_inverse(rsi, 30, 50, 15)
+        if rsi_score >= 8:
+            reasons.append("RSI_STRETCH_LONG")
+    else:
+        rsi_score = score_linear(rsi, 50, 70, 15)
+        if rsi_score >= 8:
+            reasons.append("RSI_STRETCH_SHORT")
+    score += rsi_score
 
-    # Long mean reversion candidate near range low
-    if dist_low <= 20 and rsi <= 40:
-        score += 20
-        reasons.append("NEAR_RANGE_LOW")
-        score += 15
-        reasons.append("RSI_STRETCH_LONG")
-    # Short mean reversion candidate near range high
-    elif dist_high <= 20 and rsi >= 60:
-        score += 20
-        reasons.append("NEAR_RANGE_HIGH")
-        score += 15
-        reasons.append("RSI_STRETCH_SHORT")
+    # 4. Trend weakness (0-15)
+    trend_weakness = 0.0
+    trend_weakness += score_inverse(abs(float(i1.get("ema_separation_pct", 0.0))), 0.10, 0.60, 7)
+    trend_weakness += score_inverse(float(s1.get("trend_consistency_score", 0.0)), 25, 70, 8)
+    trend_weakness = clamp(trend_weakness, 0.0, 15.0)
+    score += trend_weakness
+    if trend_weakness >= 8:
+        reasons.append("TREND_WEAKNESS_OK")
 
-    # Trend weakness requirement
-    if abs(i1.get("price_vs_ema_slow_pct", 0)) < 1.5:
-        score += 15
-        reasons.append("LOW_TREND_STRENGTH")
+    # 5. Anti-breakout / BOS filter (0-10)
+    bos_score = 0.0
+    bos_direction = pa15.get("recent_bos_direction", "none")
+    bos_failed = pa15.get("recent_bos_failed", False)
+    bos_bars_ago = int(pa15.get("recent_bos_bars_ago", 999))
 
-    # No fresh directional BOS
-    if bos == "none":
-        score += 10
+    if bos_direction == "none":
+        bos_score = 10.0
         reasons.append("NO_FRESH_BOS")
+    elif bos_failed:
+        bos_score = 7.0
+        reasons.append("FAILED_BOS_SUPPORTS_REVERT")
+    elif bos_bars_ago > 5:
+        bos_score = 4.0
+        reasons.append("STALE_BOS")
     else:
-        score -= 20
-        reasons.append("BOS_BREAKS_RANGE")
+        bos_score = 0.0
+        reasons.append("FRESH_BOS_BREAKS_RANGE")
+    score += bos_score
 
-    # Volatility suitability
-    atr = i15.get("atr", 0)
-    if atr > 0:
-        score += 5
-        reasons.append("VOLATILITY_ACCEPTABLE")
+    # 6. Volatility suitability (0-5)
+    vol_state = v15.get("volatility_state", "medium")
+    if vol_state == "low":
+        vol_score = 5.0
+    elif vol_state == "medium":
+        vol_score = 4.0
+    else:
+        vol_score = 1.0
+    score += vol_score
 
-    # Clean invalidation via range edges
-    if s15.get("range_high") and s15.get("range_low"):
-        score += 10
-        reasons.append("CLEAR_RANGE_INVALIDATION")
+    # 7. Invalidation clarity (0-10)
+    range_high = float(s15.get("range_high", 0.0))
+    range_low = float(s15.get("range_low", 0.0))
+    atr = float(i15.get("atr", 0.0))
+    range_span = range_high - range_low
 
-    return max(0.0, min(100.0, score)), reasons
+    invalidation_score = 0.0
+    if range_span > 0 and atr > 0:
+        invalidation_score = clamp(score_linear(range_span / atr, 1.5, 5.0, 10), 0.0, 10.0)
+    score += invalidation_score
+    if invalidation_score >= 5:
+        reasons.append("CLEAR_INVALIDATION")
 
+    return round(clamp(score, 0.0, 100.0), 2), reasons, side
 
 def build_trend_following_proposal(symbol: str, snapshot: dict, regime: str, score: float, reasons: list[str]):
     tf_15m = safe_get_tf(snapshot, "15m")
-    tf_1h = safe_get_tf(snapshot, "1h")
-
-    s15 = tf_15m.get("structure", {})
     i15 = tf_15m.get("indicators", {})
-    i1 = tf_1h.get("indicators", {})
+    s15 = tf_15m.get("structure", {})
+    candles_15m = tf_15m.get("candles", [])
+
+    latest_close = float(candles_15m[-1]["close"]) if candles_15m else float(i15.get("ema_fast", 0.0))
+    entry_price = float(i15.get("ema_fast", latest_close))
+    atr_15m = float(i15.get("atr", 0.0))
 
     if regime == "trend_up":
         decision = "long"
-        entry_price = float(i15.get("ema_fast", 0))
-        stop_loss = float(s15.get("range_low", 0) or (entry_price * 0.985))
-        tp1 = float(s15.get("range_high", 0) or (entry_price * 1.01))
-        tp2 = float(tp1 * 1.02)
-        tp3 = float(tp2 * 1.04)
+        stop_loss = min(
+            float(i15.get("ema_slow", entry_price * 0.99)),
+            entry_price - (1.2 * atr_15m if atr_15m > 0 else entry_price * 0.01)
+        )
+        risk_per_unit = max(1.0, entry_price - stop_loss)
+        tp1 = max(float(s15.get("range_high", 0.0)), entry_price + risk_per_unit * 1.0)
+        tp2 = entry_price + risk_per_unit * 2.0
+        tp3 = entry_price + risk_per_unit * 3.5
     else:
         decision = "short"
-        entry_price = float(i15.get("ema_fast", 0))
-        stop_loss = float(s15.get("range_high", 0) or (entry_price * 1.015))
-        tp1 = float(s15.get("range_low", 0) or (entry_price * 0.99))
-        tp2 = float(tp1 * 0.98)
-        tp3 = float(tp2 * 0.96)
+        stop_loss = max(
+            float(i15.get("ema_slow", entry_price * 1.01)),
+            entry_price + (1.2 * atr_15m if atr_15m > 0 else entry_price * 0.01)
+        )
+        risk_per_unit = max(1.0, stop_loss - entry_price)
+        tp1 = min(float(s15.get("range_low", entry_price)), entry_price - risk_per_unit * 1.0)
+        tp2 = entry_price - risk_per_unit * 2.0
+        tp3 = entry_price - risk_per_unit * 3.5
 
     return {
         "ok": True,
@@ -403,33 +584,30 @@ def build_trend_following_proposal(symbol: str, snapshot: dict, regime: str, sco
         "reason_tags": reasons
     }
 
-
-def build_mean_reversion_proposal(symbol: str, snapshot: dict, score: float, reasons: list[str]):
+def build_mean_reversion_proposal(symbol: str, snapshot: dict, score: float, reasons: list[str], side: str):
     tf_15m = safe_get_tf(snapshot, "15m")
     s15 = tf_15m.get("structure", {})
     i15 = tf_15m.get("indicators", {})
 
-    dist_high = s15.get("distance_to_range_high_pct", 50)
-    dist_low = s15.get("distance_to_range_low_pct", 50)
+    range_high = float(s15.get("range_high", 0.0))
+    range_low = float(s15.get("range_low", 0.0))
+    mid_range = (range_high + range_low) / 2 if range_high and range_low else float(i15.get("ema_fast", 0.0))
+    atr_15m = float(i15.get("atr", 0.0))
 
-    range_high = float(s15.get("range_high", 0))
-    range_low = float(s15.get("range_low", 0))
-    mid_range = (range_high + range_low) / 2 if range_high and range_low else 0
-
-    if dist_low <= dist_high:
+    if side == "long":
+        entry_price = max(range_low, float(i15.get("ema_fast", range_low)))
+        stop_loss = range_low - (0.4 * atr_15m if atr_15m > 0 else range_low * 0.003)
+        tp1 = mid_range
+        tp2 = range_high
+        tp3 = range_high + (0.25 * atr_15m if atr_15m > 0 else range_high * 0.002)
         decision = "long"
-        entry_price = max(float(i15.get("ema_fast", range_low)), range_low)
-        stop_loss = round(range_low * 0.997, 8)
-        tp1 = round(mid_range, 8)
-        tp2 = round(range_high, 8)
-        tp3 = round(range_high * 1.005, 8)
     else:
+        entry_price = min(range_high, float(i15.get("ema_fast", range_high)))
+        stop_loss = range_high + (0.4 * atr_15m if atr_15m > 0 else range_high * 0.003)
+        tp1 = mid_range
+        tp2 = range_low
+        tp3 = range_low - (0.25 * atr_15m if atr_15m > 0 else range_low * 0.002)
         decision = "short"
-        entry_price = min(float(i15.get("ema_fast", range_high)), range_high)
-        stop_loss = round(range_high * 1.003, 8)
-        tp1 = round(mid_range, 8)
-        tp2 = round(range_low, 8)
-        tp3 = round(range_low * 0.995, 8)
 
     return {
         "ok": True,
@@ -446,7 +624,6 @@ def build_mean_reversion_proposal(symbol: str, snapshot: dict, score: float, rea
         "tp3_price": round(tp3, 8),
         "reason_tags": reasons
     }
-
 
 def analyze_symbol(symbol: str):
     snapshot_payload, error = fetch_snapshot(symbol)
@@ -479,17 +656,23 @@ def analyze_symbol(symbol: str):
         }
 
     trend_score, trend_reasons = score_trend_following(snapshot_payload, regime, macro_bias)
-    mean_score, mean_reasons = score_mean_reversion(snapshot_payload, regime)
+    mean_score, mean_reasons, mean_side = score_mean_reversion(snapshot_payload, regime)
 
     if trend_score >= mean_score and trend_score >= STRICT_SCORE_THRESHOLD:
         proposal = build_trend_following_proposal(
-            symbol, snapshot_payload, regime, trend_score,
+            symbol,
+            snapshot_payload,
+            regime,
+            trend_score,
             macro_reasons + regime_reasons + trend_reasons
         )
     elif mean_score > trend_score and mean_score >= STRICT_SCORE_THRESHOLD:
         proposal = build_mean_reversion_proposal(
-            symbol, snapshot_payload, mean_score,
-            macro_reasons + regime_reasons + mean_reasons
+            symbol,
+            snapshot_payload,
+            mean_score,
+            macro_reasons + regime_reasons + mean_reasons,
+            mean_side
         )
     else:
         proposal = {
