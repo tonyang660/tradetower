@@ -52,11 +52,16 @@ services:
       - "8103:8080"
 
   brain-orchestrator:
-    build: ../../services/brain-orchestrator
+    build:
+      context: ../..
+      dockerfile: services/brain-orchestrator/Dockerfile
     container_name: trading-brain-orchestrator
     restart: unless-stopped
     env_file:
       - ../env/staging.env
+    environment:
+      - LLM_SERVICE_BASE_URL=http://llm-service:8080
+      - ROLE_CONFIDENCE_THRESHOLD=70
     ports:
       - "8104:8080"
 
@@ -127,6 +132,17 @@ services:
       - ACCOUNT_ID=1
     ports:
       - "8109:8080"
+
+  llm-service:
+    build:
+      context: ../..
+      dockerfile: services/llm-service/Dockerfile
+    container_name: trading-llm-service
+    restart: unless-stopped
+    env_file:
+      - ../env/staging.env
+    ports:
+      - "8110:8080"
 
   api-gateway:
     build: ../../services/api-gateway

@@ -1,3 +1,3 @@
-# brain-orchestrator
+# scheduler
 
-Brain Orchestrator
+Scheduler
