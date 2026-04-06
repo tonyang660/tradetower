@@ -6,7 +6,7 @@ import urllib.request
 from jsonschema import validate
 
 
-SCHEMA_PATH = Path("schemas/market_snapshot_schema_v1.json")
+SCHEMA_PATH = Path("schemas/market_snapshot_schema_v2.json")
 FEATURE_FACTORY_URL = "http://10.0.0.40:8102/snapshot?symbol=BTCUSDT"
 
 

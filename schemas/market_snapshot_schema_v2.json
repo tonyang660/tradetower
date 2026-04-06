@@ -1,0 +1,448 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MarketSnapshotV2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "snapshot_meta",
+    "symbol",
+    "snapshot_timestamp",
+    "source",
+    "timeframes"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "market_snapshot_v2"
+    },
+    "snapshot_meta": { "$ref": "#/definitions/snapshotMeta" },
+    "symbol": {
+      "type": "string",
+      "minLength": 1
+    },
+    "snapshot_timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timeframes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["5m", "15m", "1h", "4h"],
+      "properties": {
+        "5m": { "$ref": "#/definitions/timeframeBlock5m" },
+        "15m": { "$ref": "#/definitions/timeframeBlock15m" },
+        "1h": { "$ref": "#/definitions/timeframeBlock1h" },
+        "4h": { "$ref": "#/definitions/timeframeBlock4h" }
+      }
+    }
+  },
+  "definitions": {
+    "snapshotMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "feature_factory_version",
+        "generated_at",
+        "symbol"
+      ],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "feature_factory_version": { "type": "string" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "symbol": { "type": "string", "minLength": 1 }
+      }
+    },
+    "candle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timestamp", "open", "high", "low", "close", "volume"],
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "open": {
+          "type": "number"
+        },
+        "high": {
+          "type": "number"
+        },
+        "low": {
+          "type": "number"
+        },
+        "close": {
+          "type": "number"
+        },
+        "volume": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "indicators": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rsi",
+        "atr",
+        "ema_fast",
+        "ema_slow",
+        "macd",
+        "macd_signal",
+        "macd_histogram",
+        "volume_sma",
+        "price_vs_ema_fast_pct",
+        "price_vs_ema_slow_pct",
+        "ema_separation_pct",
+        "macd_histogram_slope",
+        "rsi_state",
+        "atr_percent"
+      ],
+      "properties": {
+        "rsi": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "atr": {
+          "type": "number",
+          "minimum": 0
+        },
+        "ema_fast": {
+          "type": "number"
+        },
+        "ema_slow": {
+          "type": "number"
+        },
+        "macd": {
+          "type": "number"
+        },
+        "macd_signal": {
+          "type": "number"
+        },
+        "macd_histogram": {
+          "type": "number"
+        },
+        "volume_sma": {
+          "type": "number",
+          "minimum": 0
+        },
+        "price_vs_ema_fast_pct": {
+          "type": "number"
+        },
+        "price_vs_ema_slow_pct": {
+          "type": "number"
+        },
+        "ema_separation_pct": { "type": "number" },
+        "macd_histogram_slope": { "type": "number" },
+        "rsi_state": {
+          "type": "string",
+          "enum": [
+            "oversold",
+            "bearish_but_not_oversold",
+            "neutral",
+            "bullish_but_not_overextended",
+            "overbought"
+          ]
+        },
+        "atr_percent": { "type": "number", "minimum": 0 }
+      }
+    },
+    "structure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trend_direction",
+        "market_type",
+        "higher_highs",
+        "higher_lows",
+        "lower_highs",
+        "lower_lows",
+        "range_high",
+        "range_low",
+        "distance_to_range_high_pct",
+        "distance_to_range_low_pct",
+        "structure_state",
+        "structure_quality_score",
+        "swing_bias",
+        "trend_consistency_score"
+      ],
+      "properties": {
+        "trend_direction": {
+          "type": "string",
+          "enum": ["up", "down", "neutral"]
+        },
+        "market_type": {
+          "type": "string",
+          "enum": ["trend", "range", "transition"]
+        },
+        "higher_highs": {
+          "type": "boolean"
+        },
+        "higher_lows": {
+          "type": "boolean"
+        },
+        "lower_highs": {
+          "type": "boolean"
+        },
+        "lower_lows": {
+          "type": "boolean"
+        },
+        "range_high": {
+          "type": "number"
+        },
+        "range_low": {
+          "type": "number"
+        },
+        "distance_to_range_high_pct": {
+          "type": "number"
+        },
+        "distance_to_range_low_pct": {
+          "type": "number"
+        },
+        "structure_state": {
+          "type": "string",
+          "enum": ["clean_trend", "weak_trend", "range", "transition", "chop"]
+        },
+        "structure_quality_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "swing_bias": {
+          "type": "string",
+          "enum": ["bullish", "bearish", "neutral"]
+        },
+        "trend_consistency_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        }
+      }
+    },
+    "price_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recent_bos_direction",
+        "recent_bos_bars_ago",
+        "recent_bos_strength",
+        "recent_bos_failed",
+        "pullback_state",
+        "pullback_bars_ago",
+        "pullback_depth_pct",
+        "pullback_quality_score",
+        "impulse_strength_score",
+        "correction_strength_score",
+        "impulse_to_correction_ratio",
+        "wick_rejection_bias",
+        "wick_rejection_score",
+        "expansion_state",
+        "compression_state"
+      ],
+      "properties": {
+        "recent_bos_direction": {
+          "type": "string",
+          "enum": ["bullish", "bearish", "none"]
+        },
+        "recent_bos_bars_ago": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "recent_bos_strength": {
+          "type": "number",
+          "minimum": 0
+        },
+        "recent_bos_failed": {
+          "type": "boolean"
+        },
+        "pullback_state": {
+          "type": "string",
+          "enum": [
+            "active_pullback",
+            "shallow_pullback",
+            "deep_pullback",
+            "no_pullback",
+            "reversal_risk"
+          ]
+        },
+        "pullback_bars_ago": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pullback_depth_pct": {
+          "type": "number",
+          "minimum": 0
+        },
+        "pullback_quality_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "impulse_strength_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "correction_strength_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "impulse_to_correction_ratio": {
+          "type": "number",
+          "minimum": 0
+        },
+        "wick_rejection_bias": {
+          "type": "string",
+          "enum": ["bullish", "bearish", "neutral"]
+        },
+        "wick_rejection_score": {
+          "type": "number",
+          "minimum": 0
+        },
+        "expansion_state": {
+          "type": "string",
+          "enum": ["none", "healthy_expansion", "overextended_expansion", "failed_expansion"]
+        },
+        "compression_state": {
+          "type": "string",
+          "enum": ["none", "mild_compression", "strong_compression"]
+        }
+      }
+    },
+    "volatility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "atr",
+        "atr_percent",
+        "volatility_state"
+      ],
+      "properties": {
+        "atr": {
+          "type": "number",
+          "minimum": 0
+        },
+        "atr_percent": {
+          "type": "number",
+          "minimum": 0
+        },
+        "volatility_state": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        }
+      }
+    },
+    "timeframeBlockBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timeframe",
+        "window_size",
+        "candles",
+        "indicators",
+        "structure",
+        "price_action",
+        "volatility"
+      ],
+      "properties": {
+        "timeframe": {
+          "type": "string",
+          "enum": ["5m", "15m", "1h", "4h"]
+        },
+        "window_size": {
+          "type": "integer"
+        },
+        "candles": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/candle" }
+        },
+        "indicators": {
+          "$ref": "#/definitions/indicators"
+        },
+        "structure": {
+          "$ref": "#/definitions/structure"
+        },
+        "price_action": { "$ref": "#/definitions/price_action" },
+        "volatility": {
+          "$ref": "#/definitions/volatility"
+        }
+      }
+    },
+    "timeframeBlock5m": {
+      "allOf": [
+        { "$ref": "#/definitions/timeframeBlockBase" },
+        {
+          "properties": {
+            "timeframe": { "const": "5m" },
+            "window_size": { "const": 72 },
+            "candles": {
+              "type": "array",
+              "minItems": 72,
+              "maxItems": 72,
+              "items": { "$ref": "#/definitions/candle" }
+            }
+          }
+        }
+      ]
+    },
+    "timeframeBlock15m": {
+      "allOf": [
+        { "$ref": "#/definitions/timeframeBlockBase" },
+        {
+          "properties": {
+            "timeframe": { "const": "15m" },
+            "window_size": { "const": 48 },
+            "candles": {
+              "type": "array",
+              "minItems": 48,
+              "maxItems": 48,
+              "items": { "$ref": "#/definitions/candle" }
+            }
+          }
+        }
+      ]
+    },
+    "timeframeBlock1h": {
+      "allOf": [
+        { "$ref": "#/definitions/timeframeBlockBase" },
+        {
+          "properties": {
+            "timeframe": { "const": "1h" },
+            "window_size": { "const": 30 },
+            "candles": {
+              "type": "array",
+              "minItems": 30,
+              "maxItems": 30,
+              "items": { "$ref": "#/definitions/candle" }
+            }
+          }
+        }
+      ]
+    },
+    "timeframeBlock4h": {
+      "allOf": [
+        { "$ref": "#/definitions/timeframeBlockBase" },
+        {
+          "properties": {
+            "timeframe": { "const": "4h" },
+            "window_size": { "const": 16 },
+            "candles": {
+              "type": "array",
+              "minItems": 16,
+              "maxItems": 16,
+              "items": { "$ref": "#/definitions/candle" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

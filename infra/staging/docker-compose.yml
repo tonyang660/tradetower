@@ -144,6 +144,20 @@ services:
     ports:
       - "8110:8080"
 
+  strategy-engine:
+    build:
+      context: ../..
+      dockerfile: services/strategy-engine/Dockerfile
+    container_name: trading-strategy-engine
+    restart: unless-stopped
+    env_file:
+      - ../env/staging.env
+    environment:
+      - FEATURE_FACTORY_BASE_URL=http://feature-factory:8080
+      - STRICT_SCORE_THRESHOLD=75
+    ports:
+      - "8111:8080"
+
   api-gateway:
     build: ../../services/api-gateway
     container_name: trading-api-gateway

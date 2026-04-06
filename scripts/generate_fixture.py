@@ -56,7 +56,11 @@ def make_tf(tf: str):
             "macd_histogram": 0.5,
             "volume_sma": 1000.0,
             "price_vs_ema_fast_pct": 0.5,
-            "price_vs_ema_slow_pct": -0.2
+            "price_vs_ema_slow_pct": -0.2,
+            "ema_separation_pct": -4.76,
+            "macd_histogram_slope": 0.1,
+            "rsi_state": "neutral",
+            "atr_percent": 0.5
         },
         "structure": {
             "trend_direction": "neutral",
@@ -67,8 +71,29 @@ def make_tf(tf: str):
             "lower_lows": False,
             "range_high": 110.0,
             "range_low": 90.0,
-            "distance_to_range_high_pct": 0.2,
-            "distance_to_range_low_pct": 0.8
+            "distance_to_range_high_pct": 40.0,
+            "distance_to_range_low_pct": 60.0,
+            "structure_state": "range",
+            "structure_quality_score": 55.0,
+            "swing_bias": "neutral",
+            "trend_consistency_score": 35.0
+        },
+        "price_action": {
+            "recent_bos_direction": "none",
+            "recent_bos_bars_ago": 999,
+            "recent_bos_strength": 0.0,
+            "recent_bos_failed": False,
+            "pullback_state": "active_pullback",
+            "pullback_bars_ago": 2,
+            "pullback_depth_pct": 1.0,
+            "pullback_quality_score": 60.0,
+            "impulse_strength_score": 50.0,
+            "correction_strength_score": 30.0,
+            "impulse_to_correction_ratio": 1.67,
+            "wick_rejection_bias": "neutral",
+            "wick_rejection_score": 0.3,
+            "expansion_state": "none",
+            "compression_state": "none"
         },
         "volatility": {
             "atr": 10.0,
@@ -78,10 +103,18 @@ def make_tf(tf: str):
     }
 
 
+generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
 snapshot = {
-    "schema_version": "market_snapshot_v1",
+    "snapshot_meta": {
+        "schema_version": "market_snapshot_v2",
+        "feature_factory_version": "v2",
+        "generated_at": generated_at,
+        "symbol": "BTCUSDT"
+    },
+    "schema_version": "market_snapshot_v2",
     "symbol": "BTCUSDT",
-    "snapshot_timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    "snapshot_timestamp": generated_at,
     "source": "feature-factory",
     "timeframes": {
         "5m": make_tf("5m"),
@@ -91,5 +124,5 @@ snapshot = {
     }
 }
 
-with open("tests/fixtures/market_snapshot_v1_sample.json", "w") as f:
+with open("tests/fixtures/market_snapshot_v2_sample.json", "w", encoding="utf-8") as f:
     json.dump(snapshot, f, indent=2)
