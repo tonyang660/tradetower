@@ -46,8 +46,8 @@ services:
     environment:
       - TRADE_GUARDIAN_BASE_URL=http://trade-guardian:8080
       - FEATURE_FACTORY_BASE_URL=http://feature-factory:8080
-      - MAX_CANDIDATES=6
-      - MIN_SCORE=50
+      - MAX_CANDIDATES=25
+      - MIN_SCORE=40
     ports:
       - "8103:8080"
 

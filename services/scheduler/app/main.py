@@ -16,6 +16,11 @@ API_GATEWAY_BASE_URL = os.getenv("API_GATEWAY_BASE_URL", "http://api-gateway:808
 DATA_HUB_BASE_URL = os.getenv("DATA_HUB_BASE_URL", "http://data-hub:8080")
 TRADE_GUARDIAN_BASE_URL = os.getenv("TRADE_GUARDIAN_BASE_URL", "http://trade-guardian:8080")
 CANDIDATE_FILTER_BASE_URL = os.getenv("CANDIDATE_FILTER_BASE_URL", "http://candidate-filter:8080")
+STRATEGY_ENGINE_BASE_URL = os.getenv("STRATEGY_ENGINE_BASE_URL", "http://strategy-engine:8080")
+RISK_ENGINE_BASE_URL = os.getenv("RISK_ENGINE_BASE_URL", "http://risk-engine:8080")
+PAPER_EXECUTION_BASE_URL = os.getenv("PAPER_EXECUTION_BASE_URL", "http://paper-execution:8080")
+
+PAPER_EXECUTION_ENTRY_PATH = os.getenv("PAPER_EXECUTION_ENTRY_PATH", "/entry/simulate")
 
 AUTO_LOOP_ENABLED = os.getenv("AUTO_LOOP_ENABLED", "false").lower() == "true"
 LOOP_INTERVAL_SECONDS = int(os.getenv("LOOP_INTERVAL_SECONDS", "300"))
@@ -161,6 +166,20 @@ def check_entry_gate(account_id: int):
     return payload, None
 
 
+def check_entry_gate_for_symbol(account_id: int, symbol: str):
+    try:
+        r = requests.post(
+            f"{TRADE_GUARDIAN_BASE_URL}/guard/check-entry",
+            json={"account_id": account_id, "symbol": symbol},
+            timeout=10
+        )
+        payload = r.json()
+    except Exception as e:
+        return None, f"trade_guardian_symbol_entry_check_failed: {str(e)}"
+
+    return payload, None
+
+
 def run_candidate_filter(account_id: int, symbols: list[str]):
     if not symbols:
         return {
@@ -186,8 +205,95 @@ def run_candidate_filter(account_id: int, symbols: list[str]):
     return payload, None
 
 
-# Added here because used in maintenance
-PAPER_EXECUTION_BASE_URL = os.getenv("PAPER_EXECUTION_BASE_URL", "http://paper-execution:8080")
+def run_strategy_engine(symbol: str):
+    try:
+        r = requests.post(
+            f"{STRATEGY_ENGINE_BASE_URL}/analyze",
+            json={"symbol": symbol},
+            timeout=30
+        )
+        payload = r.json()
+    except Exception as e:
+        return None, f"strategy_engine_request_failed: {str(e)}"
+
+    return payload, None
+
+
+def build_risk_payload_from_strategy(account_id: int, strategy_result: dict):
+    return {
+        "account_id": account_id,
+        "symbol": strategy_result["symbol"],
+        "position_side": strategy_result["decision"],
+        "entry_order_type": strategy_result["entry_order_type"],
+        "entry_price": strategy_result["entry_price"],
+        "stop_loss": strategy_result["stop_loss"],
+        "tp1_price": strategy_result["tp1_price"],
+        "tp2_price": strategy_result["tp2_price"],
+        "tp3_price": strategy_result["tp3_price"],
+    }
+
+
+def run_risk_engine(risk_payload: dict):
+    try:
+        r = requests.post(
+            f"{RISK_ENGINE_BASE_URL}/plan",
+            json=risk_payload,
+            timeout=30
+        )
+        payload = r.json()
+    except Exception as e:
+        return None, f"risk_engine_request_failed: {str(e)}"
+
+    return payload, None
+
+
+def build_paper_execution_payload(account_id: int, strategy_result: dict, risk_result: dict):
+    payload = {
+        "account_id": account_id,
+        "symbol": strategy_result["symbol"],
+        "selected_strategy": strategy_result.get("selected_strategy"),
+        "regime": strategy_result.get("regime"),
+        "strategy_confidence": strategy_result.get("confidence"),
+        "strategy_reason_tags": strategy_result.get("reason_tags", []),
+
+        "position_side": strategy_result["decision"],
+        "entry_order_type": strategy_result["entry_order_type"],
+        "entry_price": strategy_result["entry_price"],
+        "stop_loss": strategy_result["stop_loss"],
+        "tp1_price": strategy_result["tp1_price"],
+        "tp2_price": strategy_result["tp2_price"],
+        "tp3_price": strategy_result["tp3_price"],
+    }
+
+    # Merge in the full risk-engine payload so paper-execution gets the final approved plan.
+    # Keep strategy-level values above as the default context.
+    if isinstance(risk_result, dict):
+        payload.update(risk_result)
+
+    return payload
+
+
+def submit_entry_to_paper_execution(payload: dict):
+    try:
+        r = requests.post(
+            f"{PAPER_EXECUTION_BASE_URL}{PAPER_EXECUTION_ENTRY_PATH}",
+            json=payload,
+            timeout=30
+        )
+        result = r.json()
+    except Exception as e:
+        return None, f"paper_execution_entry_submit_failed: {str(e)}"
+
+    return result, None
+
+
+def extract_candidate_symbols(candidate_payload: dict):
+    symbols = []
+    for item in candidate_payload.get("candidates", []):
+        symbol = item.get("symbol")
+        if symbol:
+            symbols.append(symbol.upper())
+    return symbols
 
 
 def run_one_cycle():
@@ -199,23 +305,50 @@ def run_one_cycle():
         "cycle_id": cycle_id,
         "started_at": started_at,
         "completed_at": None,
+
         "enabled_symbols": [],
         "refreshed_symbols_count": 0,
         "refresh_results": [],
+
+        "open_positions_before_maintenance_count": 0,
         "open_positions_count": 0,
+
         "maintenance": {
             "checked": 0,
             "actions_triggered": 0,
             "results": []
         },
+
         "entry_gate": None,
         "entry_eligible_symbols": [],
         "candidate_filter": None,
+
+        "strategy_engine": {
+            "analyzed": 0,
+            "accepted": 0,
+            "results": []
+        },
+        "risk_engine": {
+            "checked": 0,
+            "approved": 0,
+            "results": []
+        },
+        "final_entry_gate": {
+            "checked": 0,
+            "blocked": 0,
+            "results": []
+        },
+        "paper_execution": {
+            "submitted": 0,
+            "fills": 0,
+            "results": []
+        },
+
         "errors": []
     }
 
     try:
-        # Phase 0: load universe
+        # Phase 0: load enabled symbol universe
         enabled_symbols = load_symbol_universe()
         summary["enabled_symbols"] = enabled_symbols
 
@@ -226,7 +359,7 @@ def run_one_cycle():
 
         refreshed_ok_symbols = set()
         for item in summary["refresh_results"]:
-            if item["ok"]:
+            if item.get("ok"):
                 refreshed_ok_symbols.add(item["symbol"])
         summary["refreshed_symbols_count"] = len(refreshed_ok_symbols)
 
@@ -236,8 +369,8 @@ def run_one_cycle():
             summary["errors"].append(positions_error)
             open_positions = []
 
-        summary["open_positions_count"] = len(open_positions)
-        open_symbols = [p["symbol"] for p in open_positions]
+        summary["open_positions_before_maintenance_count"] = len(open_positions)
+        open_symbols_before_maintenance = [p["symbol"] for p in open_positions]
 
         for pos in open_positions:
             symbol = pos["symbol"]
@@ -282,7 +415,22 @@ def run_one_cycle():
             if action and action != "NO_ACTION":
                 summary["maintenance"]["actions_triggered"] += 1
 
-        # Phase 3: entry gate
+        # Refresh open positions after maintenance so entry path uses current state
+        post_maintenance_positions, positions_error = fetch_open_positions(ACCOUNT_ID)
+        if positions_error:
+            summary["errors"].append(positions_error)
+            post_maintenance_positions = open_positions
+
+        summary["open_positions_count"] = len(post_maintenance_positions)
+        current_open_symbols = [p["symbol"] for p in post_maintenance_positions]
+
+        maintenance_touched_symbols = {
+            item["symbol"]
+            for item in summary["maintenance"]["results"]
+            if item.get("symbol")
+        }
+
+        # Phase 3: account-level entry gate
         entry_gate, entry_error = check_entry_gate(ACCOUNT_ID)
         if entry_error:
             summary["errors"].append(entry_error)
@@ -293,11 +441,14 @@ def run_one_cycle():
         else:
             summary["entry_gate"] = entry_gate
 
-        # Phase 4: build entry-eligible universe
-        entry_eligible_symbols = [s for s in enabled_symbols if s not in open_symbols]
+        # Phase 4: build entry-eligible universe from latest state
+        entry_eligible_symbols = [
+            s for s in enabled_symbols
+            if s not in current_open_symbols and s not in maintenance_touched_symbols
+        ]
         summary["entry_eligible_symbols"] = entry_eligible_symbols
 
-        # Phase 5: candidate filter only if entry allowed
+        # Phase 5: candidate filter only if account-level entry allowed
         if summary["entry_gate"] and summary["entry_gate"].get("trade_allowed", False):
             candidate_payload, candidate_error = run_candidate_filter(ACCOUNT_ID, entry_eligible_symbols)
             if candidate_error:
@@ -314,6 +465,93 @@ def run_one_cycle():
                 "skipped": True,
                 "reason": "ENTRY_GATE_BLOCKED"
             }
+            summary["completed_at"] = iso_now()
+            return summary
+
+        # Phase 6: deterministic downstream path
+        if not summary["candidate_filter"] or not summary["candidate_filter"].get("ok", False):
+            summary["errors"].append("candidate_filter_unavailable")
+            summary["completed_at"] = iso_now()
+            return summary
+
+        candidate_symbols = extract_candidate_symbols(summary["candidate_filter"])
+
+        for symbol in candidate_symbols:
+            summary["strategy_engine"]["analyzed"] += 1
+
+            strategy_result, strategy_error = run_strategy_engine(symbol)
+            if strategy_error:
+                summary["strategy_engine"]["results"].append({
+                    "symbol": symbol,
+                    "ok": False,
+                    "error": strategy_error
+                })
+                continue
+
+            summary["strategy_engine"]["results"].append(strategy_result)
+
+            if not strategy_result.get("ok", False):
+                continue
+
+            if strategy_result.get("decision") == "no_trade":
+                continue
+
+            summary["strategy_engine"]["accepted"] += 1
+
+            # Phase 7: risk-engine
+            risk_payload = build_risk_payload_from_strategy(ACCOUNT_ID, strategy_result)
+
+            summary["risk_engine"]["checked"] += 1
+            risk_result, risk_error = run_risk_engine(risk_payload)
+            if risk_error:
+                summary["risk_engine"]["results"].append({
+                    "symbol": symbol,
+                    "ok": False,
+                    "error": risk_error
+                })
+                continue
+
+            summary["risk_engine"]["results"].append(risk_result)
+
+            if not risk_result.get("approved", False):
+                continue
+
+            summary["risk_engine"]["approved"] += 1
+
+            # Phase 8: final symbol-level entry gate
+            summary["final_entry_gate"]["checked"] += 1
+            final_gate, final_gate_error = check_entry_gate_for_symbol(ACCOUNT_ID, symbol)
+            if final_gate_error:
+                summary["final_entry_gate"]["blocked"] += 1
+                summary["final_entry_gate"]["results"].append({
+                    "symbol": symbol,
+                    "ok": False,
+                    "error": final_gate_error
+                })
+                continue
+
+            summary["final_entry_gate"]["results"].append(final_gate)
+
+            if not final_gate.get("trade_allowed", False):
+                summary["final_entry_gate"]["blocked"] += 1
+                continue
+
+            # Phase 9: submit approved plan to paper-execution
+            paper_payload = build_paper_execution_payload(ACCOUNT_ID, strategy_result, risk_result)
+            paper_result, paper_error = submit_entry_to_paper_execution(paper_payload)
+            if paper_error:
+                summary["paper_execution"]["results"].append({
+                    "symbol": symbol,
+                    "ok": False,
+                    "error": paper_error
+                })
+                continue
+
+            summary["paper_execution"]["submitted"] += 1
+            if paper_result.get("filled", False):
+                summary["paper_execution"]["fills"] += 1
+
+            summary["paper_execution"]["results"].append(paper_result)
 
     except Exception as e:
         summary["ok"] = False
@@ -359,7 +597,8 @@ class Handler(BaseHTTPRequestHandler):
                 "service": SERVICE_NAME,
                 "timestamp": iso_now(),
                 "auto_loop_enabled": AUTO_LOOP_ENABLED,
-                "loop_interval_seconds": LOOP_INTERVAL_SECONDS
+                "loop_interval_seconds": LOOP_INTERVAL_SECONDS,
+                "paper_execution_entry_path": PAPER_EXECUTION_ENTRY_PATH
             })
             return
 
