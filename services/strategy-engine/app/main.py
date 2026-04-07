@@ -214,7 +214,12 @@ def detect_regime(snapshot: dict, macro_bias: str):
         reasons.append("15M_CHOP")
         return "chop", 70, reasons
 
-    if pa15.get("recent_bos_failed", False) or pa5.get("recent_bos_failed", False):
+    failed_intraday_bos = pa15.get("recent_bos_failed", False) or pa5.get("recent_bos_failed", False)
+
+    if failed_intraday_bos and (
+        float(s1.get("trend_consistency_score", 0.0)) < 35
+        or s1.get("swing_bias") != s4.get("swing_bias")
+    ):
         reasons.append("FAILED_INTRADAY_BOS")
         return "transition", 75, reasons
 
