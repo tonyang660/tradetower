@@ -35,6 +35,21 @@ REFRESH_LIMIT = 72
 def iso_now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
+def fetch_trade_guardian_status(account_id: int):
+    try:
+        r = requests.get(
+            f"{TRADE_GUARDIAN_BASE_URL}/status",
+            params={"account_id": account_id},
+            timeout=10
+        )
+        payload = r.json()
+    except Exception as e:
+        return None, f"trade_guardian_status_failed: {str(e)}"
+
+    if not payload.get("ok"):
+        return None, payload.get("error", "trade_guardian_status_failed")
+
+    return payload, None
 
 def load_symbol_universe():
     with open(SYMBOL_UNIVERSE_PATH, "r", encoding="utf-8") as f:
@@ -309,6 +324,32 @@ def ingest_cycle_summary_to_evaluator(summary: dict):
         return None, f"evaluator_cycle_ingest_failed: {str(e)}"
 
 
+def ingest_equity_snapshot_to_evaluator(status_payload: dict):
+    payload = {
+        "account_id": status_payload["account_id"],
+        "recorded_at": iso_now(),
+        "cash_balance": status_payload["cash_balance"],
+        "equity": status_payload["equity"],
+        "realized_pnl": status_payload["realized_pnl"],
+        "unrealized_pnl": status_payload["unrealized_pnl"],
+        "fees_paid_total": 0.0,
+        "trading_enabled": status_payload["trading_enabled"],
+        "manual_halt": status_payload["manual_halt"],
+        "daily_kill_switch": status_payload["daily_kill_switch"],
+        "weekly_kill_switch": status_payload["weekly_kill_switch"],
+    }
+
+    try:
+        r = requests.post(
+            f"{EVALUATOR_BASE_URL}/ingest/equity-snapshot",
+            json=payload,
+            timeout=20
+        )
+        return r.json(), None
+    except Exception as e:
+        return None, f"evaluator_equity_ingest_failed: {str(e)}"
+
+
 def run_one_cycle():
     started_at = iso_now()
     cycle_id = started_at
@@ -571,13 +612,25 @@ def run_one_cycle():
         summary["errors"].append(f"unhandled_cycle_exception: {str(e)}")
         summary["errors"].append(traceback.format_exc())
 
+    summary["completed_at"] = iso_now()
+
     evaluator_result, evaluator_error = ingest_cycle_summary_to_evaluator(summary)
     if evaluator_error:
         summary["errors"].append(evaluator_error)
     else:
         summary["evaluator_ingest"] = evaluator_result
 
-    summary["completed_at"] = iso_now()
+    # fetch live Trade Guardian account status and ingest equity snapshot
+    tg_status, tg_status_error = fetch_trade_guardian_status(ACCOUNT_ID)
+    if tg_status_error:
+        summary["errors"].append(tg_status_error)
+    else:
+        equity_ingest_result, equity_ingest_error = ingest_equity_snapshot_to_evaluator(tg_status)
+        if equity_ingest_error:
+            summary["errors"].append(equity_ingest_error)
+        else:
+            summary["evaluator_equity_ingest"] = equity_ingest_result
+
     return summary
 
 

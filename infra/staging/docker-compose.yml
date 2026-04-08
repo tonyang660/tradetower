@@ -138,6 +138,7 @@ services:
       - TRADE_GUARDIAN_BASE_URL=http://trade-guardian:8080
       - CANDIDATE_FILTER_BASE_URL=http://candidate-filter:8080
       - PAPER_EXECUTION_BASE_URL=http://paper-execution:8080
+      - EVALUATOR_BASE_URL=http://evaluator:8080
       - SYMBOL_UNIVERSE_PATH=/app/config/symbol_universe.json
       - AUTO_LOOP_ENABLED=false
       - LOOP_INTERVAL_SECONDS=300
