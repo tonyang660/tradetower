@@ -578,8 +578,12 @@ def build_trend_following_proposal(symbol: str, snapshot: dict, regime: str, sco
         "symbol": symbol,
         "regime": regime,
         "selected_strategy": "trend_following",
+        "best_strategy_candidate": "trend_following",
+        "best_strategy_score": round(score, 2),
         "decision": decision,
-        "confidence": round(score, 2),
+        "confidence": round(score, 2),  # keep for backward compatibility
+        "setup_confidence": round(score, 2),
+        "decision_confidence": round(score, 2),
         "entry_order_type": "limit",
         "entry_price": round(entry_price, 8),
         "stop_loss": round(stop_loss, 8),
@@ -619,8 +623,12 @@ def build_mean_reversion_proposal(symbol: str, snapshot: dict, score: float, rea
         "symbol": symbol,
         "regime": "range",
         "selected_strategy": "mean_reversion",
+        "best_strategy_candidate": "mean_reversion",
+        "best_strategy_score": round(score, 2),
         "decision": decision,
-        "confidence": round(score, 2),
+        "confidence": round(score, 2),  # keep for backward compatibility
+        "setup_confidence": round(score, 2),
+        "decision_confidence": round(score, 2),
         "entry_order_type": "limit",
         "entry_price": round(entry_price, 8),
         "stop_loss": round(stop_loss, 8),
@@ -628,6 +636,43 @@ def build_mean_reversion_proposal(symbol: str, snapshot: dict, score: float, rea
         "tp2_price": round(tp2, 8),
         "tp3_price": round(tp3, 8),
         "reason_tags": reasons
+    }
+
+def build_no_trade_payload(
+    symbol: str,
+    macro_bias: str,
+    macro_conf: float,
+    regime: str,
+    regime_conf: float,
+    trend_score: float,
+    mean_score: float,
+    reason_tags: list[str],
+    hard_block: bool = False,
+):
+    best_strategy_candidate = "trend_following" if trend_score >= mean_score else "mean_reversion"
+    best_strategy_score = round(max(trend_score, mean_score), 2)
+
+    setup_confidence = 0.0 if hard_block else best_strategy_score
+
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "macro_bias": macro_bias,
+        "macro_confidence": macro_conf,
+        "regime": regime,
+        "regime_confidence": regime_conf,
+        "strategy_scores": {
+            "trend_following": round(trend_score, 2),
+            "mean_reversion": round(mean_score, 2)
+        },
+        "selected_strategy": "none",
+        "best_strategy_candidate": best_strategy_candidate,
+        "best_strategy_score": best_strategy_score,
+        "decision": "no_trade",
+        "confidence": 0.0,  # keep old field for compatibility
+        "setup_confidence": round(setup_confidence, 2),
+        "decision_confidence": 0.0,
+        "reason_tags": reason_tags
     }
 
 def analyze_symbol(symbol: str):
@@ -642,26 +687,22 @@ def analyze_symbol(symbol: str):
     macro_bias, macro_conf, macro_reasons = derive_macro_bias(snapshot_payload)
     regime, regime_conf, regime_reasons = detect_regime(snapshot_payload, macro_bias)
 
-    if regime in ("transition", "chop"):
-        return {
-            "ok": True,
-            "symbol": symbol,
-            "macro_bias": macro_bias,
-            "macro_confidence": macro_conf,
-            "regime": regime,
-            "regime_confidence": regime_conf,
-            "strategy_scores": {
-                "trend_following": 0.0,
-                "mean_reversion": 0.0
-            },
-            "selected_strategy": "none",
-            "decision": "no_trade",
-            "confidence": 0.0,
-            "reason_tags": macro_reasons + regime_reasons + ["HARD_BLOCK_REGIME"]
-        }
-
+    # Compute scores even if we may end up no-trade, so analytics are richer
     trend_score, trend_reasons = score_trend_following(snapshot_payload, regime, macro_bias)
     mean_score, mean_reasons, mean_side = score_mean_reversion(snapshot_payload, regime)
+
+    if regime in ("transition", "chop"):
+        return build_no_trade_payload(
+            symbol=symbol,
+            macro_bias=macro_bias,
+            macro_conf=macro_conf,
+            regime=regime,
+            regime_conf=regime_conf,
+            trend_score=trend_score,
+            mean_score=mean_score,
+            reason_tags=macro_reasons + regime_reasons + ["HARD_BLOCK_REGIME"],
+            hard_block=True,
+        )
 
     if trend_score >= mean_score and trend_score >= STRICT_SCORE_THRESHOLD:
         proposal = build_trend_following_proposal(
@@ -680,26 +721,17 @@ def analyze_symbol(symbol: str):
             mean_side
         )
     else:
-        proposal = {
-            "ok": True,
-            "symbol": symbol,
-            "macro_bias": macro_bias,
-            "macro_confidence": macro_conf,
-            "regime": regime,
-            "regime_confidence": regime_conf,
-            "strategy_scores": {
-                "trend_following": round(trend_score, 2),
-                "mean_reversion": round(mean_score, 2)
-            },
-            "selected_strategy": "none",
-            "decision": "no_trade",
-            "confidence": 0.0,
-            "reason_tags": (
-                macro_reasons + regime_reasons +
-                ["STRICT_THRESHOLD_NOT_MET"]
-            )
-        }
-        return proposal
+        return build_no_trade_payload(
+            symbol=symbol,
+            macro_bias=macro_bias,
+            macro_conf=macro_conf,
+            regime=regime,
+            regime_conf=regime_conf,
+            trend_score=trend_score,
+            mean_score=mean_score,
+            reason_tags=macro_reasons + regime_reasons + ["STRICT_THRESHOLD_NOT_MET"],
+            hard_block=False,
+        )
 
     proposal["macro_bias"] = macro_bias
     proposal["macro_confidence"] = macro_conf
@@ -709,7 +741,6 @@ def analyze_symbol(symbol: str):
         "mean_reversion": round(mean_score, 2)
     }
     return proposal
-
 
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, payload: dict, status: int = 200):

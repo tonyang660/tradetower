@@ -19,6 +19,7 @@ CANDIDATE_FILTER_BASE_URL = os.getenv("CANDIDATE_FILTER_BASE_URL", "http://candi
 STRATEGY_ENGINE_BASE_URL = os.getenv("STRATEGY_ENGINE_BASE_URL", "http://strategy-engine:8080")
 RISK_ENGINE_BASE_URL = os.getenv("RISK_ENGINE_BASE_URL", "http://risk-engine:8080")
 PAPER_EXECUTION_BASE_URL = os.getenv("PAPER_EXECUTION_BASE_URL", "http://paper-execution:8080")
+EVALUATOR_BASE_URL = os.getenv("EVALUATOR_BASE_URL", "http://evaluator:8080")
 
 PAPER_EXECUTION_ENTRY_PATH = os.getenv("PAPER_EXECUTION_ENTRY_PATH", "/entry/simulate")
 
@@ -296,6 +297,18 @@ def extract_candidate_symbols(candidate_payload: dict):
     return symbols
 
 
+def ingest_cycle_summary_to_evaluator(summary: dict):
+    try:
+        r = requests.post(
+            f"{EVALUATOR_BASE_URL}/ingest/cycle-summary",
+            json=summary,
+            timeout=20
+        )
+        return r.json(), None
+    except Exception as e:
+        return None, f"evaluator_cycle_ingest_failed: {str(e)}"
+
+
 def run_one_cycle():
     started_at = iso_now()
     cycle_id = started_at
@@ -557,6 +570,12 @@ def run_one_cycle():
         summary["ok"] = False
         summary["errors"].append(f"unhandled_cycle_exception: {str(e)}")
         summary["errors"].append(traceback.format_exc())
+
+    evaluator_result, evaluator_error = ingest_cycle_summary_to_evaluator(summary)
+    if evaluator_error:
+        summary["errors"].append(evaluator_error)
+    else:
+        summary["evaluator_ingest"] = evaluator_result
 
     summary["completed_at"] = iso_now()
     return summary

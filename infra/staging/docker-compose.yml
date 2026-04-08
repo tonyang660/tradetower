@@ -104,11 +104,23 @@ services:
       - "8107:8080"
 
   evaluator:
-    build: ../../services/evaluator
+    build:
+      context: ../..
+      dockerfile: services/evaluator/Dockerfile
     container_name: trading-evaluator
     restart: unless-stopped
     env_file:
       - ../env/staging.env
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=trading_platform
+      - POSTGRES_USER=trading
+      - POSTGRES_PASSWORD=OrignalMath797POSTGRES
+      - TRADE_GUARDIAN_BASE_URL=http://trade-guardian:8080
+    volumes:
+      - ./volumes/postgres:/var/lib/postgresql/data
+      - ../../services/evaluator/db:/docker-entrypoint-initdb.d
     ports:
       - "8108:8080"
 
