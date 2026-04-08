@@ -61,6 +61,79 @@ def fetch_trade_guardian_status(account_id: int):
 
     return payload, None
 
+def fetch_trade_guardian_open_positions(account_id: int):
+    try:
+        r = requests.get(
+            f"{TRADE_GUARDIAN_BASE_URL}/positions/open",
+            params={"account_id": account_id},
+            timeout=10
+        )
+        payload = r.json()
+    except Exception as e:
+        return None, f"trade_guardian_open_positions_failed: {str(e)}"
+
+    if not payload.get("ok"):
+        return None, payload.get("error", "trade_guardian_open_positions_failed")
+
+    return payload.get("positions", []), None
+
+def get_recent_closed_positions(account_id: int, limit: int):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    trade_id,
+                    symbol,
+                    side,
+                    entry_price,
+                    exit_price,
+                    size,
+                    leverage,
+                    notional,
+                    realized_pnl,
+                    fees_paid,
+                    opened_at,
+                    closed_at
+                FROM trades
+                WHERE account_id = %s
+                  AND closed_at IS NOT NULL
+                ORDER BY closed_at DESC
+                LIMIT %s
+                """,
+                (account_id, limit),
+            )
+            rows = cur.fetchall()
+
+    items = []
+    for row in rows:
+        trade_id, symbol, side, entry_price, exit_price, size, realized_pnl, fees_paid, opened_at, closed_at = row
+
+        notional = float(entry_price) * float(size) if entry_price is not None and size is not None else 0.0
+        pnl_pct = (float(realized_pnl) / notional * 100.0) if notional > 0 else 0.0
+
+        items.append({
+            "trade_id": int(trade_id),
+            "symbol": symbol,
+            "direction": side,
+            "entry_price": float(entry_price) if entry_price is not None else None,
+            "exit_price": float(exit_price) if exit_price is not None else None,
+            "size": float(size) if size is not None else None,
+            "notional": round(notional, 8),
+            "realized_pnl": float(realized_pnl) if realized_pnl is not None else 0.0,
+            "fees_paid": float(fees_paid) if fees_paid is not None else 0.0,
+            "pnl_pct": round(pnl_pct, 4),
+            "win_loss": "WIN" if float(realized_pnl or 0.0) > 0 else ("LOSS" if float(realized_pnl or 0.0) < 0 else "BREAKEVEN"),
+            "opened_at": opened_at.isoformat().replace("+00:00", "Z") if opened_at else None,
+            "closed_at": closed_at.isoformat().replace("+00:00", "Z") if closed_at else None,
+        })
+
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "count": len(items),
+        "items": items,
+    }
 
 def upsert_decision_row(cur, row: dict):
     cur.execute(
@@ -330,11 +403,16 @@ def ingest_equity_snapshot(payload: dict):
 
     return {"ok": True, "account_id": int(payload["account_id"])}
 
-
 def build_overview(account_id: int):
     tg_status, tg_error = fetch_trade_guardian_status(account_id)
     if tg_error:
         return None, tg_error
+
+    open_positions, open_positions_error = fetch_trade_guardian_open_positions(account_id)
+    if open_positions_error:
+        open_positions = []
+
+    recent_positions_payload = get_recent_closed_positions(account_id, 10)
 
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -387,7 +465,7 @@ def build_overview(account_id: int):
             )
             latest_cycle = cur.fetchone()
 
-    open_positions = tg_status.get("open_positions_count", 0)
+    open_positions_count = len(open_positions)
 
     equity_series = [
         {
@@ -415,17 +493,18 @@ def build_overview(account_id: int):
         "overview_generated_at": iso_now(),
         "account_status": tg_status,
         "equity_series": equity_series,
+        "open_positions": open_positions,
+        "recent_positions": recent_positions_payload["items"],
         "micro_metrics": {
             "daily_pnl": float(daily_pnl),
             "daily_completed_trades": int(daily_completed_trades),
             "daily_wins": int(daily_wins),
             "daily_losses": int(daily_losses),
             "daily_win_rate": round(daily_win_rate, 2),
-            "open_positions_count": int(open_positions),
+            "open_positions_count": open_positions_count,
         },
         "latest_cycle": latest_cycle_payload,
     }, None
-
 
 def get_equity_history(account_id: int, limit: int):
     with get_conn() as conn:
@@ -575,6 +654,30 @@ class Handler(BaseHTTPRequestHandler):
                 }, status=500)
                 return
             self._send_json(payload)
+            return
+        
+        if parsed.path == "/positions/open":
+            account_id = int(query.get("account_id", ["1"])[0])
+            positions, error = fetch_trade_guardian_open_positions(account_id)
+            if error:
+                self._send_json({
+                    "ok": False,
+                    "error": error
+                }, status=500)
+                return
+
+            self._send_json({
+                "ok": True,
+                "account_id": account_id,
+                "count": len(positions),
+                "items": positions
+            })
+            return
+        
+        if parsed.path == "/positions/recent":
+            account_id = int(query.get("account_id", ["1"])[0])
+            limit = int(query.get("limit", ["20"])[0])
+            self._send_json(get_recent_closed_positions(account_id, limit))
             return
 
         if parsed.path == "/equity/history":

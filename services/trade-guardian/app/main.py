@@ -717,6 +717,8 @@ def maybe_finalize_trade(position: dict):
             if total_closed_size and float(total_closed_size) > 0:
                 avg_exit_price = float(weighted_exit_numerator) / float(total_closed_size)
 
+            notional = float(position["entry_price"]) * float(position["original_size"])
+
             cur.execute(
                 """
                 INSERT INTO trades (
@@ -726,12 +728,14 @@ def maybe_finalize_trade(position: dict):
                     entry_price,
                     exit_price,
                     size,
+                    leverage,
+                    notional,
                     realized_pnl,
                     fees_paid,
                     opened_at,
                     closed_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 RETURNING trade_id
                 """,
                 (
@@ -741,6 +745,8 @@ def maybe_finalize_trade(position: dict):
                     position["entry_price"],
                     avg_exit_price,
                     position["original_size"],
+                    position["leverage"],
+                    notional,
                     float(pnl_sum or 0),
                     float(fees_sum or 0),
                     position["opened_at"]
