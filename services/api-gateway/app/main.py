@@ -4,6 +4,7 @@ import json
 import os
 import urllib.request
 import urllib.parse
+import requests
 
 SERVICE_NAME = "api-gateway"
 PORT = int(os.getenv("PORT", "8080"))
@@ -87,6 +88,37 @@ def fetch_bitget_candles(symbol: str, timeframe: str, limit: int):
 
     return candles, None
 
+def fetch_bitget_ticker(symbol: str):
+    try:
+        response = requests.get(
+            "https://api.bitget.com/api/v2/mix/market/ticker",
+            params={
+                "symbol": symbol,
+                "productType": "USDT-FUTURES"
+            },
+            timeout=10
+        )
+        payload = response.json()
+    except Exception as e:
+        return None, f"bitget_request_failed: {str(e)}"
+
+    if payload.get("code") != "00000":
+        return None, payload.get("msg", "bitget_error")
+
+    data = payload.get("data", [])
+    if not data:
+        return None, "empty_ticker_response"
+
+    item = data[0]
+
+    return {
+        "symbol": item.get("symbol", symbol),
+        "last_price": float(item["lastPr"]),
+        "mark_price": float(item["markPrice"]) if item.get("markPrice") is not None else None,
+        "bid_price": float(item["bidPr"]) if item.get("bidPr") is not None else None,
+        "ask_price": float(item["askPr"]) if item.get("askPr") is not None else None,
+        "ts": item.get("ts")
+    }, None
 
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, payload: dict, status: int = 200):
@@ -149,6 +181,38 @@ class Handler(BaseHTTPRequestHandler):
                 "timeframe": timeframe,
                 "count": len(candles),
                 "candles": candles
+            })
+            return
+        
+        if self.path.startswith("/providers/bitget/ticker"):
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            symbol = query.get("symbol", [None])[0]
+
+            if not symbol:
+                self._send_json({
+                    "ok": False,
+                    "error": "missing_parameters",
+                    "required": ["symbol"]
+                }, status=400)
+                return
+
+            ticker, error = fetch_bitget_ticker(symbol)
+
+            if error:
+                self._send_json({
+                    "ok": False,
+                    "provider": "bitget",
+                    "error": error,
+                    "symbol": symbol
+                }, status=400)
+                return
+
+            self._send_json({
+                "ok": True,
+                "provider": "bitget",
+                "market": "usdt_perp",
+                "symbol": symbol,
+                **ticker
             })
             return
 
