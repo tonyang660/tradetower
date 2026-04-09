@@ -4,6 +4,7 @@ from datetime import datetime, timezone, timedelta, date
 import json
 import os
 
+import requests
 import psycopg
 
 
@@ -18,6 +19,8 @@ DB_CONFIG = {
     "password": os.getenv("POSTGRES_PASSWORD", "change_me"),
 }
 
+API_GATEWAY_BASE_URL = os.getenv("API_GATEWAY_BASE_URL", "http://api-gateway:8080")
+API_GATEWAY_LATEST_PRICE_PATH = os.getenv("API_GATEWAY_LATEST_PRICE_PATH", "/providers/bitget/ticker")
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -1031,6 +1034,113 @@ def apply_execution_report(payload: dict):
 
     return {"ok": False, "error": "unhandled_execution_case"}
 
+
+# Update ticker prices for active symbols and account equity state
+def fetch_latest_price(symbol: str):
+    try:
+        r = requests.get(
+            f"{API_GATEWAY_BASE_URL}{API_GATEWAY_LATEST_PRICE_PATH}",
+            params={"symbol": symbol},
+            timeout=10
+        )
+        payload = r.json()
+    except Exception as e:
+        return None, f"latest_price_request_failed: {str(e)}"
+
+    if not payload.get("ok", False):
+        return None, payload.get("error", "latest_price_fetch_failed")
+
+    # Prefer mark price if present, otherwise fall back to last traded price.
+    price = payload.get("mark_price")
+    if price is None:
+        price = payload.get("last_price")
+
+    if price is None:
+        return None, "latest_price_missing_in_response"
+
+    return float(price), None
+
+def calculate_unrealized_pnl(position_side: str, entry_price: float, current_price: float, remaining_size: float) -> float:
+    if position_side == "long":
+        return (current_price - entry_price) * remaining_size
+    if position_side == "short":
+        return (entry_price - current_price) * remaining_size
+    raise ValueError("unsupported_position_side")
+
+def update_account_mark_to_market(account_id: int, unrealized_pnl: float):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE account_balances
+                SET unrealized_pnl = %s,
+                    equity = cash_balance + %s,
+                    updated_at = NOW()
+                WHERE account_id = %s
+                """,
+                (unrealized_pnl, unrealized_pnl, account_id)
+            )
+        conn.commit()
+
+def refresh_mark_to_market(account_id: int):
+    positions = fetch_all_open_positions(account_id)
+
+    enriched_positions = []
+    total_unrealized_pnl = 0.0
+    pricing_errors = []
+
+    for pos in positions:
+        symbol = pos["symbol"]
+        current_price, price_error = fetch_latest_price(symbol)
+
+        if price_error:
+            pricing_errors.append({
+                "symbol": symbol,
+                "error": price_error
+            })
+            continue
+
+        remaining_size = float(pos["remaining_size"])
+        entry_price = float(pos["entry_price"])
+        side = pos["side"]
+
+        unrealized_pnl = calculate_unrealized_pnl(
+            side,
+            entry_price,
+            current_price,
+            remaining_size
+        )
+
+        notional = entry_price * remaining_size
+        pnl_pct = (unrealized_pnl / notional * 100.0) if notional > 0 else 0.0
+
+        total_unrealized_pnl += unrealized_pnl
+
+        enriched_positions.append({
+            **pos,
+            "current_price": round(current_price, 8),
+            "unrealized_pnl": round(unrealized_pnl, 8),
+            "unrealized_pnl_pct": round(pnl_pct, 4),
+            "notional": round(notional, 8),
+        })
+
+    update_account_mark_to_market(account_id, total_unrealized_pnl)
+
+    refreshed_status = fetch_guardian_status(account_id)
+    if refreshed_status:
+        refreshed_status = evaluate_and_refresh_guardian_state(refreshed_status)
+
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "positions_checked": len(positions),
+        "positions_priced": len(enriched_positions),
+        "pricing_errors": pricing_errors,
+        "total_unrealized_pnl": round(total_unrealized_pnl, 8),
+        "positions": enriched_positions,
+        "account_status": refreshed_status,
+    }
+
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, payload: dict, status: int = 200):
         body = json.dumps(payload).encode("utf-8")
@@ -1273,6 +1383,26 @@ class Handler(BaseHTTPRequestHandler):
                     "details": str(e)
                 }, status=500)
                 return     
+            
+        if self.path == "/mark-to-market/refresh":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+
+                account_id = int(payload.get("account_id", 1))
+
+                result = refresh_mark_to_market(account_id)
+                self._send_json(result)
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "internal_error",
+                    "details": str(e)
+                }, status=500)
+                return
 
         self._send_json({
             "ok": False,
