@@ -71,6 +71,10 @@ services:
     restart: unless-stopped
     env_file:
       - ../env/staging.env
+    environment:
+      - MTM_AUTO_REFRESH_ENABLED=true
+      - MTM_AUTO_REFRESH_INTERVAL_SECONDS=30
+      - MTM_ACCOUNT_ID=1
     ports:
       - "8105:8080"
 
@@ -143,6 +147,7 @@ services:
       - AUTO_LOOP_ENABLED=false
       - LOOP_INTERVAL_SECONDS=300
       - ACCOUNT_ID=1
+      - MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST=true
     ports:
       - "8109:8080"
 

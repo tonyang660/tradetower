@@ -1,8 +1,10 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timezone, timedelta, date
+from threading import Thread
 import json
 import os
+import time
 
 import requests
 import psycopg
@@ -22,9 +24,12 @@ DB_CONFIG = {
 API_GATEWAY_BASE_URL = os.getenv("API_GATEWAY_BASE_URL", "http://api-gateway:8080")
 API_GATEWAY_LATEST_PRICE_PATH = os.getenv("API_GATEWAY_LATEST_PRICE_PATH", "/providers/bitget/ticker")
 
+MTM_AUTO_REFRESH_ENABLED = os.getenv("MTM_AUTO_REFRESH_ENABLED", "false").lower() == "true"
+MTM_REFRESH_INTERVAL_SECONDS = int(os.getenv("MTM_REFRESH_INTERVAL_SECONDS", "30"))
+MTM_ACCOUNT_ID = int(os.getenv("MTM_ACCOUNT_ID", "1"))
+
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
 
 def get_conn():
     return psycopg.connect(**DB_CONFIG)
@@ -51,6 +56,30 @@ def next_monday_utc() -> datetime:
 
 def sunday_end_utc() -> datetime:
     return next_monday_utc() - timedelta(seconds=1)
+
+
+def mark_to_market_loop():
+    while True:
+        if MTM_AUTO_REFRESH_ENABLED:
+            try:
+                result = refresh_mark_to_market(MTM_ACCOUNT_ID)
+                print(json.dumps({
+                    "event": "MARK_TO_MARKET_REFRESHED",
+                    "account_id": MTM_ACCOUNT_ID,
+                    "positions_checked": result.get("positions_checked", 0),
+                    "positions_priced": result.get("positions_priced", 0),
+                    "total_unrealized_pnl": result.get("total_unrealized_pnl", 0.0),
+                    "timestamp": iso_now(),
+                }))
+            except Exception as e:
+                print(json.dumps({
+                    "event": "MARK_TO_MARKET_REFRESH_FAILED",
+                    "account_id": MTM_ACCOUNT_ID,
+                    "error": str(e),
+                    "timestamp": iso_now(),
+                }))
+
+        time.sleep(MTM_REFRESH_INTERVAL_SECONDS)
 
 
 def get_realized_pnl_for_period(account_id: int, start_ts: datetime, end_ts: datetime | None = None) -> float:
@@ -1412,6 +1441,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    loop_thread = Thread(target=mark_to_market_loop, daemon=True)
+    loop_thread.start()
+
     server = HTTPServer(("0.0.0.0", PORT), Handler)
     print(f"{SERVICE_NAME} listening on {PORT}")
     server.serve_forever()

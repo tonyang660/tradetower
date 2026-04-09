@@ -31,9 +31,23 @@ SYMBOL_UNIVERSE_PATH = os.getenv("SYMBOL_UNIVERSE_PATH", "/app/config/symbol_uni
 TIMEFRAMES = ["5m", "15m", "1h", "4h"]
 REFRESH_LIMIT = 72
 
+MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST = os.getenv("MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST", "true").lower() == "true"
 
 def iso_now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+def run_mark_to_market_refresh(account_id: int):
+    try:
+        r = requests.post(
+            f"{TRADE_GUARDIAN_BASE_URL}/mark-to-market/refresh",
+            json={"account_id": account_id},
+            timeout=15
+        )
+        payload = r.json()
+    except Exception as e:
+        return None, f"trade_guardian_mark_to_market_failed: {str(e)}"
+
+    return payload, None
 
 def fetch_trade_guardian_status(account_id: int):
     try:
@@ -621,10 +635,28 @@ def run_one_cycle():
         summary["evaluator_ingest"] = evaluator_result
 
     # fetch live Trade Guardian account status and ingest equity snapshot
-    tg_status, tg_status_error = fetch_trade_guardian_status(ACCOUNT_ID)
-    if tg_status_error:
-        summary["errors"].append(tg_status_error)
-    else:
+    tg_status = None
+
+    if MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST:
+        mtm_result, mtm_error = run_mark_to_market_refresh(ACCOUNT_ID)
+        if mtm_error:
+            summary["errors"].append(mtm_error)
+        else:
+            tg_status = mtm_result.get("account_status")
+            summary["mark_to_market_refresh"] = {
+                "ok": True,
+                "positions_checked": mtm_result.get("positions_checked", 0),
+                "positions_priced": mtm_result.get("positions_priced", 0),
+                "pricing_errors": mtm_result.get("pricing_errors", []),
+                "total_unrealized_pnl": mtm_result.get("total_unrealized_pnl", 0.0),
+            }
+
+    if tg_status is None:
+        tg_status, tg_status_error = fetch_trade_guardian_status(ACCOUNT_ID)
+        if tg_status_error:
+            summary["errors"].append(tg_status_error)
+
+    if tg_status is not None:
         equity_ingest_result, equity_ingest_error = ingest_equity_snapshot_to_evaluator(tg_status)
         if equity_ingest_error:
             summary["errors"].append(equity_ingest_error)

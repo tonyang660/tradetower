@@ -107,10 +107,22 @@ def get_recent_closed_positions(account_id: int, limit: int):
 
     items = []
     for row in rows:
-        trade_id, symbol, side, entry_price, exit_price, size, realized_pnl, fees_paid, opened_at, closed_at = row
+        (
+            trade_id,
+            symbol,
+            side,
+            entry_price,
+            exit_price,
+            size,
+            leverage,
+            notional,
+            realized_pnl,
+            fees_paid,
+            opened_at,
+            closed_at,
+        ) = row
 
-        notional = float(entry_price) * float(size) if entry_price is not None and size is not None else 0.0
-        pnl_pct = (float(realized_pnl) / notional * 100.0) if notional > 0 else 0.0
+        pnl_pct = (float(realized_pnl) / float(notional) * 100.0) if notional and float(notional) > 0 else 0.0
 
         items.append({
             "trade_id": int(trade_id),
@@ -119,7 +131,8 @@ def get_recent_closed_positions(account_id: int, limit: int):
             "entry_price": float(entry_price) if entry_price is not None else None,
             "exit_price": float(exit_price) if exit_price is not None else None,
             "size": float(size) if size is not None else None,
-            "notional": round(notional, 8),
+            "leverage": float(leverage) if leverage is not None else None,
+            "notional": float(notional) if notional is not None else 0.0,
             "realized_pnl": float(realized_pnl) if realized_pnl is not None else 0.0,
             "fees_paid": float(fees_paid) if fees_paid is not None else 0.0,
             "pnl_pct": round(pnl_pct, 4),
@@ -404,13 +417,19 @@ def ingest_equity_snapshot(payload: dict):
     return {"ok": True, "account_id": int(payload["account_id"])}
 
 def build_overview(account_id: int):
-    tg_status, tg_error = fetch_trade_guardian_status(account_id)
-    if tg_error:
-        return None, tg_error
+    mtm_payload, mtm_error = refresh_trade_guardian_mark_to_market(account_id)
 
-    open_positions, open_positions_error = fetch_trade_guardian_open_positions(account_id)
-    if open_positions_error:
-        open_positions = []
+    if mtm_error:
+        tg_status, tg_error = fetch_trade_guardian_status(account_id)
+        if tg_error:
+            return None, tg_error
+
+        open_positions, open_positions_error = fetch_trade_guardian_open_positions(account_id)
+        if open_positions_error:
+            open_positions = []
+    else:
+        tg_status = mtm_payload.get("account_status", {})
+        open_positions = mtm_payload.get("positions", [])
 
     recent_positions_payload = get_recent_closed_positions(account_id, 10)
 
@@ -431,7 +450,7 @@ def build_overview(account_id: int):
             cur.execute(
                 """
                 SELECT COUNT(*)
-                FROM evaluator_trade_analytics
+                FROM trades
                 WHERE account_id = %s
                   AND closed_at::date = NOW()::date
                 """,
@@ -442,10 +461,10 @@ def build_overview(account_id: int):
             cur.execute(
                 """
                 SELECT
-                    COALESCE(SUM(realized_pnl), 0),
-                    COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END), 0)
-                FROM evaluator_trade_analytics
+                COALESCE(SUM(realized_pnl), 0),
+                COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN realized_pnl < 0 THEN 1 ELSE 0 END), 0)
+                FROM trades
                 WHERE account_id = %s
                   AND closed_at::date = NOW()::date
                 """,
@@ -579,7 +598,6 @@ def get_latest_cycle(account_id: int):
         }
     }
 
-
 def get_performance_summary(account_id: int):
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -594,7 +612,7 @@ def get_performance_summary(account_id: int):
                     COALESCE(MAX(realized_pnl), 0),
                     COALESCE(MIN(realized_pnl), 0),
                     COALESCE(SUM(fees_paid), 0)
-                FROM evaluator_trade_analytics
+                FROM trades
                 WHERE account_id = %s
                 """,
                 (account_id,),
@@ -622,6 +640,117 @@ def get_performance_summary(account_id: int):
         }
     }
 
+def refresh_trade_guardian_mark_to_market(account_id: int):
+    try:
+        r = requests.post(
+            f"{TRADE_GUARDIAN_BASE_URL}/mark-to-market/refresh",
+            json={"account_id": account_id},
+            timeout=15
+        )
+        payload = r.json()
+    except Exception as e:
+        return None, f"trade_guardian_mark_to_market_failed: {str(e)}"
+
+    if not payload.get("ok"):
+        return None, payload.get("error", "trade_guardian_mark_to_market_failed")
+
+    return payload, None
+
+def get_cycle_history(account_id: int, limit: int):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT cycle_id, started_at, completed_at, summary_json
+                FROM evaluator_cycle_history
+                WHERE account_id = %s
+                ORDER BY started_at DESC
+                LIMIT %s
+                """,
+                (account_id, limit),
+            )
+            rows = cur.fetchall()
+
+    items = []
+    for row in rows:
+        items.append({
+            "cycle_id": row[0],
+            "started_at": row[1].isoformat().replace("+00:00", "Z") if row[1] else None,
+            "completed_at": row[2].isoformat().replace("+00:00", "Z") if row[2] else None,
+            "summary": row[3],
+        })
+
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "count": len(items),
+        "items": items,
+    }
+
+def get_performance_pnl_series(account_id: int, limit: int):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT recorded_at, equity, realized_pnl, unrealized_pnl
+                FROM evaluator_equity_history
+                WHERE account_id = %s
+                ORDER BY recorded_at DESC
+                LIMIT %s
+                """,
+                (account_id, limit),
+            )
+            rows = cur.fetchall()
+
+    items = []
+    for row in reversed(rows):
+        items.append({
+            "recorded_at": row[0].isoformat().replace("+00:00", "Z"),
+            "equity": float(row[1]),
+            "realized_pnl": float(row[2]),
+            "unrealized_pnl": float(row[3]),
+        })
+
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "count": len(items),
+        "items": items,
+    }
+
+def get_decision_funnel(account_id: int):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*),
+                    COALESCE(SUM(CASE WHEN candidate_score IS NOT NULL THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN final_decision = 'no_trade' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN risk_approved = TRUE THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN guardian_allowed = TRUE THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN paper_submitted = TRUE THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN filled = TRUE THEN 1 ELSE 0 END), 0)
+                FROM evaluator_decision_history
+                WHERE account_id = %s
+                """,
+                (account_id,),
+            )
+            row = cur.fetchone()
+
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "funnel": {
+            "decision_rows": int(row[0]),
+            "candidate_filter_seen": int(row[1]),
+            "no_trade": int(row[2]),
+            "risk_approved": int(row[3]),
+            "guardian_allowed": int(row[4]),
+            "paper_submitted": int(row[5]),
+            "filled": int(row[6]),
+        }
+    }
 
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, payload: dict, status: int = 200):
@@ -658,6 +787,27 @@ class Handler(BaseHTTPRequestHandler):
         
         if parsed.path == "/positions/open":
             account_id = int(query.get("account_id", ["1"])[0])
+            refresh = query.get("refresh", ["true"])[0].lower() == "true"
+
+            if refresh:
+                mtm_payload, error = refresh_trade_guardian_mark_to_market(account_id)
+                if error:
+                    self._send_json({
+                        "ok": False,
+                        "error": error
+                    }, status=500)
+                    return
+
+                self._send_json({
+                    "ok": True,
+                    "account_id": account_id,
+                    "count": len(mtm_payload.get("positions", [])),
+                    "items": mtm_payload.get("positions", []),
+                    "account_status": mtm_payload.get("account_status"),
+                    "pricing_errors": mtm_payload.get("pricing_errors", []),
+                })
+                return
+
             positions, error = fetch_trade_guardian_open_positions(account_id)
             if error:
                 self._send_json({
@@ -690,10 +840,27 @@ class Handler(BaseHTTPRequestHandler):
             account_id = int(query.get("account_id", ["1"])[0])
             self._send_json(get_latest_cycle(account_id))
             return
+        
+        if parsed.path == "/cycles/history":
+            account_id = int(query.get("account_id", ["1"])[0])
+            limit = int(query.get("limit", ["50"])[0])
+            self._send_json(get_cycle_history(account_id, limit))
+            return
 
         if parsed.path == "/performance/summary":
             account_id = int(query.get("account_id", ["1"])[0])
             self._send_json(get_performance_summary(account_id))
+            return
+        
+        if parsed.path == "/performance/pnl-series":
+            account_id = int(query.get("account_id", ["1"])[0])
+            limit = int(query.get("limit", ["200"])[0])
+            self._send_json(get_performance_pnl_series(account_id, limit))
+            return
+        
+        if parsed.path == "/analytics/decision-funnel":
+            account_id = int(query.get("account_id", ["1"])[0])
+            self._send_json(get_decision_funnel(account_id))
             return
 
         self._send_json({
