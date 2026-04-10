@@ -197,6 +197,15 @@ services:
     ports:
       - "8112:8080"
 
+  dashboard-web:
+    build:
+      context: ../..
+      dockerfile: apps/dashboard-web/Dockerfile
+    container_name: trading-dashboard-web
+    restart: unless-stopped
+    ports:
+      - "8113:80"
+
   api-gateway:
     build: ../../services/api-gateway
     container_name: trading-api-gateway
