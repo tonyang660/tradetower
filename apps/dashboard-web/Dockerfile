@@ -2,6 +2,9 @@ FROM node:24-alpine AS build
 
 WORKDIR /app
 
+ARG VITE_DASHBOARD_API_BASE_URL
+ENV VITE_DASHBOARD_API_BASE_URL=$VITE_DASHBOARD_API_BASE_URL
+
 COPY apps/dashboard-web/package*.json ./
 RUN npm install
 
