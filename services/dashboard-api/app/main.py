@@ -107,6 +107,9 @@ def get_market_session_banner():
         {"name": "New York", "open_hour_utc": 13, "close_hour_utc": 21},
     ]
 
+    # Python weekday(): Monday=0 ... Sunday=6
+    is_weekend = now_utc.weekday() >= 5
+
     session_rows = []
     active_sessions = []
     next_session = None
@@ -127,10 +130,18 @@ def get_market_session_banner():
             open_dt -= timedelta(days=1)
             close_dt -= timedelta(days=1)
 
-        is_active = open_dt <= now_utc < close_dt
+        # Weekend override: all sessions forced closed
+        is_active = False if is_weekend else (open_dt <= now_utc < close_dt)
 
-        future_open = open_dt
+        # Find next valid open, skipping weekends
+        future_open = now_utc.replace(
+            hour=session["open_hour_utc"], minute=0, second=0, microsecond=0
+        )
+
         if future_open <= now_utc:
+            future_open += timedelta(days=1)
+
+        while future_open.weekday() >= 5:
             future_open += timedelta(days=1)
 
         delta = future_open - now_utc
@@ -161,6 +172,7 @@ def get_market_session_banner():
         "overlap_count": len(active_sessions),
         "next_session": next_session,
         "session_rows": session_rows,
+        "is_weekend": is_weekend,
     }
 
 

@@ -6,6 +6,7 @@ export type BootstrapOverview = {
     current_utc_time: string;
     active_sessions?: string[];
     overlap_count?: number;
+    is_weekend?: boolean;
     session_rows?: Array<{
       name: string;
       open_hour_utc: number;

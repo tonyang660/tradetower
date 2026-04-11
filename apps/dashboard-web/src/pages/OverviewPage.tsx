@@ -56,9 +56,11 @@ export default function OverviewPage() {
   const [error, setError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [liveNow, setLiveNow] = useState<Date>(new Date());
   const [actionBusy, setActionBusy] = useState<"suspend" | "resume" | null>(null);
   const [schedulerBusy, setSchedulerBusy] = useState<"enable" | "disable" | null>(null);
+  const [liveNow, setLiveNow] = useState<Date>(new Date());
+  const [serverClockAnchor, setServerClockAnchor] = useState<Date | null>(null);
+  const [clientClockAnchor, setClientClockAnchor] = useState<number | null>(null);
 
   async function load(showLoading = false, showRefreshing = false) {
     try {
@@ -69,6 +71,11 @@ export default function OverviewPage() {
       setData(payload);
       setError(null);
       setLastUpdated(new Date());
+
+      const serverNow = new Date(payload.market_banner.current_utc_time);
+      setServerClockAnchor(serverNow);
+      setClientClockAnchor(Date.now());
+      setLiveNow(serverNow);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -79,15 +86,19 @@ export default function OverviewPage() {
 
   useEffect(() => {
     load(true, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     const id = window.setInterval(() => {
-      setLiveNow(new Date());
+      if (!serverClockAnchor || clientClockAnchor === null) return;
+
+      const elapsedMs = Date.now() - clientClockAnchor;
+      setLiveNow(new Date(serverClockAnchor.getTime() + elapsedMs));
     }, 1000);
 
     return () => window.clearInterval(id);
-  }, []);
+  }, [serverClockAnchor, clientClockAnchor]);
 
   useEffect(() => {
     if (!autoRefresh) return;
@@ -194,8 +205,9 @@ export default function OverviewPage() {
     <div className="space-y-7">
       <div className="grid gap-5 xl:grid-cols-[1.35fr_0.85fr_1fr]">
         <MarketSessionsCard
-          now={data.market_banner.current_utc_time}
+          now={liveNow.toISOString()}
           activeSessions={data.market_banner.active_sessions ?? []}
+          isWeekend={data.market_banner.is_weekend ?? false}
           nextSessionName={data.market_banner.next_session?.name ?? null}
           nextSessionCountdown={countdownSeconds !== null ? formatCountdown(countdownSeconds) : "-"}
           sessionRows={data.market_banner.session_rows ?? []}

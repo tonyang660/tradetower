@@ -17,7 +17,6 @@ function buildSegments(openHour: number, closeHour: number) {
     ];
   }
 
-  // Crosses midnight, split into two visible segments
   return [
     {
       left: `${(openHour / 24) * 100}%`,
@@ -33,12 +32,14 @@ function buildSegments(openHour: number, closeHour: number) {
 export default function MarketSessionsCard({
   now,
   activeSessions,
+  isWeekend,
   nextSessionName,
   nextSessionCountdown,
   sessionRows,
 }: {
   now: string;
   activeSessions: string[];
+  isWeekend: boolean;
   nextSessionName: string | null;
   nextSessionCountdown: string;
   sessionRows: Array<{
@@ -49,7 +50,10 @@ export default function MarketSessionsCard({
   }>;
 }) {
   const nowDate = new Date(now);
-  const currentHour = nowDate.getUTCHours() + nowDate.getUTCMinutes() / 60 + nowDate.getUTCSeconds() / 3600;
+  const currentHour =
+    nowDate.getUTCHours() +
+    nowDate.getUTCMinutes() / 60 +
+    nowDate.getUTCSeconds() / 3600;
   const currentLeft = `${(currentHour / 24) * 100}%`;
 
   return (
@@ -70,27 +74,34 @@ export default function MarketSessionsCard({
           </div>
 
           <div className="mt-3 text-sm text-white/50">
-            Active: {activeSessions.length > 0 ? activeSessions.join(" + ") : "No major overlap"}
+            {isWeekend
+              ? "Weekend schedule: all major sessions closed"
+              : activeSessions.length > 0
+              ? `Active: ${activeSessions.join(" + ")}`
+              : "No major overlap"}
           </div>
         </div>
 
-        <div className="w-full rounded-3xl border border-white/10 bg-white/6 px-5 py-4 text-sm xl:w-[320px]">
+        <div className="w-full rounded-2xl border border-white/10 bg-white/6 px-4 py-3 text-xs xl:w-[180px]">
           <div className="text-white/50">Next session</div>
-          <div className="mt-1 text-xl font-medium text-white">
-            {nextSessionName ? `${nextSessionName} opens in ${nextSessionCountdown}` : "-"}
+          <div className="mt-1 font-medium text-white">
+            {nextSessionName ? (
+              <>
+                <div className="text-base opacity-90">{nextSessionName} opens in</div>
+                <div className="text-xl tabular-nums">{nextSessionCountdown}</div>
+              </>
+            ) : (
+              "-"
+            )}
           </div>
         </div>
       </div>
 
-      {sessionRows.length === 0 ? (
-      <div className="mt-8 rounded-2xl border border-white/8 bg-white/5 p-4 text-sm text-white/45">
-        Session timeline unavailable.
-      </div>
-      ) : (
-        <div className="mt-8 space-y-4">
-          ...
+      {isWeekend ? (
+        <div className="mt-5 rounded-2xl border border-amber-300/15 bg-amber-500/8 px-4 py-3 text-sm text-amber-100/85">
+          Market Sessions are closed for the weekend.
         </div>
-      )}
+      ) : null}
 
       <div className="mt-8 space-y-4">
         {sessionRows.map((row) => {
