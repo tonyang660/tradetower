@@ -1,4 +1,13 @@
-import { Activity, BarChart3, Gauge, LayoutDashboard, Shield, SlidersHorizontal } from "lucide-react";
+import {
+  Activity,
+  BarChart3,
+  Gauge,
+  LayoutDashboard,
+  Shield,
+  SlidersHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
+} from "lucide-react";
 import { NavLink } from "react-router-dom";
 import clsx from "clsx";
 
@@ -11,14 +20,39 @@ const items = [
   { to: "/system-health", label: "System Health", icon: Shield },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({
+  collapsed,
+  onToggle,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
   return (
-    <aside className="w-[280px] shrink-0 border-r border-white/10 bg-white/5 backdrop-blur-xl">
-      <div className="flex h-full flex-col px-5 py-6">
-        <div className="mb-8">
-          <div className="text-xs uppercase tracking-[0.28em] text-white/40">Trading Platform</div>
-          <div className="mt-2 text-2xl font-semibold tracking-tight text-white">Control Center</div>
-          <div className="mt-2 text-sm text-white/50">Glassy dashboard with live strategy telemetry.</div>
+    <aside
+      className={clsx(
+        "shrink-0 border-r border-white/10 bg-white/5 backdrop-blur-xl transition-all duration-300 ease-out",
+        collapsed ? "w-[92px]" : "w-[280px]"
+      )}
+    >
+      <div className="flex h-full flex-col px-4 py-5">
+        <div className={clsx("mb-6 flex items-start", collapsed ? "justify-center" : "justify-between")}>
+          {!collapsed ? (
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.28em] text-white/40">Trading Platform</div>
+              <div className="mt-2 text-2xl font-semibold tracking-tight text-white">Control Center</div>
+              <div className="mt-2 text-sm text-white/50">
+                Glassy dashboard with live strategy telemetry.
+              </div>
+            </div>
+          ) : null}
+
+          <button
+            onClick={onToggle}
+            className="rounded-2xl border border-white/10 bg-white/8 p-2 text-white/75 transition hover:bg-white/12 hover:text-white"
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+          </button>
         </div>
 
         <nav className="space-y-2">
@@ -30,24 +64,35 @@ export default function Sidebar() {
                 to={item.to}
                 className={({ isActive }) =>
                   clsx(
-                    "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition-all duration-200",
+                    "flex items-center rounded-2xl px-4 py-3 text-sm font-medium transition-all duration-200",
+                    collapsed ? "justify-center" : "gap-3",
                     isActive
                       ? "border border-white/15 bg-white/12 text-white shadow-glass"
                       : "text-white/60 hover:bg-white/8 hover:text-white"
                   )
                 }
+                title={collapsed ? item.label : undefined}
               >
                 <Icon size={18} />
-                <span>{item.label}</span>
+                {!collapsed ? <span>{item.label}</span> : null}
               </NavLink>
             );
           })}
         </nav>
 
-        <div className="mt-auto rounded-3xl border border-white/10 bg-white/5 p-4 text-sm text-white/55">
-          <div className="font-medium text-white/80">Paper Account</div>
-          <div className="mt-1">Start with a clean shell, then expand each page carefully.</div>
-        </div>
+        {!collapsed ? (
+          <div className="mt-auto rounded-3xl border border-white/10 bg-white/5 p-4 text-sm text-white/55">
+            <div className="font-medium text-white/80">Paper Account</div>
+            <div className="mt-1">Build each page carefully, then grow it into the full operator dashboard.</div>
+          </div>
+        ) : (
+          <div className="mt-auto flex justify-center">
+            <div
+              className="h-10 w-10 rounded-2xl border border-white/10 bg-white/6"
+              title="Paper account"
+            />
+          </div>
+        )}
       </div>
     </aside>
   );

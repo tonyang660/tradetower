@@ -32,6 +32,48 @@ def get_json(url: str, params: dict | None = None, timeout: int = 15):
         return payload, r.status_code, None
     except Exception as e:
         return None, None, str(e)
+    
+
+def post_json(url: str, payload: dict, timeout: int = 15):
+    try:
+        r = requests.post(url, json=payload, timeout=timeout)
+        data = r.json()
+        return data, r.status_code, None
+    except Exception as e:
+        return None, None, str(e)
+    
+
+def set_manual_halt(account_id: int, enabled: bool):
+    reason_code = "MANUAL_HALT" if enabled else "MANUAL_HALT_CLEARED"
+
+    payload, status_code, error = post_json(
+        f"{TRADE_GUARDIAN_BASE_URL}/guard/manual-halt",
+        {
+            "account_id": account_id,
+            "enabled": enabled,
+            "reason_code": reason_code,
+        },
+        timeout=15,
+    )
+
+    if error:
+        return {
+            "ok": False,
+            "error": error,
+        }, 500
+
+    if status_code != 200:
+        return {
+            "ok": False,
+            "error": payload,
+        }, status_code or 500
+
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "manual_halt": enabled,
+        "trade_guardian_response": payload,
+    }, 200
 
 
 def service_health_check(name: str, base_url: str):
@@ -247,6 +289,38 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(content_length)
+            payload = json.loads(raw.decode("utf-8")) if raw else {}
+        except Exception as e:
+            self._send_json({
+                "ok": False,
+                "error": "invalid_json",
+                "details": str(e),
+            }, status=400)
+            return
+
+        if parsed.path == "/controls/trading/suspend":
+            account_id = int(payload.get("account_id", 1))
+            result, status = set_manual_halt(account_id, True)
+            self._send_json(result, status=status)
+            return
+
+        if parsed.path == "/controls/trading/resume":
+            account_id = int(payload.get("account_id", 1))
+            result, status = set_manual_halt(account_id, False)
+            self._send_json(result, status=status)
+            return
+
+        self._send_json({
+            "ok": False,
+            "error": "not_found",
+            "path": self.path,
+        }, status=404)
 
     def do_GET(self):
         parsed = urlparse(self.path)
