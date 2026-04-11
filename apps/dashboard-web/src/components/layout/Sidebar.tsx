@@ -31,17 +31,17 @@ export default function Sidebar({
     <aside
       className={clsx(
         "shrink-0 border-r border-white/10 bg-white/5 backdrop-blur-xl transition-all duration-300 ease-out",
-        collapsed ? "w-[92px]" : "w-[280px]"
+        collapsed ? "w-[88px]" : "w-[260px]"
       )}
     >
       <div className="flex h-full flex-col px-4 py-5">
         <div className={clsx("mb-6 flex items-start", collapsed ? "justify-center" : "justify-between")}>
           {!collapsed ? (
             <div>
-              <div className="text-[11px] uppercase tracking-[0.28em] text-white/40">Trading Platform</div>
+              <div className="text-[11px] uppercase tracking-[0.28em] text-white/40">TradeTower</div>
               <div className="mt-2 text-2xl font-semibold tracking-tight text-white">Control Center</div>
               <div className="mt-2 text-sm text-white/50">
-                Glassy dashboard with live strategy telemetry.
+                Live strategy telemetry.
               </div>
             </div>
           ) : null}
@@ -64,7 +64,7 @@ export default function Sidebar({
                 to={item.to}
                 className={({ isActive }) =>
                   clsx(
-                    "flex items-center rounded-2xl px-4 py-3 text-sm font-medium transition-all duration-200",
+                    "flex items-center rounded-2xl px-4 py-2.5 text-sm font-medium transition-all duration-200",
                     collapsed ? "justify-center" : "gap-3",
                     isActive
                       ? "border border-white/15 bg-white/12 text-white shadow-glass"

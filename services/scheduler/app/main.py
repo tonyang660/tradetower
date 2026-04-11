@@ -23,7 +23,9 @@ EVALUATOR_BASE_URL = os.getenv("EVALUATOR_BASE_URL", "http://evaluator:8080")
 
 PAPER_EXECUTION_ENTRY_PATH = os.getenv("PAPER_EXECUTION_ENTRY_PATH", "/entry/simulate")
 
-AUTO_LOOP_ENABLED = os.getenv("AUTO_LOOP_ENABLED", "false").lower() == "true"
+AUTO_LOOP_DEFAULT = os.getenv("AUTO_LOOP_ENABLED", "false").lower() == "true"
+AUTO_LOOP_ENABLED_STATE = AUTO_LOOP_DEFAULT
+
 LOOP_INTERVAL_SECONDS = int(os.getenv("LOOP_INTERVAL_SECONDS", "300"))
 ACCOUNT_ID = int(os.getenv("ACCOUNT_ID", "1"))
 SYMBOL_UNIVERSE_PATH = os.getenv("SYMBOL_UNIVERSE_PATH", "/app/config/symbol_universe.json")
@@ -668,7 +670,9 @@ def run_one_cycle():
 
 def scheduler_loop():
     while True:
-        if AUTO_LOOP_ENABLED:
+        global AUTO_LOOP_ENABLED_STATE
+
+        if AUTO_LOOP_ENABLED_STATE:
             try:
                 result = run_one_cycle()
                 print(json.dumps({
@@ -700,7 +704,8 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": True,
                 "service": SERVICE_NAME,
                 "timestamp": iso_now(),
-                "auto_loop_enabled": AUTO_LOOP_ENABLED,
+                "auto_loop_enabled": AUTO_LOOP_ENABLED_STATE,
+                "auto_loop_default": AUTO_LOOP_DEFAULT,
                 "loop_interval_seconds": LOOP_INTERVAL_SECONDS,
                 "paper_execution_entry_path": PAPER_EXECUTION_ENTRY_PATH
             })
@@ -713,6 +718,39 @@ class Handler(BaseHTTPRequestHandler):
         }, status=404)
 
     def do_POST(self):
+        if self.path == "/controls/auto-loop":
+            global AUTO_LOOP_ENABLED_STATE
+
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "invalid_json",
+                    "details": str(e)
+                }, status=400)
+                return
+
+            enabled = payload.get("enabled")
+            if not isinstance(enabled, bool):
+                self._send_json({
+                    "ok": False,
+                    "error": "invalid_enabled_flag",
+                    "required": {"enabled": "boolean"}
+                }, status=400)
+                return
+
+            AUTO_LOOP_ENABLED_STATE = enabled
+
+            self._send_json({
+                "ok": True,
+                "auto_loop_enabled": AUTO_LOOP_ENABLED_STATE,
+                "timestamp": iso_now()
+            })
+            return
+
         if self.path == "/cycle/run-once":
             try:
                 result = run_one_cycle()

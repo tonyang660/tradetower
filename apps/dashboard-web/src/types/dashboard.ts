@@ -4,7 +4,14 @@ export type BootstrapOverview = {
   generated_at: string;
   market_banner: {
     current_utc_time: string;
-    active_session: string | null;
+    active_sessions?: string[];
+    overlap_count?: number;
+    session_rows?: Array<{
+      name: string;
+      open_hour_utc: number;
+      close_hour_utc: number;
+      is_active: boolean;
+    }>;
     next_session: {
       name: string;
       opens_at_utc: string;
@@ -16,6 +23,10 @@ export type BootstrapOverview = {
     reason_codes: string[];
     message: string;
     maintenance_remains_active: boolean;
+  };
+  scheduler_health?: {
+    auto_loop_enabled?: boolean;
+    loop_interval_seconds?: number;
   };
   overview: {
     account_status: {

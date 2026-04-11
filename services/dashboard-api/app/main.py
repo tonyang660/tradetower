@@ -101,24 +101,14 @@ def get_market_session_banner():
     now_utc = datetime.now(timezone.utc)
 
     sessions = [
-        {
-            "name": "Asia",
-            "open_hour_utc": 0,   # approx Tokyo open window marker
-            "close_hour_utc": 9,
-        },
-        {
-            "name": "UK",
-            "open_hour_utc": 8,
-            "close_hour_utc": 16,
-        },
-        {
-            "name": "US",
-            "open_hour_utc": 13,
-            "close_hour_utc": 21,
-        },
+        {"name": "Sydney", "open_hour_utc": 21, "close_hour_utc": 6},
+        {"name": "Tokyo", "open_hour_utc": 0, "close_hour_utc": 9},
+        {"name": "London", "open_hour_utc": 8, "close_hour_utc": 16},
+        {"name": "New York", "open_hour_utc": 13, "close_hour_utc": 21},
     ]
 
-    active_session = None
+    session_rows = []
+    active_sessions = []
     next_session = None
     min_delta = None
 
@@ -133,8 +123,11 @@ def get_market_session_banner():
         if close_dt <= open_dt:
             close_dt += timedelta(days=1)
 
-        if open_dt <= now_utc < close_dt:
-            active_session = session["name"]
+        if now_utc.hour < session["open_hour_utc"] and session["close_hour_utc"] < session["open_hour_utc"]:
+            open_dt -= timedelta(days=1)
+            close_dt -= timedelta(days=1)
+
+        is_active = open_dt <= now_utc < close_dt
 
         future_open = open_dt
         if future_open <= now_utc:
@@ -149,12 +142,25 @@ def get_market_session_banner():
                 "seconds_until_open": int(delta.total_seconds()),
             }
 
+        if is_active:
+            active_sessions.append(session["name"])
+
+        session_rows.append({
+            "name": session["name"],
+            "open_hour_utc": session["open_hour_utc"],
+            "close_hour_utc": session["close_hour_utc"],
+            "is_active": is_active,
+        })
+
     return {
         "ok": True,
         "generated_at": iso_now(),
         "current_utc_time": now_utc.isoformat().replace("+00:00", "Z"),
-        "active_session": active_session,
+        "active_session": active_sessions[0] if active_sessions else None,
+        "active_sessions": active_sessions,
+        "overlap_count": len(active_sessions),
         "next_session": next_session,
+        "session_rows": session_rows,
     }
 
 
@@ -179,6 +185,10 @@ def get_bootstrap_overview(account_id: int):
         params={"account_id": account_id},
         timeout=20,
     )
+    scheduler_health, scheduler_status, scheduler_error = get_json(
+        f"{SCHEDULER_BASE_URL}/health",
+        timeout=10,
+    )
     market_banner = get_market_session_banner()
 
     errors = []
@@ -202,6 +212,11 @@ def get_bootstrap_overview(account_id: int):
             "source": "decision_funnel",
             "error": funnel_error or decision_funnel,
         })
+    if scheduler_error or scheduler_status != 200:
+        errors.append({
+            "source": "scheduler_health",
+            "error": scheduler_error or scheduler_health,
+        })
 
     account_status = overview.get("account_status", {}) if isinstance(overview, dict) else {}
     trading_enabled = account_status.get("trading_enabled", True)
@@ -222,7 +237,7 @@ def get_bootstrap_overview(account_id: int):
     trading_banner = {
         "trading_disabled": len(disable_reasons) > 0,
         "reason_codes": disable_reasons,
-        "message": "Trading Disabled" if disable_reasons else "Trading Enabled",
+        "message": "Trading Suspended" if disable_reasons else "Trading Enabled",
         "maintenance_remains_active": True,
     }
 
@@ -236,6 +251,7 @@ def get_bootstrap_overview(account_id: int):
         "performance_summary": performance if isinstance(performance, dict) else None,
         "latest_cycle": cycle_latest if isinstance(cycle_latest, dict) else None,
         "decision_funnel": decision_funnel if isinstance(decision_funnel, dict) else None,
+        "scheduler_health": scheduler_health if isinstance(scheduler_health, dict) else None,
         "errors": errors,
     }
 
@@ -269,6 +285,31 @@ def get_system_health():
         },
         "services": results,
     }
+
+
+def set_scheduler_auto_loop(enabled: bool):
+    payload, status_code, error = post_json(
+        f"{SCHEDULER_BASE_URL}/controls/auto-loop",
+        {"enabled": enabled},
+        timeout=15,
+    )
+
+    if error:
+        return {
+            "ok": False,
+            "error": error,
+        }, 500
+
+    if status_code != 200:
+        return {
+            "ok": False,
+            "error": payload,
+        }, status_code or 500
+
+    return {
+        "ok": True,
+        "scheduler": payload,
+    }, 200
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -313,6 +354,16 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/controls/trading/resume":
             account_id = int(payload.get("account_id", 1))
             result, status = set_manual_halt(account_id, False)
+            self._send_json(result, status=status)
+            return
+
+        if parsed.path == "/controls/scheduler/enable":
+            result, status = set_scheduler_auto_loop(True)
+            self._send_json(result, status=status)
+            return
+
+        if parsed.path == "/controls/scheduler/disable":
+            result, status = set_scheduler_auto_loop(False)
             self._send_json(result, status=status)
             return
 
