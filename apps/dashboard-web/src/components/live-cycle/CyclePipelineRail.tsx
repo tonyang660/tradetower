@@ -7,27 +7,27 @@ function stageClasses(status: PipelineStage["status"]) {
     return {
       badge: "bg-emerald-500/12 text-emerald-200 border-emerald-400/20",
       dot: "bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,0.7)]",
-      ring: "border-emerald-400/12",
+      ring: "border-emerald-400/10",
     };
   }
   if (status === "blocked") {
     return {
       badge: "bg-amber-500/12 text-amber-200 border-amber-400/20",
       dot: "bg-amber-300 shadow-[0_0_14px_rgba(252,211,77,0.65)]",
-      ring: "border-amber-400/12",
+      ring: "border-amber-400/10",
     };
   }
   if (status === "error") {
     return {
       badge: "bg-rose-500/12 text-rose-200 border-rose-400/20",
       dot: "bg-rose-400 shadow-[0_0_14px_rgba(251,113,133,0.65)]",
-      ring: "border-rose-400/12",
+      ring: "border-rose-400/10",
     };
   }
   return {
     badge: "bg-white/8 text-white/60 border-white/10",
     dot: "bg-white/30",
-    ring: "border-white/8",
+    ring: "border-white/7",
   };
 }
 
@@ -68,11 +68,11 @@ export default function CyclePipelineRail({
             preserveAspectRatio="none"
           >
             <defs>
-              <linearGradient id="pipelineGlow" x1="0%" y1="0%" x2="100%" y2="0%">
+              <linearGradient id="pipelineGlowSoft" x1="0%" y1="0%" x2="100%" y2="0%">
                 <stop offset="0%" stopColor="rgba(99,102,241,0.0)" />
-                <stop offset="20%" stopColor="rgba(99,102,241,0.28)" />
-                <stop offset="50%" stopColor="rgba(168,85,247,0.32)" />
-                <stop offset="80%" stopColor="rgba(45,212,191,0.22)" />
+                <stop offset="20%" stopColor="rgba(99,102,241,0.24)" />
+                <stop offset="50%" stopColor="rgba(168,85,247,0.28)" />
+                <stop offset="80%" stopColor="rgba(45,212,191,0.18)" />
                 <stop offset="100%" stopColor="rgba(45,212,191,0.0)" />
               </linearGradient>
               <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
@@ -87,13 +87,13 @@ export default function CyclePipelineRail({
             <path
               d={path}
               fill="none"
-              stroke="rgba(255,255,255,0.08)"
+              stroke="rgba(255,255,255,0.05)"
               strokeWidth="2"
             />
             <path
               d={path}
               fill="none"
-              stroke="url(#pipelineGlow)"
+              stroke="url(#pipelineGlowSoft)"
               strokeWidth="4"
               filter="url(#softGlow)"
               strokeLinecap="round"
@@ -105,7 +105,7 @@ export default function CyclePipelineRail({
                 cx={p.x}
                 cy={p.y}
                 r="4.5"
-                fill="rgba(255,255,255,0.65)"
+                fill="rgba(255,255,255,0.6)"
                 opacity="0.75"
               />
             ))}
@@ -119,11 +119,11 @@ export default function CyclePipelineRail({
             return (
               <div
                 key={stage.key}
-                className={`relative rounded-[24px] border bg-white/5 p-4 ${styles.ring}`}
+                className={`relative rounded-[24px] border bg-[rgba(255,255,255,0.045)] p-4 transition hover:-translate-y-[1px] ${styles.ring}`}
               >
                 <div className="mb-3 flex items-center gap-2">
                   <span className={`h-2.5 w-2.5 rounded-full ${styles.dot}`} />
-                  <span className="text-[11px] uppercase tracking-[0.22em] text-white/40">
+                  <span className="text-[11px] uppercase tracking-[0.22em] text-white/38">
                     {stage.label}
                   </span>
                 </div>
@@ -131,7 +131,7 @@ export default function CyclePipelineRail({
                 <div className="text-[2rem] font-semibold tracking-tight text-white">
                   {stage.primary_value}
                 </div>
-                <div className="mt-1 text-sm leading-snug text-white/45">
+                <div className="mt-1 text-sm leading-snug text-white/42">
                   {stage.secondary_text}
                 </div>
 

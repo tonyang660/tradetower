@@ -2,6 +2,7 @@ import { Routes, Route } from "react-router-dom";
 import AppShell from "./components/layout/AppShell";
 import OverviewPage from "./pages/OverviewPage";
 import LiveCycleMonitorPage from "./pages/LiveCycleMonitorPage";
+import PositionsOrdersPage from "./pages/PositionsOrdersPage";
 
 function PlaceholderPage({ title }: { title: string }) {
   return (
@@ -18,7 +19,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<OverviewPage />} />
         <Route path="/live-cycle-monitor" element={<LiveCycleMonitorPage />} />
-        <Route path="/positions-orders" element={<PlaceholderPage title="Positions & Orders" />} />
+        <Route path="/positions-orders" element={<PositionsOrdersPage />} />
         <Route path="/performance" element={<PlaceholderPage title="Performance" />} />
         <Route path="/strategy-analytics" element={<PlaceholderPage title="Strategy Analytics" />} />
         <Route path="/system-health" element={<PlaceholderPage title="System Health" />} />

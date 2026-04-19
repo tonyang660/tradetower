@@ -1,5 +1,9 @@
 import type { BootstrapOverview } from "../types/dashboard";
 import type { LiveCycleMonitorBootstrap } from "../types/liveCycle";
+import type {
+  OpenPositionsResponse,
+  RecentClosedPositionsResponse,
+} from "../types/positionsOrders";
 
 const BASE_URL = import.meta.env.VITE_DASHBOARD_API_BASE_URL;
 
@@ -75,5 +79,17 @@ export function disableSchedulerAutoLoop() {
 export function fetchLiveCycleMonitor(accountId = 1, limit = 15) {
   return getJson<LiveCycleMonitorBootstrap>(
     `/bootstrap/live-cycle-monitor?account_id=${accountId}&limit=${limit}`
+  );
+}
+
+export function fetchOpenPositions(accountId = 1, refresh = true) {
+  return getJson<OpenPositionsResponse>(
+    `/positions/open?account_id=${accountId}&refresh=${refresh ? "true" : "false"}`
+  );
+}
+
+export function fetchRecentClosedPositions(accountId = 1, limit = 20) {
+  return getJson<RecentClosedPositionsResponse>(
+    `/positions/recent?account_id=${accountId}&limit=${limit}`
   );
 }

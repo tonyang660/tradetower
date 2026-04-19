@@ -572,6 +572,56 @@ def set_scheduler_auto_loop(enabled: bool):
     }, 200
 
 
+def get_open_positions(account_id: int, refresh: bool):
+    payload, status_code, error = get_json(
+        f"{EVALUATOR_BASE_URL}/positions/open",
+        params={
+            "account_id": account_id,
+            "refresh": "true" if refresh else "false",
+        },
+        timeout=20,
+    )
+
+    if error:
+        return {
+            "ok": False,
+            "error": error,
+        }, 500
+
+    if status_code != 200:
+        return {
+            "ok": False,
+            "error": payload,
+        }, status_code or 500
+
+    return payload, 200
+
+
+def get_recent_positions(account_id: int, limit: int):
+    payload, status_code, error = get_json(
+        f"{EVALUATOR_BASE_URL}/positions/recent",
+        params={
+            "account_id": account_id,
+            "limit": limit,
+        },
+        timeout=20,
+    )
+
+    if error:
+        return {
+            "ok": False,
+            "error": error,
+        }, 500
+
+    if status_code != 200:
+        return {
+            "ok": False,
+            "error": payload,
+        }, status_code or 500
+
+    return payload, 200
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, payload: dict, status: int = 200):
         body = json.dumps(payload).encode("utf-8")
@@ -662,6 +712,20 @@ class Handler(BaseHTTPRequestHandler):
             account_id = int(query.get("account_id", ["1"])[0])
             limit = int(query.get("limit", ["15"])[0])
             self._send_json(get_bootstrap_live_cycle_monitor(account_id, limit))
+            return
+        
+        if parsed.path == "/positions/open":
+            account_id = int(query.get("account_id", ["1"])[0])
+            refresh = query.get("refresh", ["true"])[0].lower() == "true"
+            payload, status = get_open_positions(account_id, refresh)
+            self._send_json(payload, status=status)
+            return
+
+        if parsed.path == "/positions/recent":
+            account_id = int(query.get("account_id", ["1"])[0])
+            limit = int(query.get("limit", ["20"])[0])
+            payload, status = get_recent_positions(account_id, limit)
+            self._send_json(payload, status=status)
             return
 
         self._send_json({

@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import GlassCard from "../ui/GlassCard";
 import SectionTitle from "../ui/SectionTitle";
 
 type StrategyResult = {
@@ -24,60 +23,43 @@ type StrategyResult = {
 };
 
 function scoreTone(score?: number | null) {
-  if (score == null) return "text-white/70";
+  if (score == null) return "text-white/65";
   if (score >= 75) return "text-emerald-300";
   if (score >= 50) return "text-amber-200";
-  return "text-white/70";
+  if (score > 0) return "text-white";
+  return "text-white/50";
 }
 
-function renderBreakdownBlock(scoreBreakdown?: Record<string, any>, strategyScores?: Record<string, number>) {
-  if (
-    scoreBreakdown &&
-    (Object.prototype.hasOwnProperty.call(scoreBreakdown, "trend_following") ||
-      Object.prototype.hasOwnProperty.call(scoreBreakdown, "mean_reversion"))
-  ) {
-    return (
-      <div className="mt-3 space-y-4">
-        {Object.entries(scoreBreakdown).map(([group, bucketObj]) => (
-          <div key={group}>
-            <div className="mb-2 text-xs uppercase tracking-[0.16em] text-white/35">
-              {group.replaceAll("_", " ")}
-            </div>
-            <div className="space-y-2 text-sm text-white/65">
-              {Object.entries((bucketObj as Record<string, number>) ?? {}).map(([k, v]) => (
-                <div key={k} className="flex items-center justify-between">
-                  <span className="capitalize">{k.replaceAll("_", " ")}</span>
-                  <span className={`font-medium ${scoreTone(Number(v))}`}>{String(v)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
+function formatLabel(label: string) {
+  return label.replaceAll("_", " ");
+}
 
-  if (scoreBreakdown && Object.keys(scoreBreakdown).length > 0) {
-    return (
-      <div className="mt-3 space-y-2 text-sm text-white/65">
-        {Object.entries(scoreBreakdown).map(([k, v]) => (
-          <div key={k} className="flex items-center justify-between">
-            <span className="capitalize">{k.replaceAll("_", " ")}</span>
+function renderBreakdownGroup(
+  title: string,
+  values: Record<string, number>,
+  isPrimary: boolean
+) {
+  return (
+    <div>
+      <div
+        className={`mb-2 text-[11px] uppercase tracking-[0.18em] ${
+          isPrimary ? "text-violet-200" : "text-white/30"
+        }`}
+      >
+        {formatLabel(title)}
+      </div>
+
+      <div className="space-y-1.5">
+        {Object.entries(values).map(([k, v]) => (
+          <div
+            key={k}
+            className="flex items-center justify-between border-b border-white/5 pb-1 text-sm last:border-b-0"
+          >
+            <span className="capitalize text-white/55">{formatLabel(k)}</span>
             <span className={`font-medium ${scoreTone(Number(v))}`}>{String(v)}</span>
           </div>
         ))}
       </div>
-    );
-  }
-
-  return (
-    <div className="mt-3 space-y-2 text-sm text-white/65">
-      {Object.entries(strategyScores ?? {}).map(([k, v]) => (
-        <div key={k} className="flex items-center justify-between">
-          <span>{k}</span>
-          <span className={`font-medium ${scoreTone(Number(v))}`}>{String(v)}</span>
-        </div>
-      ))}
     </div>
   );
 }
@@ -87,13 +69,13 @@ export default function StrategyDecisionList({
 }: {
   results: StrategyResult[];
 }) {
-  const [openSymbol, setOpenSymbol] = useState<string | null>(null);
+  const [openSymbol, setOpenSymbol] = useState<string | null>(results[0]?.symbol ?? null);
 
   if (results.length === 0) {
     return (
-      <GlassCard>
+      <div className="rounded-[24px] border border-white/8 bg-white/4 p-4">
         <SectionTitle title="Strategy Decisions" subtitle="No analyzed symbols in this cycle" />
-      </GlassCard>
+      </div>
     );
   }
 
@@ -104,21 +86,35 @@ export default function StrategyDecisionList({
       <div className="space-y-3">
         {results.map((item) => {
           const isOpen = openSymbol === item.symbol;
+          const activeStrategy =
+            item.selected_strategy && item.selected_strategy !== "none"
+              ? item.selected_strategy
+              : (item.score_thresholds?.trend_following_score ?? 0) >=
+                (item.score_thresholds?.mean_reversion_score ?? 0)
+              ? "trend_following"
+              : "mean_reversion";
+
+          const groupedBreakdown =
+            item.score_breakdown &&
+            (Object.prototype.hasOwnProperty.call(item.score_breakdown, "trend_following") ||
+              Object.prototype.hasOwnProperty.call(item.score_breakdown, "mean_reversion"));
 
           return (
             <div
               key={item.symbol}
-              className="rounded-2xl border border-white/8 bg-white/5 p-4"
+              className={`rounded-[24px] border bg-white/5 p-4 transition ${
+                isOpen ? "border-violet-300/12" : "border-white/8"
+              }`}
             >
               <button
                 onClick={() => setOpenSymbol(isOpen ? null : item.symbol)}
                 className="flex w-full items-center justify-between text-left"
               >
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-3">
-                    <div className="text-lg font-semibold text-white">{item.symbol}</div>
+                    <div className="text-[1.05rem] font-semibold text-white">{item.symbol}</div>
                     <div
-                      className={`rounded-full px-2 py-1 text-xs ${
+                      className={`rounded-full px-2.5 py-1 text-xs ${
                         item.decision === "no_trade"
                           ? "bg-white/10 text-white/65"
                           : item.decision === "long"
@@ -140,19 +136,38 @@ export default function StrategyDecisionList({
                   </div>
                 </div>
 
-                <div className="ml-3 text-white/50">
+                <div className="ml-3 text-white/45">
                   {isOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
                 </div>
               </button>
 
               {isOpen ? (
-                <div className="mt-4 grid gap-4 xl:grid-cols-3">
-                  <div className="rounded-2xl border border-white/8 bg-white/4 p-4 xl:col-span-1">
+                <div className="mt-4 grid gap-4 xl:grid-cols-[1.2fr_0.85fr_0.95fr]">
+                  <div className="rounded-[22px] border border-white/8 bg-white/4 p-4">
                     <div className="text-sm text-white/45">Scoring Anatomy</div>
-                    {renderBreakdownBlock(item.score_breakdown, item.strategy_scores)}
+
+                    {groupedBreakdown ? (
+                      <div className="mt-3 space-y-4">
+                        {Object.entries(item.score_breakdown ?? {}).map(([group, bucketObj]) =>
+                          renderBreakdownGroup(
+                            group,
+                            (bucketObj as Record<string, number>) ?? {},
+                            group === activeStrategy
+                          )
+                        )}
+                      </div>
+                    ) : item.score_breakdown && Object.keys(item.score_breakdown).length > 0 ? (
+                      <div className="mt-3">
+                        {renderBreakdownGroup("score_breakdown", item.score_breakdown as Record<string, number>, true)}
+                      </div>
+                    ) : (
+                      <div className="mt-3">
+                        {renderBreakdownGroup("strategy_scores", item.strategy_scores ?? {}, true)}
+                      </div>
+                    )}
                   </div>
 
-                  <div className="rounded-2xl border border-white/8 bg-white/4 p-4 xl:col-span-1">
+                  <div className="rounded-[22px] border border-white/8 bg-white/4 p-4">
                     <div className="text-sm text-white/45">Thresholds & Confidence</div>
 
                     <div className="mt-3 space-y-2 text-sm text-white/65">
@@ -164,22 +179,26 @@ export default function StrategyDecisionList({
                       </div>
 
                       <div className="flex items-center justify-between">
-                        <span>Trend-following score</span>
+                        <span>Trend-following</span>
                         <span className={`font-medium ${scoreTone(item.score_thresholds?.trend_following_score)}`}>
                           {item.score_thresholds?.trend_following_score ?? "-"}
                         </span>
                       </div>
 
                       <div className="flex items-center justify-between">
-                        <span>Mean-reversion score</span>
+                        <span>Mean-reversion</span>
                         <span className={`font-medium ${scoreTone(item.score_thresholds?.mean_reversion_score)}`}>
                           {item.score_thresholds?.mean_reversion_score ?? "-"}
                         </span>
                       </div>
 
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between border-t border-white/8 pt-2">
                         <span>Best strategy score</span>
-                        <span className={`font-medium ${scoreTone(item.score_thresholds?.best_strategy_score ?? item.best_strategy_score)}`}>
+                        <span
+                          className={`font-semibold ${scoreTone(
+                            item.score_thresholds?.best_strategy_score ?? item.best_strategy_score
+                          )}`}
+                        >
                           {item.score_thresholds?.best_strategy_score ?? item.best_strategy_score ?? "-"}
                         </span>
                       </div>
@@ -196,13 +215,13 @@ export default function StrategyDecisionList({
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-white/8 bg-white/4 p-4 xl:col-span-1">
+                  <div className="rounded-[22px] border border-white/8 bg-white/4 p-4">
                     <div className="text-sm text-white/45">Reason Tags</div>
-                    <div className="mt-3 flex flex-wrap gap-2">
+                    <div className="mt-3 flex max-h-[260px] flex-wrap gap-2 overflow-auto pr-1">
                       {(item.reason_tags ?? []).map((tag) => (
                         <div
                           key={tag}
-                          className="rounded-full border border-white/10 bg-white/6 px-3 py-1 text-xs text-white/70"
+                          className="rounded-full border border-white/10 bg-white/6 px-2.5 py-1 text-[11px] text-white/70"
                         >
                           {tag}
                         </div>
