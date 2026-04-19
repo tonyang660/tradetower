@@ -622,6 +622,28 @@ def get_recent_positions(account_id: int, limit: int):
     return payload, 200
 
 
+def get_open_orders(account_id: int):
+    payload, status_code, error = get_json(
+        f"{EVALUATOR_BASE_URL}/orders/open",
+        params={"account_id": account_id},
+        timeout=20,
+    )
+
+    if error:
+        return {
+            "ok": False,
+            "error": error,
+        }, 500
+
+    if status_code != 200:
+        return {
+            "ok": False,
+            "error": payload,
+        }, status_code or 500
+
+    return payload, 200
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, payload: dict, status: int = 200):
         body = json.dumps(payload).encode("utf-8")
@@ -725,6 +747,12 @@ class Handler(BaseHTTPRequestHandler):
             account_id = int(query.get("account_id", ["1"])[0])
             limit = int(query.get("limit", ["20"])[0])
             payload, status = get_recent_positions(account_id, limit)
+            self._send_json(payload, status=status)
+            return
+        
+        if parsed.path == "/orders/open":
+            account_id = int(query.get("account_id", ["1"])[0])
+            payload, status = get_open_orders(account_id)
             self._send_json(payload, status=status)
             return
 

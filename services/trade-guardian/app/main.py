@@ -527,6 +527,79 @@ def fetch_all_open_positions(account_id: int):
 
     return results
 
+def fetch_all_open_orders(account_id: int):
+    query = """
+    SELECT
+        order_id,
+        account_id,
+        symbol,
+        side,
+        order_type,
+        role,
+        requested_price,
+        requested_size,
+        stop_loss,
+        tp1,
+        tp2,
+        tp3,
+        status,
+        linked_position_id,
+        created_at,
+        updated_at
+    FROM orders
+    WHERE account_id = %s
+      AND status IN ('planned', 'submitted')
+    ORDER BY created_at DESC
+    """
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (account_id,))
+            rows = cur.fetchall()
+
+    items = []
+    for row in rows:
+        raw_side = row[3]
+        normalized_side = "long" if raw_side == "buy" else "short"
+
+        normalized_status = row[12]
+        if normalized_status == "planned":
+            normalized_status = "PENDING_ENTRY"
+        elif normalized_status == "submitted":
+            normalized_status = "RESTING"
+        elif normalized_status == "filled":
+            normalized_status = "FILLED"
+        elif normalized_status == "cancelled":
+            normalized_status = "CANCELLED"
+        elif normalized_status == "rejected":
+            normalized_status = "REJECTED"
+
+        items.append({
+            "order_id": str(row[0]),
+            "account_id": int(row[1]),
+            "symbol": row[2],
+            "side": normalized_side,
+            "order_type": row[4].upper(),
+            "role": row[5],
+            "entry_price": float(row[6]) if row[6] is not None else None,
+            "requested_size": float(row[7]) if row[7] is not None else None,
+            "stop_loss": float(row[8]) if row[8] is not None else None,
+            "tp1": float(row[9]) if row[9] is not None else None,
+            "tp2": float(row[10]) if row[10] is not None else None,
+            "tp3": float(row[11]) if row[11] is not None else None,
+            "status": normalized_status,
+            "linked_position_id": int(row[13]) if row[13] is not None else None,
+            "submitted_at": row[14].isoformat().replace("+00:00", "Z") if row[14] else None,
+            "updated_at": row[15].isoformat().replace("+00:00", "Z") if row[15] else None,
+        })
+
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "count": len(items),
+        "items": items,
+    }
+
 def insert_execution_report(account_id: int, order_id, symbol: str, fill_price: float, filled_size: float,
                             fee_paid: float, slippage_bps: float, notes: str | None,
                             execution_type: str, position_side: str):
@@ -1270,6 +1343,23 @@ class Handler(BaseHTTPRequestHandler):
                     "account_id": account_id,
                     "positions": positions
                 })
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "internal_error",
+                    "details": str(e)
+                }, status=500)
+                return
+            
+        if self.path.startswith("/orders/open"):
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                account_id = int(query.get("account_id", ["1"])[0])
+
+                payload = fetch_all_open_orders(account_id)
+                self._send_json(payload)
                 return
 
             except Exception as e:

@@ -11,6 +11,13 @@ export default function PositionAnalyticsStrip({
 }: {
   analytics: PositionsAnalytics;
 }) {
+  const bias =
+    analytics.short_exposure_notional > analytics.long_exposure_notional
+      ? "Short"
+      : analytics.long_exposure_notional > analytics.short_exposure_notional
+      ? "Long"
+      : "Balanced";
+
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
       <MetricCard
@@ -36,12 +43,12 @@ export default function PositionAnalyticsStrip({
       <MetricCard
         label="Long / Short"
         value={`${analytics.long_exposure_pct.toFixed(0)}% / ${analytics.short_exposure_pct.toFixed(0)}%`}
-        hint="Exposure split"
+        hint={`Net bias: ${bias}`}
       />
       <MetricCard
-        label="Biggest Winner / Loser"
+        label="Winner / Loser"
         value={`${analytics.biggest_winner_symbol ?? "-"} / ${analytics.biggest_loser_symbol ?? "-"}`}
-        hint="Current symbol leaders"
+        hint={`${money(analytics.biggest_winner_pnl)} / ${money(analytics.biggest_loser_pnl)}`}
       />
     </div>
   );

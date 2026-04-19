@@ -13,6 +13,11 @@ export type OpenPosition = {
   fees_paid?: number | null;
   opened_at?: string | null;
   status?: string | null;
+
+  stop_loss?: number | null;
+  tp1?: number | null;
+  tp2?: number | null;
+  tp3?: number | null;
 };
 
 export type OpenPositionsResponse = {
@@ -82,4 +87,30 @@ export type PositionsOrdersViewModel = {
   recentClosed: RecentClosedPosition[];
   analytics: PositionsAnalytics;
   exposureSegments: ExposureRibbonSegment[];
+};
+
+export type WorkingOrder = {
+  order_id: string;
+  account_id?: number;
+  symbol: string;
+  side: "long" | "short" | string;
+  order_type: string;
+  role?: string;
+  entry_price?: number | null;
+  requested_size?: number | null;
+  stop_loss?: number | null;
+  tp1?: number | null;
+  tp2?: number | null;
+  tp3?: number | null;
+  status: string;
+  linked_position_id?: number | null;
+  submitted_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type OpenOrdersResponse = {
+  ok: boolean;
+  account_id: number;
+  count: number;
+  items: WorkingOrder[];
 };

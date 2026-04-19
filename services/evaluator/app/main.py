@@ -77,6 +77,22 @@ def fetch_trade_guardian_open_positions(account_id: int):
 
     return payload.get("positions", []), None
 
+def fetch_trade_guardian_open_orders(account_id: int):
+    try:
+        r = requests.get(
+            f"{TRADE_GUARDIAN_BASE_URL}/orders/open",
+            params={"account_id": account_id},
+            timeout=10
+        )
+        payload = r.json()
+    except Exception as e:
+        return None, f"trade_guardian_open_orders_failed: {str(e)}"
+
+    if not payload.get("ok"):
+        return None, payload.get("error", "trade_guardian_open_orders_failed")
+
+    return payload.get("items", []), None
+
 def get_recent_closed_positions(account_id: int, limit: int):
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -147,6 +163,21 @@ def get_recent_closed_positions(account_id: int, limit: int):
         "count": len(items),
         "items": items,
     }
+
+def get_open_orders(account_id: int):
+    orders, error = fetch_trade_guardian_open_orders(account_id)
+    if error:
+        return {
+            "ok": False,
+            "error": error
+        }, 500
+
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "count": len(orders),
+        "items": orders,
+    }, 200
 
 def upsert_decision_row(cur, row: dict):
     cur.execute(
@@ -861,6 +892,12 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/analytics/decision-funnel":
             account_id = int(query.get("account_id", ["1"])[0])
             self._send_json(get_decision_funnel(account_id))
+            return
+        
+        if parsed.path == "/orders/open":
+            account_id = int(query.get("account_id", ["1"])[0])
+            payload, status = get_open_orders(account_id)
+            self._send_json(payload, status=status)
             return
 
         self._send_json({

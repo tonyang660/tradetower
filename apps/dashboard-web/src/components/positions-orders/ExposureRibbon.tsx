@@ -14,6 +14,7 @@ export default function ExposureRibbon({
   segments: ExposureRibbonSegment[];
 }) {
   const total = segments.reduce((acc, s) => acc + s.value, 0);
+  const topSegments = [...segments].slice(0, 3);
 
   return (
     <GlassCard>
@@ -42,7 +43,7 @@ export default function ExposureRibbon({
       ) : (
         <>
           <div className="mt-4 overflow-hidden rounded-[24px] border border-white/8 bg-white/5 p-3">
-            <div className="flex h-8 overflow-hidden rounded-full bg-white/6">
+            <div className="flex h-9 overflow-hidden rounded-full bg-white/6">
               {segments.map((segment) => {
                 const widthPct = total > 0 ? (segment.value / total) * 100 : 0;
                 const className =
@@ -53,7 +54,7 @@ export default function ExposureRibbon({
                 return (
                   <div
                     key={`${segment.side}-${segment.symbol}`}
-                    className={`group relative h-full ${className}`}
+                    className={`relative h-full ${className}`}
                     style={{ width: `${Math.max(widthPct, 4)}%` }}
                     title={`${segment.symbol} · ${segment.side} · ${money(segment.value)}`}
                   />
@@ -62,7 +63,18 @@ export default function ExposureRibbon({
             </div>
           </div>
 
-          <div className="mt-4 grid gap-3 text-sm text-white/60 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="mt-3 flex flex-wrap gap-2">
+            {topSegments.map((segment) => (
+              <div
+                key={`${segment.side}-${segment.symbol}-legend`}
+                className="rounded-full border border-white/8 bg-white/5 px-3 py-1.5 text-xs text-white/65"
+              >
+                {segment.symbol} · {segment.side} · {money(segment.value)}
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 grid gap-3 text-sm text-white/60 sm:grid-cols-2 xl:grid-cols-5">
             <div className="rounded-2xl border border-white/8 bg-white/5 p-3">
               Long exposure: <span className="text-white">{money(analytics.long_exposure_notional)}</span>
             </div>
@@ -74,6 +86,10 @@ export default function ExposureRibbon({
             </div>
             <div className="rounded-2xl border border-white/8 bg-white/5 p-3">
               Open PnL: <span className="text-white">{money(analytics.total_open_pnl)}</span>
+            </div>
+            <div className="rounded-2xl border border-white/8 bg-white/5 p-3">
+              Largest concentration:{" "}
+              <span className="text-white">{topSegments[0]?.symbol ?? "-"}</span>
             </div>
           </div>
         </>

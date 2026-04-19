@@ -3,6 +3,7 @@ import type { LiveCycleMonitorBootstrap } from "../types/liveCycle";
 import type {
   OpenPositionsResponse,
   RecentClosedPositionsResponse,
+  OpenOrdersResponse
 } from "../types/positionsOrders";
 
 const BASE_URL = import.meta.env.VITE_DASHBOARD_API_BASE_URL;
@@ -91,5 +92,11 @@ export function fetchOpenPositions(accountId = 1, refresh = true) {
 export function fetchRecentClosedPositions(accountId = 1, limit = 20) {
   return getJson<RecentClosedPositionsResponse>(
     `/positions/recent?account_id=${accountId}&limit=${limit}`
+  );
+}
+
+export function fetchOpenOrders(accountId = 1) {
+  return getJson<OpenOrdersResponse>(
+    `/orders/open?account_id=${accountId}`
   );
 }
