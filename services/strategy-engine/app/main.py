@@ -272,7 +272,15 @@ def detect_regime(snapshot: dict, macro_bias: str):
 
 def score_trend_following(snapshot: dict, regime: str, macro_bias: str):
     if regime not in ("trend_up", "trend_down"):
-        return 0.0, ["REGIME_NOT_TREND"]
+        return 0.0, ["REGIME_NOT_TREND"], {
+            "macro_alignment": 0.0,
+            "htf_structure_quality": 0.0,
+            "ema_strength": 0.0,
+            "bos_quality_freshness": 0.0,
+            "pullback_quality": 0.0,
+            "momentum_quality": 0.0,
+            "volatility_suitability": 0.0,
+        }
 
     expected_direction = "bullish" if regime == "trend_up" else "bearish"
     reasons = []
@@ -294,16 +302,19 @@ def score_trend_following(snapshot: dict, regime: str, macro_bias: str):
     v15 = safe_get_volatility(snapshot, "15m")
 
     # 1. Macro alignment (0-15)
+    macro_alignment_score = 0.0
     if (expected_direction == "bullish" and macro_bias == "bullish") or (expected_direction == "bearish" and macro_bias == "bearish"):
-        score += 15
+        macro_alignment_score = 15.0
         reasons.append("MACRO_ALIGN")
+    score += macro_alignment_score
 
     # 2. HTF structure quality (0-20)
     htf_structure_avg = (
         float(s4.get("structure_quality_score", 0.0)) * 0.45 +
         float(s1.get("structure_quality_score", 0.0)) * 0.55
     )
-    score += (htf_structure_avg / 100.0) * 20
+    htf_structure_score = (htf_structure_avg / 100.0) * 20
+    score += htf_structure_score
     if htf_structure_avg >= 70:
         reasons.append("HTF_STRUCTURE_STRONG")
     elif htf_structure_avg >= 55:
@@ -319,7 +330,8 @@ def score_trend_following(snapshot: dict, regime: str, macro_bias: str):
     else:
         ema_strength += score_linear(abs(float(i15.get("price_vs_ema_slow_pct", 0.0))), 0.20, 1.80, 5)
 
-    score += ema_strength
+    ema_strength_score = ema_strength
+    score += ema_strength_score
     if ema_strength >= 10:
         reasons.append("EMA_STRENGTH_OK")
 
@@ -341,7 +353,8 @@ def score_trend_following(snapshot: dict, regime: str, macro_bias: str):
         reasons.append("BOS_CONFLICT")
 
     bos_score = clamp(bos_score, 0.0, 15.0)
-    score += bos_score
+    bos_quality_score = bos_score
+    score += bos_quality_score
     if bos_score >= 8:
         reasons.append("BOS_FRESH_ALIGN")
 
@@ -371,7 +384,8 @@ def score_trend_following(snapshot: dict, regime: str, macro_bias: str):
         pullback_score += 2
 
     pullback_score = clamp(pullback_score, 0.0, 15.0)
-    score += pullback_score
+    pullback_quality_score = pullback_score
+    score += pullback_quality_score
 
     # 6. Momentum quality (0-10)
     momentum_score = 0.0
@@ -387,7 +401,8 @@ def score_trend_following(snapshot: dict, regime: str, macro_bias: str):
             momentum_score += 2
 
     momentum_score = clamp(momentum_score, 0.0, 10.0)
-    score += momentum_score
+    momentum_quality_score = momentum_score
+    score += momentum_quality_score
     if momentum_score >= 6:
         reasons.append("MOMENTUM_CONFIRM")
 
@@ -409,11 +424,22 @@ def score_trend_following(snapshot: dict, regime: str, macro_bias: str):
         volatility_score -= 2.0
 
     volatility_score = clamp(volatility_score, 0.0, 10.0)
-    score += volatility_score
+    volatility_suitability_score = volatility_score
+    score += volatility_suitability_score
     if volatility_score >= 7:
         reasons.append("VOLATILITY_SUITABLE")
 
-    return round(clamp(score, 0.0, 100.0), 2), reasons
+    breakdown = {
+        "macro_alignment": round(macro_alignment_score, 2),
+        "htf_structure_quality": round(htf_structure_score, 2),
+        "ema_strength": round(ema_strength_score, 2),
+        "bos_quality_freshness": round(bos_quality_score, 2),
+        "pullback_quality": round(pullback_quality_score, 2),
+        "momentum_quality": round(momentum_quality_score, 2),
+        "volatility_suitability": round(volatility_suitability_score, 2),
+    }
+
+    return round(clamp(score, 0.0, 100.0), 2), reasons, breakdown
 
 def determine_mean_reversion_side(snapshot: dict):
     s15 = safe_get_structure(snapshot, "15m")
@@ -437,7 +463,15 @@ def determine_mean_reversion_side(snapshot: dict):
 
 def score_mean_reversion(snapshot: dict, regime: str):
     if regime != "range":
-        return 0.0, ["REGIME_NOT_RANGE"], "none"
+        return 0.0, ["REGIME_NOT_RANGE"], "none", {
+            "range_quality": 0.0,
+            "boundary_proximity": 0.0,
+            "rsi_stretch": 0.0,
+            "trend_weakness": 0.0,
+            "anti_breakout_filter": 0.0,
+            "volatility_suitability": 0.0,
+            "invalidation_clarity": 0.0,
+        }
 
     side = determine_mean_reversion_side(snapshot)
     reasons = []
@@ -540,9 +574,26 @@ def score_mean_reversion(snapshot: dict, regime: str):
     if invalidation_score >= 5:
         reasons.append("CLEAR_INVALIDATION")
 
-    return round(clamp(score, 0.0, 100.0), 2), reasons, side
+    breakdown = {
+        "range_quality": round(range_quality, 2),
+        "boundary_proximity": round(boundary_score, 2),
+        "rsi_stretch": round(rsi_score, 2),
+        "trend_weakness": round(trend_weakness, 2),
+        "anti_breakout_filter": round(bos_score, 2),
+        "volatility_suitability": round(vol_score, 2),
+        "invalidation_clarity": round(invalidation_score, 2),
+    }
 
-def build_trend_following_proposal(symbol: str, snapshot: dict, regime: str, score: float, reasons: list[str]):
+    return round(clamp(score, 0.0, 100.0), 2), reasons, side, breakdown
+
+def build_trend_following_proposal(
+    symbol: str,
+    snapshot: dict,
+    regime: str,
+    score: float,
+    reasons: list[str],
+    score_breakdown: dict,
+):
     tf_15m = safe_get_tf(snapshot, "15m")
     i15 = tf_15m.get("indicators", {})
     s15 = tf_15m.get("structure", {})
@@ -590,10 +641,24 @@ def build_trend_following_proposal(symbol: str, snapshot: dict, regime: str, sco
         "tp1_price": round(tp1, 8),
         "tp2_price": round(tp2, 8),
         "tp3_price": round(tp3, 8),
-        "reason_tags": reasons
+        "reason_tags": reasons,
+        "score_breakdown": score_breakdown,
+        "score_thresholds": {
+            "minimum_required": STRICT_SCORE_THRESHOLD,
+            "trend_following_score": round(score, 2),
+            "mean_reversion_score": None,
+            "best_strategy_score": round(score, 2),
+        },
     }
 
-def build_mean_reversion_proposal(symbol: str, snapshot: dict, score: float, reasons: list[str], side: str):
+def build_mean_reversion_proposal(
+    symbol: str,
+    snapshot: dict,
+    score: float,
+    reasons: list[str],
+    side: str,
+    score_breakdown: dict,
+):
     tf_15m = safe_get_tf(snapshot, "15m")
     s15 = tf_15m.get("structure", {})
     i15 = tf_15m.get("indicators", {})
@@ -635,7 +700,14 @@ def build_mean_reversion_proposal(symbol: str, snapshot: dict, score: float, rea
         "tp1_price": round(tp1, 8),
         "tp2_price": round(tp2, 8),
         "tp3_price": round(tp3, 8),
-        "reason_tags": reasons
+        "reason_tags": reasons,
+        "score_breakdown": score_breakdown,
+        "score_thresholds": {
+            "minimum_required": STRICT_SCORE_THRESHOLD,
+            "trend_following_score": None,
+            "mean_reversion_score": round(score, 2),
+            "best_strategy_score": round(score, 2),
+        },
     }
 
 def build_no_trade_payload(
@@ -648,6 +720,8 @@ def build_no_trade_payload(
     mean_score: float,
     reason_tags: list[str],
     hard_block: bool = False,
+    trend_breakdown: dict | None = None,
+    mean_breakdown: dict | None = None,
 ):
     best_strategy_candidate = "trend_following" if trend_score >= mean_score else "mean_reversion"
     best_strategy_score = round(max(trend_score, mean_score), 2)
@@ -672,7 +746,17 @@ def build_no_trade_payload(
         "confidence": 0.0,  # keep old field for compatibility
         "setup_confidence": round(setup_confidence, 2),
         "decision_confidence": 0.0,
-        "reason_tags": reason_tags
+        "reason_tags": reason_tags,
+        "score_breakdown": {
+            "trend_following": trend_breakdown or {},
+            "mean_reversion": mean_breakdown or {},
+        },
+        "score_thresholds": {
+            "minimum_required": STRICT_SCORE_THRESHOLD,
+            "trend_following_score": round(trend_score, 2),
+            "mean_reversion_score": round(mean_score, 2),
+            "best_strategy_score": best_strategy_score,
+        },
     }
 
 def analyze_symbol(symbol: str):
@@ -688,8 +772,12 @@ def analyze_symbol(symbol: str):
     regime, regime_conf, regime_reasons = detect_regime(snapshot_payload, macro_bias)
 
     # Compute scores even if we may end up no-trade, so analytics are richer
-    trend_score, trend_reasons = score_trend_following(snapshot_payload, regime, macro_bias)
-    mean_score, mean_reasons, mean_side = score_mean_reversion(snapshot_payload, regime)
+    trend_score, trend_reasons, trend_breakdown = score_trend_following(
+        snapshot_payload, regime, macro_bias
+    )
+    mean_score, mean_reasons, mean_side, mean_breakdown = score_mean_reversion(
+        snapshot_payload, regime
+    )
 
     if regime in ("transition", "chop"):
         return build_no_trade_payload(
@@ -702,6 +790,8 @@ def analyze_symbol(symbol: str):
             mean_score=mean_score,
             reason_tags=macro_reasons + regime_reasons + ["HARD_BLOCK_REGIME"],
             hard_block=True,
+            trend_breakdown=trend_breakdown,
+            mean_breakdown=mean_breakdown,
         )
 
     if trend_score >= mean_score and trend_score >= STRICT_SCORE_THRESHOLD:
@@ -710,7 +800,8 @@ def analyze_symbol(symbol: str):
             snapshot_payload,
             regime,
             trend_score,
-            macro_reasons + regime_reasons + trend_reasons
+            macro_reasons + regime_reasons + trend_reasons,
+            trend_breakdown,
         )
     elif mean_score > trend_score and mean_score >= STRICT_SCORE_THRESHOLD:
         proposal = build_mean_reversion_proposal(
@@ -718,7 +809,8 @@ def analyze_symbol(symbol: str):
             snapshot_payload,
             mean_score,
             macro_reasons + regime_reasons + mean_reasons,
-            mean_side
+            mean_side,
+            mean_breakdown,
         )
     else:
         return build_no_trade_payload(
@@ -731,6 +823,8 @@ def analyze_symbol(symbol: str):
             mean_score=mean_score,
             reason_tags=macro_reasons + regime_reasons + ["STRICT_THRESHOLD_NOT_MET"],
             hard_block=False,
+            trend_breakdown=trend_breakdown,
+            mean_breakdown=mean_breakdown,
         )
 
     proposal["macro_bias"] = macro_bias
@@ -739,6 +833,12 @@ def analyze_symbol(symbol: str):
     proposal["strategy_scores"] = {
         "trend_following": round(trend_score, 2),
         "mean_reversion": round(mean_score, 2)
+    }
+    proposal["score_thresholds"] = {
+        "minimum_required": STRICT_SCORE_THRESHOLD,
+        "trend_following_score": round(trend_score, 2),
+        "mean_reversion_score": round(mean_score, 2),
+        "best_strategy_score": round(max(trend_score, mean_score), 2),
     }
     return proposal
 

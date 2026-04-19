@@ -1,4 +1,5 @@
 import type { BootstrapOverview } from "../types/dashboard";
+import type { LiveCycleMonitorBootstrap } from "../types/liveCycle";
 
 const BASE_URL = import.meta.env.VITE_DASHBOARD_API_BASE_URL;
 
@@ -69,4 +70,10 @@ export function enableSchedulerAutoLoop() {
 
 export function disableSchedulerAutoLoop() {
   return postJson(`/controls/scheduler/disable`, {});
+}
+
+export function fetchLiveCycleMonitor(accountId = 1, limit = 15) {
+  return getJson<LiveCycleMonitorBootstrap>(
+    `/bootstrap/live-cycle-monitor?account_id=${accountId}&limit=${limit}`
+  );
 }
