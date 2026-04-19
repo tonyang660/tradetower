@@ -535,16 +535,16 @@ def run_one_cycle():
                 "skipped": True,
                 "reason": "ENTRY_GATE_BLOCKED"
             }
-            summary["completed_at"] = iso_now()
-            return summary
+            candidate_symbols = []
 
         # Phase 6: deterministic downstream path
         if not summary["candidate_filter"] or not summary["candidate_filter"].get("ok", False):
             summary["errors"].append("candidate_filter_unavailable")
-            summary["completed_at"] = iso_now()
-            return summary
-
-        candidate_symbols = extract_candidate_symbols(summary["candidate_filter"])
+            candidate_symbols = []
+        elif summary["candidate_filter"].get("skipped", False):
+            candidate_symbols = []
+        else:
+            candidate_symbols = extract_candidate_symbols(summary["candidate_filter"])
 
         for symbol in candidate_symbols:
             summary["strategy_engine"]["analyzed"] += 1
