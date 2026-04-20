@@ -148,6 +148,8 @@ services:
       - LOOP_INTERVAL_SECONDS=300
       - ACCOUNT_ID=1
       - MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST=true
+    volumes:
+      - ../../config:/app/config
     ports:
       - "8109:8080"
 
@@ -194,7 +196,9 @@ services:
       - PAPER_EXECUTION_BASE_URL=http://paper-execution:8080
       - API_GATEWAY_BASE_URL=http://api-gateway:8080
       - DATA_HUB_BASE_URL=http://data-hub:8080
-      - SYMBOL_UNIVERSE_PATH=/config/symbol_universe.json
+      - SYMBOL_UNIVERSE_PATH=/app/config/symbol_universe.json
+    volumes:
+      - ../../config:/app/config
     ports:
       - "8112:8080"
   dashboard-web:
