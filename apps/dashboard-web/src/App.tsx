@@ -5,6 +5,7 @@ import LiveCycleMonitorPage from "./pages/LiveCycleMonitorPage";
 import PositionsOrdersPage from "./pages/PositionsOrdersPage";
 import PerformancePage from "./pages/PerformancePage";
 import SystemHealthPage from "./pages/SystemHealthPage";
+import ConfigurationPage from "./pages/ConfigurationPage";
 
 function PlaceholderPage({ title }: { title: string }) {
   return (
@@ -25,6 +26,7 @@ export default function App() {
         <Route path="/performance" element={<PerformancePage />} />
         <Route path="/strategy-analytics" element={<PlaceholderPage title="Strategy Analytics" />} />
         <Route path="/system-health" element={<SystemHealthPage />} />
+        <Route path="/configuration" element={<ConfigurationPage />} />
       </Routes>
     </AppShell>
   );

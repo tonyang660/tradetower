@@ -7,6 +7,12 @@ import type {
 } from "../types/positionsOrders";
 import type { PerformanceBootstrapResponse } from "../types/performance";
 import type { SystemHealthBootstrapResponse } from "../types/systemHealth";
+import type {
+  ConfigurationBootstrapResponse,
+  ValidateSymbolResponse,
+  SaveSymbolUniverseResponse,
+  SetAutoLoopResponse,
+} from "../types/configuration";
 
 const BASE_URL = import.meta.env.VITE_DASHBOARD_API_BASE_URL;
 
@@ -29,26 +35,25 @@ async function getJson<T>(path: string): Promise<T> {
   }
 }
 
-async function postJson<T>(path: string, payload: Record<string, unknown>): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${BASE_URL}${path}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
 
-  const text = await res.text();
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : null;
 
-  if (!res.ok) {
-    throw new Error(`Request failed: ${res.status} - ${text.slice(0, 200)}`);
+  if (!response.ok) {
+    throw new Error(
+      `Request failed: ${response.status} - ${typeof payload === "object" ? JSON.stringify(payload) : text}`
+    );
   }
 
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error(`Expected JSON but received: ${text.slice(0, 120)}`);
-  }
+  return payload as T;
 }
 
 export function fetchBootstrapOverview(accountId = 1) {
@@ -113,4 +118,26 @@ export function fetchSystemHealthBootstrap(accountId = 1) {
   return getJson<SystemHealthBootstrapResponse>(
     `/bootstrap/system-health?account_id=${accountId}`
   );
+}
+
+export function fetchConfigurationBootstrap() {
+  return getJson<ConfigurationBootstrapResponse>("/bootstrap/configuration");
+}
+
+export function validateConfigurationSymbol(symbol: string) {
+  return postJson<ValidateSymbolResponse>("/configuration/validate-symbol", {
+    symbol,
+  });
+}
+
+export function saveConfigurationSymbolUniverse(symbols: string[]) {
+  return postJson<SaveSymbolUniverseResponse>("/configuration/symbol-universe", {
+    symbols,
+  });
+}
+
+export function setConfigurationAutoLoop(enabled: boolean) {
+  return postJson<SetAutoLoopResponse>("/configuration/auto-loop", {
+    enabled,
+  });
 }

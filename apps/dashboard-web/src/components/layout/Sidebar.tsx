@@ -7,6 +7,7 @@ import {
   SlidersHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
+  Settings,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import clsx from "clsx";
@@ -18,6 +19,7 @@ const items = [
   { to: "/performance", label: "Performance", icon: BarChart3 },
   { to: "/strategy-analytics", label: "Strategy Analytics", icon: SlidersHorizontal },
   { to: "/system-health", label: "System Health", icon: Shield },
+  { to: "/configuration", label: "Configuration", icon: Settings},
 ];
 
 export default function Sidebar({
