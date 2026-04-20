@@ -76,6 +76,24 @@ def set_manual_halt(account_id: int, enabled: bool):
         "trade_guardian_response": payload,
     }, 200
 
+def local_service_health(name: str):
+    return {
+        "service_key": name,
+        "service_name": name.replace("-", " ").title(),
+        "ok": True,
+        "reachable": True,
+        "status": "healthy",
+        "status_code": 200,
+        "latency_ms": 0.0,
+        "last_checked_at": iso_now(),
+        "last_ok_at": iso_now(),
+        "message": None,
+        "payload": {
+            "ok": True,
+            "service": SERVICE_NAME,
+            "timestamp": iso_now(),
+        },
+    }
 
 def service_health_check(name: str, base_url: str):
     started = time.perf_counter()
@@ -1010,7 +1028,13 @@ def get_bootstrap_system_health(account_id: int):
         ("data-hub", DATA_HUB_BASE_URL),
     ]
 
-    service_results = [service_health_check(name, base_url) for name, base_url in services]
+    service_results = []
+
+    for name, base_url in services:
+        if name == "dashboard-api":
+            service_results.append(local_service_health(name))
+        else:
+            service_results.append(service_health_check(name, base_url))
 
     scheduler_health, scheduler_status, scheduler_error = get_json(
         f"{SCHEDULER_BASE_URL}/health",
