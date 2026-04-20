@@ -6,6 +6,7 @@ import type {
   OpenOrdersResponse
 } from "../types/positionsOrders";
 import type { PerformanceBootstrapResponse } from "../types/performance";
+import type { SystemHealthBootstrapResponse } from "../types/systemHealth";
 
 const BASE_URL = import.meta.env.VITE_DASHBOARD_API_BASE_URL;
 
@@ -105,5 +106,11 @@ export function fetchOpenOrders(accountId = 1) {
 export function fetchPerformanceBootstrap(accountId = 1) {
   return getJson<PerformanceBootstrapResponse>(
     `/bootstrap/performance?account_id=${accountId}`
+  );
+}
+
+export function fetchSystemHealthBootstrap(accountId = 1) {
+  return getJson<SystemHealthBootstrapResponse>(
+    `/bootstrap/system-health?account_id=${accountId}`
   );
 }
