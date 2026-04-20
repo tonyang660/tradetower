@@ -5,6 +5,7 @@ import type {
   RecentClosedPositionsResponse,
   OpenOrdersResponse
 } from "../types/positionsOrders";
+import type { PerformanceBootstrapResponse } from "../types/performance";
 
 const BASE_URL = import.meta.env.VITE_DASHBOARD_API_BASE_URL;
 
@@ -98,5 +99,11 @@ export function fetchRecentClosedPositions(accountId = 1, limit = 20) {
 export function fetchOpenOrders(accountId = 1) {
   return getJson<OpenOrdersResponse>(
     `/orders/open?account_id=${accountId}`
+  );
+}
+
+export function fetchPerformanceBootstrap(accountId = 1) {
+  return getJson<PerformanceBootstrapResponse>(
+    `/bootstrap/performance?account_id=${accountId}`
   );
 }

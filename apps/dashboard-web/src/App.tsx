@@ -3,6 +3,7 @@ import AppShell from "./components/layout/AppShell";
 import OverviewPage from "./pages/OverviewPage";
 import LiveCycleMonitorPage from "./pages/LiveCycleMonitorPage";
 import PositionsOrdersPage from "./pages/PositionsOrdersPage";
+import PerformancePage from "./pages/PerformancePage";
 
 function PlaceholderPage({ title }: { title: string }) {
   return (
@@ -20,7 +21,7 @@ export default function App() {
         <Route path="/" element={<OverviewPage />} />
         <Route path="/live-cycle-monitor" element={<LiveCycleMonitorPage />} />
         <Route path="/positions-orders" element={<PositionsOrdersPage />} />
-        <Route path="/performance" element={<PlaceholderPage title="Performance" />} />
+        <Route path="/performance" element={<PerformancePage />} />
         <Route path="/strategy-analytics" element={<PlaceholderPage title="Strategy Analytics" />} />
         <Route path="/system-health" element={<PlaceholderPage title="System Health" />} />
       </Routes>
