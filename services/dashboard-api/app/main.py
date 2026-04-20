@@ -1,6 +1,7 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 import json
 import os
 import time
@@ -20,6 +21,23 @@ RISK_ENGINE_BASE_URL = os.getenv("RISK_ENGINE_BASE_URL", "http://risk-engine:808
 PAPER_EXECUTION_BASE_URL = os.getenv("PAPER_EXECUTION_BASE_URL", "http://paper-execution:8080")
 API_GATEWAY_BASE_URL = os.getenv("API_GATEWAY_BASE_URL", "http://api-gateway:8080")
 DATA_HUB_BASE_URL = os.getenv("DATA_HUB_BASE_URL", "http://data-hub:8080")
+
+
+
+APP_ENV = os.getenv("APP_ENV", "staging")
+SYMBOL_UNIVERSE_PATH = os.getenv("SYMBOL_UNIVERSE_PATH", "/app/config/symbol_universe.json")
+
+STRICT_SCORE_THRESHOLD = float(os.getenv("STRICT_SCORE_THRESHOLD", "75"))
+MAX_RISK_PCT = float(os.getenv("MAX_RISK_PCT", "1.0"))
+MAX_LEVERAGE = float(os.getenv("MAX_LEVERAGE", "15.0"))
+MIN_NOTIONAL_PCT_OF_MAX_DEPLOYABLE = float(os.getenv("MIN_NOTIONAL_PCT_OF_MAX_DEPLOYABLE", "1.0"))
+
+LIMIT_FEE_PCT = float(os.getenv("LIMIT_FEE_PCT", "0.02"))
+MARKET_FEE_PCT = float(os.getenv("MARKET_FEE_PCT", "0.06"))
+MARKET_SLIPPAGE_PCT = float(os.getenv("MARKET_SLIPPAGE_PCT", "0.06"))
+
+MTM_AUTO_REFRESH_ENABLED = os.getenv("MTM_AUTO_REFRESH_ENABLED", "true").lower() == "true"
+MTM_AUTO_REFRESH_INTERVAL_SECONDS = int(os.getenv("MTM_AUTO_REFRESH_INTERVAL_SECONDS", "30"))
 
 
 def iso_now():
@@ -43,6 +61,224 @@ def post_json(url: str, payload: dict, timeout: int = 15):
     except Exception as e:
         return None, None, str(e)
     
+
+def load_symbol_universe_config():
+    path = Path(SYMBOL_UNIVERSE_PATH)
+
+    if not path.exists():
+        return {
+            "ok": False,
+            "error": "symbol_universe_not_found",
+            "path": str(path),
+        }
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": "symbol_universe_read_failed",
+            "details": str(e),
+            "path": str(path),
+        }
+
+    enabled_symbols = []
+    for item in payload.get("symbols", []):
+        symbol = str(item.get("symbol", "")).upper().strip()
+        if symbol and bool(item.get("enabled", False)):
+            enabled_symbols.append(symbol)
+
+    return {
+        "ok": True,
+        "path": str(path),
+        "raw": payload,
+        "enabled_symbols": enabled_symbols,
+    }
+
+
+def save_symbol_universe_config(symbols: list[str]):
+    path = Path(SYMBOL_UNIVERSE_PATH)
+
+    normalized = []
+    seen = set()
+
+    for symbol in symbols:
+        value = str(symbol).upper().strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+
+    if not normalized:
+        return {
+            "ok": False,
+            "error": "empty_symbol_universe_not_allowed",
+        }
+
+    payload = {
+        "symbols": [
+            {
+                "symbol": symbol,
+                "enabled": True,
+                "priority": 1,
+            }
+            for symbol in normalized
+        ]
+    }
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+            f.write("\n")
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": "symbol_universe_write_failed",
+            "details": str(e),
+            "path": str(path),
+        }
+
+    return {
+        "ok": True,
+        "saved": True,
+        "path": str(path),
+        "enabled_symbols": normalized,
+        "count": len(normalized),
+    }
+
+
+def validate_symbol_via_api_gateway(symbol: str):
+    normalized = str(symbol).upper().strip()
+
+    if not normalized:
+        return {
+            "ok": False,
+            "valid": False,
+            "error": "empty_symbol",
+            "symbol": normalized,
+        }, 400
+
+    payload, status_code, error = get_json(
+        f"{API_GATEWAY_BASE_URL}/providers/bitget/ticker",
+        params={"symbol": normalized},
+        timeout=10,
+    )
+
+    if error:
+        return {
+            "ok": False,
+            "valid": False,
+            "symbol": normalized,
+            "provider": "bitget",
+            "error": error,
+        }, 500
+
+    if status_code != 200 or not payload or not payload.get("ok"):
+        return {
+            "ok": False,
+            "valid": False,
+            "symbol": normalized,
+            "provider": "bitget",
+            "error": payload.get("error", "symbol_not_found") if isinstance(payload, dict) else "symbol_not_found",
+        }, 400
+
+    return {
+        "ok": True,
+        "valid": True,
+        "symbol": normalized,
+        "provider": "bitget",
+        "message": "Symbol validated successfully.",
+        "ticker": payload,
+    }, 200
+
+
+def get_bootstrap_configuration():
+    errors = []
+
+    scheduler_health, scheduler_status, scheduler_error = get_json(
+        f"{SCHEDULER_BASE_URL}/health",
+        timeout=10,
+    )
+    if scheduler_error or scheduler_status != 200:
+        errors.append({
+            "source": "scheduler_health",
+            "error": scheduler_error or scheduler_health,
+        })
+        scheduler_health = None
+
+    symbol_config = load_symbol_universe_config()
+    if not symbol_config.get("ok", False):
+        errors.append({
+            "source": "symbol_universe",
+            "error": symbol_config,
+        })
+
+    enabled_symbols = symbol_config.get("enabled_symbols", []) if symbol_config.get("ok") else []
+
+    return {
+        "ok": len(errors) == 0,
+        "generated_at": iso_now(),
+        "environment": APP_ENV,
+        "settings": {
+            "auto_loop_enabled": scheduler_health.get("auto_loop_enabled", False) if scheduler_health else False,
+            "loop_interval_seconds": scheduler_health.get("loop_interval_seconds", 300) if scheduler_health else 300,
+            "mtm_auto_refresh_enabled": MTM_AUTO_REFRESH_ENABLED,
+            "mtm_auto_refresh_interval_seconds": MTM_AUTO_REFRESH_INTERVAL_SECONDS,
+            "enabled_symbols": enabled_symbols,
+            "strict_score_threshold": STRICT_SCORE_THRESHOLD,
+            "max_risk_pct": MAX_RISK_PCT,
+            "max_leverage": MAX_LEVERAGE,
+            "min_notional_pct_of_max_deployable": MIN_NOTIONAL_PCT_OF_MAX_DEPLOYABLE,
+            "limit_fee_pct": LIMIT_FEE_PCT,
+            "market_fee_pct": MARKET_FEE_PCT,
+            "market_slippage_pct": MARKET_SLIPPAGE_PCT,
+        },
+        "editability": {
+            "auto_loop_enabled": "live",
+            "enabled_symbols": "live",
+            "loop_interval_seconds": "read_only",
+            "mtm_auto_refresh_enabled": "read_only",
+            "mtm_auto_refresh_interval_seconds": "read_only",
+            "strict_score_threshold": "read_only",
+            "max_risk_pct": "read_only",
+            "max_leverage": "read_only",
+            "min_notional_pct_of_max_deployable": "read_only",
+            "limit_fee_pct": "read_only",
+            "market_fee_pct": "read_only",
+            "market_slippage_pct": "read_only",
+        },
+        "sources": {
+            "auto_loop_enabled": "scheduler_runtime",
+            "loop_interval_seconds": "scheduler_runtime",
+            "mtm_auto_refresh_enabled": "trade_guardian_env",
+            "mtm_auto_refresh_interval_seconds": "trade_guardian_env",
+            "enabled_symbols": "symbol_universe_json",
+            "strict_score_threshold": "strategy_engine_env",
+            "max_risk_pct": "risk_engine_env",
+            "max_leverage": "risk_engine_env",
+            "min_notional_pct_of_max_deployable": "risk_engine_env",
+            "limit_fee_pct": "paper_execution_env",
+            "market_fee_pct": "paper_execution_env",
+            "market_slippage_pct": "paper_execution_env",
+        },
+        "errors": errors,
+    }
+
+
+def set_configuration_auto_loop(enabled: bool):
+    result, status = set_scheduler_auto_loop(enabled)
+
+    if status != 200:
+        return result, status
+
+    return {
+        "ok": True,
+        "auto_loop_enabled": enabled,
+        "scheduler_response": result.get("scheduler"),
+    }, 200
+
 
 def set_manual_halt(account_id: int, enabled: bool):
     reason_code = "MANUAL_HALT" if enabled else "MANUAL_HALT_CLEARED"
@@ -1170,6 +1406,72 @@ class Handler(BaseHTTPRequestHandler):
             result, status = set_scheduler_auto_loop(False)
             self._send_json(result, status=status)
             return
+        
+        if parsed.path == "/configuration/validate-symbol":
+            symbol = payload.get("symbol", "")
+            result, status = validate_symbol_via_api_gateway(symbol)
+            self._send_json(result, status=status)
+            return
+
+        if parsed.path == "/configuration/symbol-universe":
+            symbols = payload.get("symbols")
+
+            if not isinstance(symbols, list):
+                self._send_json({
+                    "ok": False,
+                    "error": "invalid_symbols_payload",
+                    "required": {"symbols": ["BTCUSDT", "ETHUSDT"]},
+                }, status=400)
+                return
+
+            normalized_symbols = []
+            seen = set()
+            validation_errors = []
+
+            for raw_symbol in symbols:
+                symbol = str(raw_symbol).upper().strip()
+                if not symbol:
+                    continue
+                if symbol in seen:
+                    continue
+                seen.add(symbol)
+
+                validation_result, validation_status = validate_symbol_via_api_gateway(symbol)
+                if validation_status != 200 or not validation_result.get("valid", False):
+                    validation_errors.append({
+                        "symbol": symbol,
+                        "error": validation_result.get("error", "symbol_not_found"),
+                    })
+                    continue
+
+                normalized_symbols.append(symbol)
+
+            if validation_errors:
+                self._send_json({
+                    "ok": False,
+                    "error": "symbol_validation_failed",
+                    "validation_errors": validation_errors,
+                }, status=400)
+                return
+
+            result = save_symbol_universe_config(normalized_symbols)
+            self._send_json(result, status=200 if result.get("ok") else 400)
+            return
+
+        if parsed.path == "/configuration/auto-loop":
+            enabled = payload.get("enabled")
+
+            if not isinstance(enabled, bool):
+                self._send_json({
+                    "ok": False,
+                    "error": "invalid_enabled_flag",
+                    "required": {"enabled": "boolean"},
+                }, status=400)
+                return
+
+            result, status = set_configuration_auto_loop(enabled)
+            self._send_json(result, status=status)
+            return
 
         self._send_json({
             "ok": False,
@@ -1236,6 +1538,10 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/bootstrap/system-health":
             account_id = int(query.get("account_id", ["1"])[0])
             self._send_json(get_bootstrap_system_health(account_id))
+            return
+        
+        if parsed.path == "/bootstrap/configuration":
+            self._send_json(get_bootstrap_configuration())
             return
 
         self._send_json({

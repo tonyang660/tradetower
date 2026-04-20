@@ -194,6 +194,7 @@ services:
       - PAPER_EXECUTION_BASE_URL=http://paper-execution:8080
       - API_GATEWAY_BASE_URL=http://api-gateway:8080
       - DATA_HUB_BASE_URL=http://data-hub:8080
+      - SYMBOL_UNIVERSE_PATH=/app/config/symbol_universe.json
     ports:
       - "8112:8080"
   dashboard-web:
