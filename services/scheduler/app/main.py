@@ -289,7 +289,7 @@ def build_paper_execution_payload(account_id: int, strategy_result: dict, risk_r
         "strategy_reason_tags": strategy_result.get("reason_tags", []),
 
         "position_side": strategy_result["decision"],
-        "entry_order_type": strategy_result["entry_order_type"],
+        "order_type": strategy_result["entry_order_type"],
         "entry_price": strategy_result["entry_price"],
         "stop_loss": strategy_result["stop_loss"],
         "tp1_price": strategy_result["tp1_price"],
@@ -297,10 +297,11 @@ def build_paper_execution_payload(account_id: int, strategy_result: dict, risk_r
         "tp3_price": strategy_result["tp3_price"],
     }
 
-    # Merge in the full risk-engine payload so paper-execution gets the final approved plan.
-    # Keep strategy-level values above as the default context.
     if isinstance(risk_result, dict):
         payload.update(risk_result)
+
+    if "entry_order_type" in payload and "order_type" not in payload:
+        payload["order_type"] = payload["entry_order_type"]
 
     return payload
 
@@ -618,7 +619,9 @@ def run_one_cycle():
                 continue
 
             summary["paper_execution"]["submitted"] += 1
-            if paper_result.get("filled", False):
+
+            action = str(paper_result.get("action", "")).upper()
+            if action == "ENTRY_FILLED":
                 summary["paper_execution"]["fills"] += 1
 
             summary["paper_execution"]["results"].append(paper_result)

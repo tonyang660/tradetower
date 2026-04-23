@@ -104,7 +104,11 @@ def simulate_entry(payload: dict):
     account_id = int(payload["account_id"])
     symbol = payload["symbol"].upper()
     position_side = payload["position_side"].lower()
-    order_type = payload["order_type"].lower()
+    
+    order_type = str(payload.get("order_type") or payload.get("entry_order_type") or "").lower()
+    if order_type not in ("limit", "market"):
+        return {"ok": False, "error": "unsupported_order_type"}
+
     entry_price = float(payload["entry_price"])
     size = float(payload["size"])
     attempt_number = int(payload.get("attempt_number", 1))

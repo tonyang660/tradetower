@@ -431,11 +431,41 @@ def ingest_cycle_summary(payload: dict):
             # Merge paper execution results
             paper_results = payload.get("paper_execution", {}).get("results", [])
             for item in paper_results:
-                symbol = item.get("symbol")
-                if not symbol or symbol not in symbol_rows:
+                execution_event = item.get("execution_event", {}) if isinstance(item, dict) else {}
+
+                symbol = item.get("symbol") or execution_event.get("symbol")
+                if not symbol:
                     continue
+
+                symbol = str(symbol).upper()
+
+                if symbol not in symbol_rows:
+                    symbol_rows[symbol] = {
+                        "cycle_id": cycle_id,
+                        "account_id": account_id,
+                        "symbol": symbol,
+                        "candidate_score": None,
+                        "candidate_bias": None,
+                        "candidate_reasons_json": json_dumps([]),
+                        "candidate_sub_scores_json": json_dumps({}),
+                        "strategy_regime": None,
+                        "strategy_macro_bias": None,
+                        "strategy_setup_confidence": None,
+                        "strategy_decision_confidence": None,
+                        "best_strategy_candidate": None,
+                        "best_strategy_score": None,
+                        "strategy_reason_tags_json": json_dumps([]),
+                        "final_decision": None,
+                        "risk_approved": None,
+                        "guardian_allowed": None,
+                        "paper_submitted": None,
+                        "filled": None,
+                    }
+
+                action = str(item.get("action", "")).upper()
+
                 symbol_rows[symbol]["paper_submitted"] = True
-                symbol_rows[symbol]["filled"] = bool(item.get("filled", False))
+                symbol_rows[symbol]["filled"] = action == "ENTRY_FILLED"
 
             for row in symbol_rows.values():
                 upsert_decision_row(cur, row)
