@@ -1,7 +1,79 @@
 {
   "symbols": [
-    { "symbol": "BTCUSDT", "enabled": true, "priority": 1 },
-    { "symbol": "ETHUSDT", "enabled": true, "priority": 1 },
-    { "symbol": "SOLUSDT", "enabled": true, "priority": 1 }
+    {
+      "symbol": "BTCUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "ETHUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "SOLUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "BNBUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "LTCUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "XRPUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "HBARUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "LINKUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "XLMUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "PEPEUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "SEIUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "TAOUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "DOTUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "ARBUSDT",
+      "enabled": true,
+      "priority": 1
+    }
   ]
 }
