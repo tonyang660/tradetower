@@ -321,7 +321,11 @@ def fetch_guardian_status(account_id: int):
     }
 
 
-def compute_entry_guard_check(status: dict, symbol: str | None = None):
+def compute_entry_guard_check(
+    status: dict,
+    symbol: str | None = None,
+    ignore_pending_order: bool = False,
+):
     reason_codes = []
 
     if not status["is_active"]:
@@ -342,14 +346,26 @@ def compute_entry_guard_check(status: dict, symbol: str | None = None):
     if status["open_positions_count"] >= status["max_concurrent_positions"]:
         reason_codes.append("MAX_CONCURRENT_POSITIONS_REACHED")
 
+    existing_position = None
+    existing_pending_order = None
+
     if symbol:
-        existing_position = get_open_position(status["account_id"], symbol.upper())
+        symbol = symbol.upper()
+
+        existing_position = get_open_position(status["account_id"], symbol)
         if existing_position is not None:
             reason_codes.append("SYMBOL_ALREADY_HAS_OPEN_POSITION")
 
+        if not ignore_pending_order:
+            existing_pending_order = get_open_entry_order(status["account_id"], symbol)
+            if existing_pending_order is not None:
+                reason_codes.append("SYMBOL_ALREADY_HAS_PENDING_ORDER")
+
     return {
         "trade_allowed": len(reason_codes) == 0,
-        "reason_codes": reason_codes
+        "reason_codes": reason_codes,
+        "existing_position": existing_position,
+        "existing_pending_order": existing_pending_order if not ignore_pending_order else None,
     }
 
 
@@ -467,6 +483,51 @@ def get_open_position(account_id: int, symbol: str):
         "opened_at": row[19],
         "closed_at": row[20],
         "status": row[21],
+    }
+
+def get_open_entry_order(account_id: int, symbol: str):
+    query = """
+    SELECT
+        order_id,
+        account_id,
+        symbol,
+        side,
+        order_type,
+        role,
+        requested_price,
+        requested_size,
+        status,
+        created_at,
+        updated_at
+    FROM orders
+    WHERE account_id = %s
+      AND symbol = %s
+      AND status IN ('planned', 'submitted')
+      AND (role = 'entry' OR role IS NULL)
+    ORDER BY created_at DESC
+    LIMIT 1
+    """
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (account_id, symbol))
+            row = cur.fetchone()
+
+    if not row:
+        return None
+
+    return {
+        "order_id": row[0],
+        "account_id": row[1],
+        "symbol": row[2],
+        "side": row[3],
+        "order_type": row[4],
+        "role": row[5],
+        "requested_price": float(row[6]) if row[6] is not None else None,
+        "requested_size": float(row[7]) if row[7] is not None else None,
+        "status": row[8],
+        "created_at": row[9].isoformat().replace("+00:00", "Z") if row[9] else None,
+        "updated_at": row[10].isoformat().replace("+00:00", "Z") if row[10] else None,
     }
 
 def fetch_open_position_for_api(account_id: int, symbol: str):
@@ -1385,6 +1446,7 @@ class Handler(BaseHTTPRequestHandler):
 
                 account_id = int(payload.get("account_id", 1))
                 symbol = payload.get("symbol")
+                ignore_pending_order = bool(payload.get("ignore_pending_order", False))
 
                 status = fetch_guardian_status(account_id)
                 if status:
@@ -1398,12 +1460,17 @@ class Handler(BaseHTTPRequestHandler):
                     }, status=404)
                     return
 
-                result = compute_entry_guard_check(status, symbol=symbol)
+                result = compute_entry_guard_check(
+                    status,
+                    symbol=symbol,
+                    ignore_pending_order=ignore_pending_order,
+                )
 
                 self._send_json({
                     "ok": True,
                     "account_id": account_id,
                     "symbol": symbol.upper() if symbol else None,
+                    "ignore_pending_order": ignore_pending_order,
                     **result
                 })
                 return

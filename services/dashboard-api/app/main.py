@@ -586,7 +586,10 @@ def build_cycle_summary_strip(cycle: dict | None):
         "strategy_accepted": int(strategy_engine.get("accepted", 0) or 0),
         "risk_approved": int(risk_engine.get("approved", 0) or 0),
         "paper_submitted": int(paper_execution.get("submitted", 0) or 0),
+        "paper_pending_retries": int(paper_execution.get("pending_retries", 0) or 0),
         "paper_fills": int(paper_execution.get("fills", 0) or 0),
+        "pending_entries_before_cycle": int(summary.get("pending_entries_before_cycle", 0) or 0),
+        "pending_entries_after_cycle": int(summary.get("pending_entries_after_cycle", 0) or 0),
         "error_count": len(errors),
     }
 
@@ -667,7 +670,11 @@ def build_pipeline_stages(cycle: dict | None):
             "label": "Paper Execution",
             "status": "ok" if int(paper_execution.get("submitted", 0) or 0) > 0 else "idle",
             "primary_value": int(paper_execution.get("fills", 0) or 0),
-            "secondary_text": f"{int(paper_execution.get('submitted', 0) or 0)} submitted",
+            "secondary_text": (
+                f"{int(paper_execution.get('submitted', 0) or 0)} submitted · "
+                f"{int(paper_execution.get('pending_retries', 0) or 0)} retries · "
+                f"{int(summary.get('pending_entries_after_cycle', 0) or 0)} pending"
+            ),
         },
     ]
 
@@ -702,7 +709,10 @@ def build_recent_cycle_card(cycle: dict):
         "strategy_observe_candidates": int(strategy_engine.get("observe_candidates", 0) or 0),
         "strategy_no_trade": int(strategy_engine.get("no_trade", 0) or 0),
         "strategy_accepted": int(strategy_engine.get("accepted", 0) or 0),
+        "paper_pending_retries": int(paper_execution.get("pending_retries", 0) or 0),
         "paper_fills": int(paper_execution.get("fills", 0) or 0),
+        "pending_entries_before_cycle": int(summary.get("pending_entries_before_cycle", 0) or 0),
+        "pending_entries_after_cycle": int(summary.get("pending_entries_after_cycle", 0) or 0),
         "error_count": len(errors),
         "summary": summary,
     }

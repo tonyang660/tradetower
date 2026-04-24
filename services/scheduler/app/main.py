@@ -35,6 +35,9 @@ REFRESH_LIMIT = 72
 
 MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST = os.getenv("MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST", "true").lower() == "true"
 
+ENTRY_RETRY_MAX_ATTEMPTS = int(os.getenv("ENTRY_RETRY_MAX_ATTEMPTS", "2"))
+PENDING_ENTRY_ORDERS = {}
+
 def iso_now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -198,11 +201,15 @@ def check_entry_gate(account_id: int):
     return payload, None
 
 
-def check_entry_gate_for_symbol(account_id: int, symbol: str):
+def check_entry_gate_for_symbol(account_id: int, symbol: str, ignore_pending_order: bool = False):
     try:
         r = requests.post(
             f"{TRADE_GUARDIAN_BASE_URL}/guard/check-entry",
-            json={"account_id": account_id, "symbol": symbol},
+            json={
+                "account_id": account_id,
+                "symbol": symbol,
+                "ignore_pending_order": ignore_pending_order,
+            },
             timeout=10
         )
         payload = r.json()
@@ -320,6 +327,35 @@ def submit_entry_to_paper_execution(payload: dict):
     return result, None
 
 
+def get_pending_entry_symbols():
+    return set(PENDING_ENTRY_ORDERS.keys())
+
+
+def store_pending_entry(symbol: str, paper_payload: dict, paper_result: dict):
+    next_attempt_number = int(paper_result.get("next_attempt_number", 2))
+
+    PENDING_ENTRY_ORDERS[symbol] = {
+        "paper_payload": dict(paper_payload),
+        "attempt_number": next_attempt_number,
+        "updated_at": iso_now(),
+    }
+
+
+def clear_pending_entry(symbol: str):
+    PENDING_ENTRY_ORDERS.pop(symbol, None)
+
+
+def build_retry_payload(symbol: str):
+    pending = PENDING_ENTRY_ORDERS.get(symbol)
+    if not pending:
+        return None
+
+    payload = dict(pending["paper_payload"])
+    payload["attempt_number"] = int(pending.get("attempt_number", 1))
+    payload["max_attempts"] = ENTRY_RETRY_MAX_ATTEMPTS
+    return payload
+
+
 def extract_candidate_symbols(candidate_payload: dict):
     symbols = []
     for item in candidate_payload.get("candidates", []):
@@ -381,6 +417,9 @@ def run_one_cycle():
         "refreshed_symbols_count": 0,
         "refresh_results": [],
 
+        "pending_entries_before_cycle": 0,
+        "pending_entries_after_cycle": 0,
+
         "open_positions_before_maintenance_count": 0,
         "open_positions_count": 0,
 
@@ -415,6 +454,7 @@ def run_one_cycle():
         "paper_execution": {
             "submitted": 0,
             "fills": 0,
+            "pending_retries": 0,
             "results": []
         },
 
@@ -425,6 +465,8 @@ def run_one_cycle():
         # Phase 0: load enabled symbol universe
         enabled_symbols = load_symbol_universe()
         summary["enabled_symbols"] = enabled_symbols
+
+        summary["pending_entries_before_cycle"] = len(PENDING_ENTRY_ORDERS)
 
         # Phase 1: refresh market data for full enabled universe
         for symbol in enabled_symbols:
@@ -516,9 +558,13 @@ def run_one_cycle():
             summary["entry_gate"] = entry_gate
 
         # Phase 4: build entry-eligible universe from latest state
+        pending_symbols = get_pending_entry_symbols()
+
         entry_eligible_symbols = [
             s for s in enabled_symbols
-            if s not in current_open_symbols and s not in maintenance_touched_symbols
+            if s not in current_open_symbols
+            and s not in maintenance_touched_symbols
+            and s not in pending_symbols
         ]
         summary["entry_eligible_symbols"] = entry_eligible_symbols
 
@@ -549,6 +595,73 @@ def run_one_cycle():
             candidate_symbols = []
         else:
             candidate_symbols = extract_candidate_symbols(summary["candidate_filter"])
+
+        # Phase 6.5: retry pending entry orders directly, without re-running strategy engine
+        for symbol in list(get_pending_entry_symbols()):
+            retry_payload = build_retry_payload(symbol)
+            if not retry_payload:
+                continue
+
+            # skip retry if symbol now has an open position
+            if symbol in current_open_symbols:
+                clear_pending_entry(symbol)
+                continue
+
+            summary["paper_execution"]["pending_retries"] += 1
+
+            retry_gate, retry_gate_error = check_entry_gate_for_symbol(
+                ACCOUNT_ID,
+                symbol,
+                ignore_pending_order=True,
+            )
+            if retry_gate_error:
+                summary["final_entry_gate"]["blocked"] += 1
+                summary["final_entry_gate"]["results"].append({
+                    "symbol": symbol,
+                    "retry": True,
+                    "ok": False,
+                    "error": retry_gate_error
+                })
+                continue
+
+            summary["final_entry_gate"]["checked"] += 1
+            summary["final_entry_gate"]["results"].append({
+                "symbol": symbol,
+                "retry": True,
+                **retry_gate
+            })
+
+            if not retry_gate.get("trade_allowed", False):
+                summary["final_entry_gate"]["blocked"] += 1
+                continue
+
+            paper_result, paper_error = submit_entry_to_paper_execution(retry_payload)
+            if paper_error:
+                summary["paper_execution"]["results"].append({
+                    "symbol": symbol,
+                    "retry": True,
+                    "ok": False,
+                    "error": paper_error
+                })
+                continue
+
+            summary["paper_execution"]["submitted"] += 1
+
+            action = str(paper_result.get("action", "")).upper()
+
+            if action == "ENTRY_PENDING":
+                store_pending_entry(symbol, retry_payload, paper_result)
+            else:
+                clear_pending_entry(symbol)
+
+            if action == "ENTRY_FILLED":
+                summary["paper_execution"]["fills"] += 1
+
+            summary["paper_execution"]["results"].append({
+                "symbol": symbol,
+                "retry": True,
+                **paper_result
+            })
 
         for symbol in candidate_symbols:
             summary["strategy_engine"]["analyzed"] += 1
@@ -646,11 +759,22 @@ def run_one_cycle():
             summary["paper_execution"]["submitted"] += 1
 
             action = str(paper_result.get("action", "")).upper()
+
+            if action == "ENTRY_PENDING":
+                store_pending_entry(symbol, {
+                    **paper_payload,
+                    "attempt_number": 1,
+                    "max_attempts": ENTRY_RETRY_MAX_ATTEMPTS,
+                }, paper_result)
+            else:
+                clear_pending_entry(symbol)
+
             if action == "ENTRY_FILLED":
                 summary["paper_execution"]["fills"] += 1
 
             summary["paper_execution"]["results"].append({
                 "symbol": symbol,
+                "retry": False,
                 **paper_result
             })
 
@@ -695,6 +819,8 @@ def run_one_cycle():
             summary["errors"].append(equity_ingest_error)
         else:
             summary["evaluator_equity_ingest"] = equity_ingest_result
+
+    summary["pending_entries_after_cycle"] = len(PENDING_ENTRY_ORDERS)
 
     return summary
 

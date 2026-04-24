@@ -27,6 +27,9 @@ export default function LatestCycleDetails({
   const refreshResults = summary.refresh_results ?? [];
   const errors = summary.errors ?? [];
   const strategyResults = strategyEngine.results ?? [];
+  const paperExecution = summary.paper_execution ?? {};
+  const pendingBefore = summary.pending_entries_before_cycle ?? 0;
+  const pendingAfter = summary.pending_entries_after_cycle ?? 0;
 
   return (
     <div className="space-y-6">
@@ -131,6 +134,36 @@ export default function LatestCycleDetails({
                   <div className="mt-2 text-xl font-semibold text-white">
                     {strategyEngine.no_trade ?? 0}
                   </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-2xl border border-white/8 bg-white/4 p-3">
+                <div className="text-[11px] uppercase tracking-[0.14em] text-white/35">Submitted</div>
+                <div className="mt-2 text-xl font-semibold text-white">
+                  {paperExecution.submitted ?? 0}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-white/8 bg-white/4 p-3">
+                <div className="text-[11px] uppercase tracking-[0.14em] text-white/35">Pending Retries</div>
+                <div className="mt-2 text-xl font-semibold text-white">
+                  {paperExecution.pending_retries ?? 0}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-white/8 bg-white/4 p-3">
+                <div className="text-[11px] uppercase tracking-[0.14em] text-white/35">Pending Before</div>
+                <div className="mt-2 text-xl font-semibold text-white">
+                  {pendingBefore}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-white/8 bg-white/4 p-3">
+                <div className="text-[11px] uppercase tracking-[0.14em] text-white/35">Pending After</div>
+                <div className="mt-2 text-xl font-semibold text-white">
+                  {pendingAfter}
                 </div>
               </div>
             </div>

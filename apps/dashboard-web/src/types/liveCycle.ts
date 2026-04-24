@@ -18,7 +18,10 @@ export type RecentCycleCard = {
   strategy_observe_candidates: number;
   strategy_no_trade: number;
   strategy_accepted: number;
+  paper_pending_retries: number;
   paper_fills: number;
+  pending_entries_before_cycle: number;
+  pending_entries_after_cycle: number;
   error_count: number;
   summary: Record<string, any>;
 };
@@ -47,7 +50,10 @@ export type LiveCycleMonitorBootstrap = {
     strategy_accepted: number;
     risk_approved: number;
     paper_submitted: number;
+    paper_pending_retries: number;
     paper_fills: number;
+    pending_entries_before_cycle: number;
+    pending_entries_after_cycle: number;
     error_count: number;
   } | null;
   pipeline_stages: PipelineStage[];

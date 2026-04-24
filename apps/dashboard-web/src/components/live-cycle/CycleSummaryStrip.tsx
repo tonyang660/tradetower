@@ -30,12 +30,15 @@ export default function CycleSummaryStrip({
     strategy_trade_candidates: number;
     strategy_observe_candidates: number;
     strategy_no_trade: number;
+    paper_pending_retries: number;
     paper_fills: number;
+    pending_entries_before_cycle: number;
+    pending_entries_after_cycle: number;
     error_count: number;
   };
 }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-7">
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-8">
       <SummaryMiniCard
         label="Cycle ID"
         value={summary.cycle_id.slice(11, 19)}
@@ -65,6 +68,11 @@ export default function CycleSummaryStrip({
         label="Trade · Observe"
         value={`${summary.strategy_trade_candidates} · ${summary.strategy_observe_candidates}`}
         hint="Strategy output split"
+      />
+      <SummaryMiniCard
+        label="Pending"
+        value={`${summary.pending_entries_before_cycle} → ${summary.pending_entries_after_cycle}`}
+        hint={`${summary.paper_pending_retries} retries`}
       />
       <SummaryMiniCard
         label="Fills"

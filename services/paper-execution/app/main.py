@@ -43,6 +43,10 @@ def apply_market_slippage(price: float, position_side: str, execution_type: str)
 
     return price
 
+def apply_exit_fill_price(trigger_price: float, position_side: str, execution_type: str) -> float:
+    if execution_type.startswith("TP"):
+        return trigger_price
+    return apply_market_slippage(trigger_price, position_side, execution_type)
 
 def fetch_latest_candle(symbol: str, timeframe: str = "5m"):
     try:
@@ -98,6 +102,51 @@ def send_execution_to_guardian(execution_event: dict):
 
 def candle_touches_limit(candle: dict, price: float) -> bool:
     return float(candle["low"]) <= price <= float(candle["high"])
+
+
+def execute_market_entry(
+    account_id: int,
+    symbol: str,
+    position_side: str,
+    entry_price: float,
+    size: float,
+    payload: dict,
+    notes: str = "paper market entry fill",
+):
+    slipped_price = apply_market_slippage(entry_price, position_side, "ENTRY")
+    notional = slipped_price * size
+    fee_paid = calc_fee(notional, MARKET_FEE_PCT)
+
+    execution_event = {
+        "account_id": account_id,
+        "symbol": symbol,
+        "position_side": position_side,
+        "execution_type": "ENTRY",
+        "order_type": "market",
+        "fill_price": slipped_price,
+        "filled_size": size,
+        "fee_paid": fee_paid,
+        "slippage_bps": MARKET_SLIPPAGE_PCT * 100,
+        "stop_loss": float(payload["stop_loss"]),
+        "tp1_price": float(payload["tp1_price"]),
+        "tp2_price": float(payload["tp2_price"]),
+        "tp3_price": float(payload["tp3_price"]),
+        "risk_amount": float(payload["risk_amount"]),
+        "leverage": float(payload.get("leverage", 1.0)),
+        "notes": notes,
+    }
+
+    guardian_result, g_error = send_execution_to_guardian(execution_event)
+    if g_error:
+        return {"ok": False, "error": g_error}
+
+    return {
+        "ok": True,
+        "action": "ENTRY_FILLED",
+        "fill_method": "market",
+        "execution_event": execution_event,
+        "guardian_result": guardian_result,
+    }
 
 
 def simulate_entry(payload: dict):
@@ -159,50 +208,30 @@ def simulate_entry(payload: dict):
                 "ok": True,
                 "action": "ENTRY_PENDING",
                 "attempt_number": attempt_number,
-                "next_attempt_number": attempt_number + 1
+                "next_attempt_number": attempt_number + 1,
+                "reason_codes": ["LIMIT_NOT_TOUCHED"],
             }
 
-        return {
-            "ok": True,
-            "action": "ENTRY_REQUIRES_REVALIDATION",
-            "reason_codes": ["LIMIT_NOT_FILLED_AFTER_MAX_ATTEMPTS"]
-        }
+        return execute_market_entry(
+            account_id=account_id,
+            symbol=symbol,
+            position_side=position_side,
+            entry_price=entry_price,
+            size=size,
+            payload=payload,
+            notes="paper market fallback after limit max attempts",
+        )
 
     if order_type == "market":
-        slipped_price = apply_market_slippage(entry_price, position_side, "ENTRY")
-        notional = slipped_price * size
-        fee_paid = calc_fee(notional, MARKET_FEE_PCT)
-
-        execution_event = {
-            "account_id": account_id,
-            "symbol": symbol,
-            "position_side": position_side,
-            "execution_type": "ENTRY",
-            "order_type": "market",
-            "fill_price": slipped_price,
-            "filled_size": size,
-            "fee_paid": fee_paid,
-            "slippage_bps": MARKET_SLIPPAGE_PCT * 100,
-            "stop_loss": float(payload["stop_loss"]),
-            "tp1_price": float(payload["tp1_price"]),
-            "tp2_price": float(payload["tp2_price"]),
-            "tp3_price": float(payload["tp3_price"]),
-            "risk_amount": float(payload["risk_amount"]),
-            "leverage": float(payload.get("leverage", 1.0)),
-            "notes": payload.get("notes", "paper market entry fill")
-        }
-
-        guardian_result, g_error = send_execution_to_guardian(execution_event)
-        if g_error:
-            return {"ok": False, "error": g_error}
-
-        return {
-            "ok": True,
-            "action": "ENTRY_FILLED",
-            "fill_method": "market",
-            "execution_event": execution_event,
-            "guardian_result": guardian_result
-        }
+        return execute_market_entry(
+            account_id=account_id,
+            symbol=symbol,
+            position_side=position_side,
+            entry_price=entry_price,
+            size=size,
+            payload=payload,
+            notes=payload.get("notes", "paper market entry fill"),
+        )
 
     return {"ok": False, "error": "unsupported_order_type"}
 
@@ -283,7 +312,8 @@ def simulate_maintenance(payload: dict):
         }
 
     close_size = min(float(close_size), float(position["remaining_size"]))
-    notional = trigger_price * close_size
+    actual_fill_price = apply_exit_fill_price(trigger_price, side, execution_type)
+    notional = actual_fill_price * close_size
     fee_pct = LIMIT_FEE_PCT if execution_type.startswith("TP") else MARKET_FEE_PCT
     fee_paid = calc_fee(notional, fee_pct)
 
@@ -293,7 +323,7 @@ def simulate_maintenance(payload: dict):
         "position_side": side,
         "execution_type": execution_type,
         "order_type": "limit" if execution_type.startswith("TP") else "market",
-        "fill_price": trigger_price,
+        "fill_price": actual_fill_price,
         "filled_size": close_size,
         "fee_paid": fee_paid,
         "slippage_bps": 0.0 if execution_type.startswith("TP") else MARKET_SLIPPAGE_PCT * 100,
