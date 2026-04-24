@@ -85,9 +85,14 @@ export default function PositionsOrdersPage() {
   }, [autoRefresh]);
 
   const model: PositionsOrdersViewModel | null = useMemo(() => {
-    if (!openPayload || !recentPayload) return null;
-    return buildPositionsOrdersViewModel(openPayload.items, recentPayload.items);
-  }, [openPayload, recentPayload]);
+    if (!openPayload || !recentPayload || !ordersPayload) return null;
+
+    const openPositions = openPayload.positions ?? openPayload.items ?? [];
+    const recentClosed = recentPayload.items ?? [];
+    const workingOrders = ordersPayload.items ?? [];
+
+    return buildPositionsOrdersViewModel(openPositions, recentClosed, workingOrders);
+  }, [openPayload, recentPayload, ordersPayload]);
 
   if (loading) {
     return <div className="text-white/70">Loading positions & orders...</div>;
@@ -150,11 +155,9 @@ export default function PositionsOrdersPage() {
 
       <ExposureRibbon analytics={model.analytics} segments={model.exposureSegments} />
 
-      <OpenPositionsPanel positions={model.openPositions as any} />
+      <OpenPositionsPanel positions={model.openPositions} />
 
-      <WorkingOrdersPanel
-        orders={USE_MOCK_POSITIONS ? mockWorkingOrders : ordersPayload?.items ?? []}
-      />
+      <WorkingOrdersPanel orders={model.workingOrders} />
 
       <RecentClosedPositionsPanel positions={model.recentClosed} />
     </div>

@@ -33,7 +33,7 @@ export default function PositionAnalyticsStrip({
       <MetricCard
         label="Used Margin"
         value={money(analytics.total_margin_used)}
-        hint="Estimated capital engaged"
+        hint="Reserved capital engaged"
       />
       <MetricCard
         label="Net Open PnL"

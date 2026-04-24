@@ -36,11 +36,16 @@ export type BootstrapOverview = {
       cash_balance: number;
       realized_pnl: number;
       unrealized_pnl: number;
+      fees_paid_total?: number;
       trading_enabled: boolean;
       open_positions_count: number;
       manual_halt: boolean;
       daily_kill_switch: boolean;
       weekly_kill_switch: boolean;
+      daily_basis_equity?: number;
+      weekly_basis_equity?: number;
+      daily_loss_limit_pct?: number;
+      weekly_loss_limit_pct?: number;
     };
     equity_series: { recorded_at: string; equity: number }[];
     open_positions: Array<Record<string, unknown>>;

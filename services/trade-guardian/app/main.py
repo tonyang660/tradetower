@@ -265,6 +265,7 @@ def fetch_guardian_status(account_id: int):
         ab.equity,
         ab.realized_pnl,
         ab.unrealized_pnl,
+        ab.fees_paid_total,
         gs.trading_enabled,
         gs.manual_halt,
         gs.daily_kill_switch,
@@ -298,26 +299,27 @@ def fetch_guardian_status(account_id: int):
         return None
 
     return {
-        "account_id": row[0],
+        "account_id": int(row[0]),
         "account_name": row[1],
         "is_active": row[2],
         "cash_balance": float(row[3]),
         "equity": float(row[4]),
         "realized_pnl": float(row[5]),
         "unrealized_pnl": float(row[6]),
-        "trading_enabled": row[7],
-        "manual_halt": row[8],
-        "daily_kill_switch": row[9],
-        "weekly_kill_switch": row[10],
-        "max_concurrent_positions": row[11],
-        "daily_loss_limit_pct": float(row[12]),
-        "weekly_loss_limit_pct": float(row[13]),
-        "daily_basis_equity": float(row[14]),
-        "weekly_basis_equity": float(row[15]),
-        "daily_basis_date": str(row[16]),
-        "weekly_basis_start": str(row[17]),
-        "weekly_kill_switch_expires_at": row[18].isoformat().replace("+00:00", "Z") if row[18] else None,
-        "open_positions_count": int(row[19]),
+        "fees_paid_total": float(row[7]),
+        "trading_enabled": row[8],
+        "manual_halt": row[9],
+        "daily_kill_switch": row[10],
+        "weekly_kill_switch": row[11],
+        "max_concurrent_positions": row[12],
+        "daily_loss_limit_pct": float(row[13]),
+        "weekly_loss_limit_pct": float(row[14]),
+        "daily_basis_equity": float(row[15]),
+        "weekly_basis_equity": float(row[16]),
+        "daily_basis_date": str(row[17]),
+        "weekly_basis_start": str(row[18]),
+        "weekly_kill_switch_expires_at": row[19].isoformat().replace("+00:00", "Z") if row[19] else None,
+        "open_positions_count": int(row[20]),
     }
 
 
@@ -661,6 +663,178 @@ def fetch_all_open_orders(account_id: int):
         "items": items,
     }
 
+def opposite_order_side(position_side: str) -> str:
+    return "sell" if position_side == "long" else "buy"
+
+
+def create_order_record(
+    account_id: int,
+    symbol: str,
+    side: str,
+    order_type: str,
+    requested_price: float | None,
+    requested_size: float,
+    status: str,
+    role: str,
+    linked_position_id: int | None = None,
+    stop_loss: float | None = None,
+    tp1: float | None = None,
+    tp2: float | None = None,
+    tp3: float | None = None,
+):
+    query = """
+    INSERT INTO orders (
+        account_id,
+        symbol,
+        side,
+        order_type,
+        requested_price,
+        requested_size,
+        status,
+        role,
+        linked_position_id,
+        stop_loss,
+        tp1,
+        tp2,
+        tp3,
+        created_at,
+        updated_at
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+    RETURNING order_id
+    """
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                query,
+                (
+                    account_id,
+                    symbol,
+                    side,
+                    order_type,
+                    requested_price,
+                    requested_size,
+                    status,
+                    role,
+                    linked_position_id,
+                    stop_loss,
+                    tp1,
+                    tp2,
+                    tp3,
+                ),
+            )
+            order_id = cur.fetchone()[0]
+        conn.commit()
+
+    return int(order_id)
+
+
+def create_protective_orders_for_position(
+    account_id: int,
+    symbol: str,
+    position_side: str,
+    original_size: float,
+    stop_loss: float,
+    tp1_price: float,
+    tp2_price: float,
+    tp3_price: float,
+    linked_position_id: int,
+):
+    exit_side = opposite_order_side(position_side)
+
+    tp1_size = round(original_size * 0.40, 8)
+    tp2_size = round(original_size * 0.40, 8)
+    tp3_size = round(max(original_size - tp1_size - tp2_size, 0.0), 8)
+
+    created = {
+        "stop_loss_order_id": create_order_record(
+            account_id=account_id,
+            symbol=symbol,
+            side=exit_side,
+            order_type="market",
+            requested_price=stop_loss,
+            requested_size=original_size,
+            status="submitted",
+            role="stop_loss",
+            linked_position_id=linked_position_id,
+            stop_loss=stop_loss,
+        ),
+        "tp1_order_id": create_order_record(
+            account_id=account_id,
+            symbol=symbol,
+            side=exit_side,
+            order_type="limit",
+            requested_price=tp1_price,
+            requested_size=tp1_size,
+            status="submitted",
+            role="tp1",
+            linked_position_id=linked_position_id,
+            tp1=tp1_price,
+        ),
+        "tp2_order_id": create_order_record(
+            account_id=account_id,
+            symbol=symbol,
+            side=exit_side,
+            order_type="limit",
+            requested_price=tp2_price,
+            requested_size=tp2_size,
+            status="submitted",
+            role="tp2",
+            linked_position_id=linked_position_id,
+            tp2=tp2_price,
+        ),
+        "tp3_order_id": create_order_record(
+            account_id=account_id,
+            symbol=symbol,
+            side=exit_side,
+            order_type="limit",
+            requested_price=tp3_price,
+            requested_size=tp3_size,
+            status="submitted",
+            role="tp3",
+            linked_position_id=linked_position_id,
+            tp3=tp3_price,
+        ),
+    }
+
+    return created
+
+
+def update_order_status(order_id: int, status: str):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE orders
+                SET status = %s,
+                    updated_at = NOW()
+                WHERE order_id = %s
+                """,
+                (status, order_id),
+            )
+        conn.commit()
+
+
+def cancel_open_protective_orders_for_position(position_id: int, exclude_order_id: int | None = None):
+    query = """
+    UPDATE orders
+    SET status = 'cancelled',
+        updated_at = NOW()
+    WHERE linked_position_id = %s
+      AND status IN ('planned', 'submitted')
+    """
+    params = [position_id]
+
+    if exclude_order_id is not None:
+        query += " AND order_id <> %s"
+        params.append(exclude_order_id)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, tuple(params))
+        conn.commit()
+
 def insert_execution_report(account_id: int, order_id, symbol: str, fill_price: float, filled_size: float,
                             fee_paid: float, slippage_bps: float, notes: str | None,
                             execution_type: str, position_side: str):
@@ -771,43 +945,59 @@ def calculate_realized_pnl(position_side: str, entry_price: float, exit_price: f
     raise ValueError("unsupported_position_side")
 
 
-def apply_entry_balance_update(account_id: int, fee_paid: float):
+def apply_entry_balance_update(account_id: int, margin_used: float, fee_paid: float):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE account_balances
-                SET cash_balance = cash_balance - %s,
+                SET cash_balance = cash_balance - %s - %s,
                     equity = equity - %s,
                     fees_paid_total = fees_paid_total + %s,
                     updated_at = NOW()
                 WHERE account_id = %s
                 """,
-                (fee_paid, fee_paid, fee_paid, account_id)
+                (margin_used, fee_paid, fee_paid, fee_paid, account_id)
             )
         conn.commit()
 
 
-def apply_exit_balance_update(account_id: int, realized_pnl: float, fee_paid: float):
+def apply_exit_balance_update(account_id: int, released_margin: float, realized_pnl: float, fee_paid: float):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE account_balances
-                SET cash_balance = cash_balance + %s - %s,
+                SET cash_balance = cash_balance + %s + %s - %s,
                     equity = equity + %s - %s,
                     realized_pnl = realized_pnl + %s,
                     fees_paid_total = fees_paid_total + %s,
                     updated_at = NOW()
                 WHERE account_id = %s
                 """,
-                (realized_pnl, fee_paid, realized_pnl, fee_paid, realized_pnl, fee_paid, account_id)
+                (
+                    released_margin,
+                    realized_pnl,
+                    fee_paid,
+                    realized_pnl,
+                    fee_paid,
+                    realized_pnl,
+                    fee_paid,
+                    account_id,
+                )
             )
         conn.commit()
 
-def update_position_after_partial_exit(position_id: int, remaining_size: float, tp1_hit=None, tp2_hit=None, tp3_hit=None):
-    updates = ["remaining_size = %s"]
-    values = [remaining_size]
+def update_position_after_partial_exit(
+    position_id: int,
+    remaining_size: float,
+    remaining_margin_used: float,
+    tp1_hit=None,
+    tp2_hit=None,
+    tp3_hit=None,
+):
+    updates = ["remaining_size = %s", "margin_used = %s"]
+    values = [remaining_size, remaining_margin_used]
 
     if tp1_hit is not None:
         updates.append("tp1_hit = %s")
@@ -834,7 +1024,7 @@ def update_position_after_partial_exit(position_id: int, remaining_size: float, 
 
 
 def close_position(position_id: int, tp1_hit=None, tp2_hit=None, tp3_hit=None):
-    updates = ["status = 'closed'", "closed_at = NOW()"]
+    updates = ["status = 'closed'", "closed_at = NOW()", "margin_used = 0", "remaining_size = 0"]
     values = []
 
     if tp1_hit is not None:
@@ -847,7 +1037,6 @@ def close_position(position_id: int, tp1_hit=None, tp2_hit=None, tp3_hit=None):
         updates.append("tp3_hit = %s")
         values.append(tp3_hit)
 
-    updates.append("remaining_size = 0")
     values.append(position_id)
 
     query = f"""
@@ -991,7 +1180,20 @@ def apply_execution_report(payload: dict):
             risk_amount=risk_amount
         )
 
-        apply_entry_balance_update(account_id, fee_paid)
+        protective_orders = create_protective_orders_for_position(
+            account_id=account_id,
+            symbol=symbol,
+            position_side=position_side,
+            original_size=filled_size,
+            stop_loss=stop_loss,
+            tp1_price=tp1_price,
+            tp2_price=tp2_price,
+            tp3_price=tp3_price,
+            linked_position_id=position_id,
+        )
+
+        position_margin_used = (filled_size * fill_price / leverage) if leverage != 0 else (filled_size * fill_price)
+        apply_entry_balance_update(account_id, position_margin_used, fee_paid)
 
         insert_guardian_event(
             account_id,
@@ -1011,7 +1213,8 @@ def apply_execution_report(payload: dict):
                 "stop_loss": stop_loss,
                 "tp1_price": tp1_price,
                 "tp2_price": tp2_price,
-                "tp3_price": tp3_price
+                "tp3_price": tp3_price,
+                "protective_orders": protective_orders,
             }
         )
 
@@ -1019,7 +1222,8 @@ def apply_execution_report(payload: dict):
             "ok": True,
             "action": "position_opened",
             "execution_id": execution_id,
-            "position_id": position_id
+            "position_id": position_id,
+            "protective_orders": protective_orders,
         }
 
     # Maintenance actions below must have an open position
@@ -1041,15 +1245,22 @@ def apply_execution_report(payload: dict):
         if close_size > remaining_size:
             close_size = remaining_size
 
+        released_margin = open_position["margin_used"] * (close_size / remaining_size) if remaining_size > 0 else 0.0
+        new_remaining_margin = round(open_position["margin_used"] - released_margin, 8)
+
         realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
         new_remaining = round(remaining_size - close_size, 8)
 
         update_position_after_partial_exit(
             open_position["position_id"],
             new_remaining,
+            new_remaining_margin,
             tp1_hit=True
         )
-        apply_exit_balance_update(account_id, realized_pnl, fee_paid)
+        apply_exit_balance_update(account_id, released_margin, realized_pnl, fee_paid)
+
+        if order_id is not None:
+            update_order_status(int(order_id), "filled")
 
         insert_guardian_event(
             account_id,
@@ -1085,15 +1296,22 @@ def apply_execution_report(payload: dict):
         if close_size > remaining_size:
             close_size = remaining_size
 
+        released_margin = open_position["margin_used"] * (close_size / remaining_size) if remaining_size > 0 else 0.0
+        new_remaining_margin = round(open_position["margin_used"] - released_margin, 8)
+
         realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
         new_remaining = round(remaining_size - close_size, 8)
 
         update_position_after_partial_exit(
             open_position["position_id"],
             new_remaining,
+            new_remaining_margin,
             tp2_hit=True
         )
-        apply_exit_balance_update(account_id, realized_pnl, fee_paid)
+        apply_exit_balance_update(account_id, released_margin, realized_pnl, fee_paid)
+
+        if order_id is not None:
+            update_order_status(int(order_id), "filled")
 
         insert_guardian_event(
             account_id,
@@ -1126,11 +1344,21 @@ def apply_execution_report(payload: dict):
         close_size = remaining_size
         realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
 
+        released_margin = open_position["margin_used"]
+
         close_position(
             open_position["position_id"],
             tp3_hit=True
         )
-        apply_exit_balance_update(account_id, realized_pnl, fee_paid)
+        apply_exit_balance_update(account_id, released_margin, realized_pnl, fee_paid)
+
+        if order_id is not None:
+            update_order_status(int(order_id), "filled")
+
+        cancel_open_protective_orders_for_position(
+            open_position["position_id"],
+            exclude_order_id=int(order_id) if order_id is not None else None,
+        )
 
         insert_guardian_event(
             account_id,
@@ -1164,8 +1392,18 @@ def apply_execution_report(payload: dict):
         close_size = remaining_size
         realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
 
+        released_margin = open_position["margin_used"]
+
         close_position(open_position["position_id"])
-        apply_exit_balance_update(account_id, realized_pnl, fee_paid)
+        apply_exit_balance_update(account_id, released_margin, realized_pnl, fee_paid)
+
+        if order_id is not None:
+            update_order_status(int(order_id), "filled")
+
+        cancel_open_protective_orders_for_position(
+            open_position["position_id"],
+            exclude_order_id=int(order_id) if order_id is not None else None,
+        )        
 
         insert_guardian_event(
             account_id,
@@ -1230,18 +1468,18 @@ def calculate_unrealized_pnl(position_side: str, entry_price: float, current_pri
         return (entry_price - current_price) * remaining_size
     raise ValueError("unsupported_position_side")
 
-def update_account_mark_to_market(account_id: int, unrealized_pnl: float):
+def update_account_mark_to_market(account_id: int, unrealized_pnl: float, reserved_margin_total: float):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE account_balances
                 SET unrealized_pnl = %s,
-                    equity = cash_balance + %s,
+                    equity = cash_balance + %s + %s,
                     updated_at = NOW()
                 WHERE account_id = %s
                 """,
-                (unrealized_pnl, unrealized_pnl, account_id)
+                (unrealized_pnl, reserved_margin_total, unrealized_pnl, account_id)
             )
         conn.commit()
 
@@ -1250,6 +1488,7 @@ def refresh_mark_to_market(account_id: int):
 
     enriched_positions = []
     total_unrealized_pnl = 0.0
+    reserved_margin_total = 0.0
     pricing_errors = []
 
     for pos in positions:
@@ -1278,6 +1517,7 @@ def refresh_mark_to_market(account_id: int):
         pnl_pct = (unrealized_pnl / notional * 100.0) if notional > 0 else 0.0
 
         total_unrealized_pnl += unrealized_pnl
+        reserved_margin_total += float(pos.get("margin_used", 0.0) or 0.0)
 
         enriched_positions.append({
             **pos,
@@ -1287,7 +1527,7 @@ def refresh_mark_to_market(account_id: int):
             "notional": round(notional, 8),
         })
 
-    update_account_mark_to_market(account_id, total_unrealized_pnl)
+    update_account_mark_to_market(account_id, total_unrealized_pnl, reserved_margin_total)
 
     refreshed_status = fetch_guardian_status(account_id)
     if refreshed_status:

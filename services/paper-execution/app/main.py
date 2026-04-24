@@ -48,11 +48,11 @@ def apply_exit_fill_price(trigger_price: float, position_side: str, execution_ty
         return trigger_price
     return apply_market_slippage(trigger_price, position_side, execution_type)
 
-def fetch_latest_candle(symbol: str, timeframe: str = "5m"):
+def fetch_recent_candles(symbol: str, timeframe: str = "5m", limit: int = 3):
     try:
         r = requests.get(
             f"{DATA_HUB_BASE_URL}/candles",
-            params={"symbol": symbol, "timeframe": timeframe, "limit": 1},
+            params={"symbol": symbol, "timeframe": timeframe, "limit": limit},
             timeout=10
         )
         payload = r.json()
@@ -63,10 +63,10 @@ def fetch_latest_candle(symbol: str, timeframe: str = "5m"):
         return None, payload.get("error", "data_hub_error")
 
     candles = payload.get("candles", [])
-    if len(candles) != 1:
-        return None, "no_recent_candle"
+    if not candles:
+        return None, "no_recent_candles"
 
-    return candles[0], None
+    return candles, None
 
 
 def fetch_open_position(account_id: int, symbol: str):
@@ -85,6 +85,35 @@ def fetch_open_position(account_id: int, symbol: str):
 
     return payload["position"], None
 
+def fetch_open_orders(account_id: int):
+    try:
+        r = requests.get(
+            f"{TRADE_GUARDIAN_BASE_URL}/orders/open",
+            params={"account_id": account_id},
+            timeout=10
+        )
+        payload = r.json()
+    except Exception:
+        return None, "trade_guardian_open_orders_failed"
+
+    if not payload.get("ok"):
+        return None, payload.get("error", "trade_guardian_open_orders_failed")
+
+    return payload.get("items", []), None
+
+def get_symbol_protective_orders(account_id: int, symbol: str, linked_position_id: int):
+    orders, error = fetch_open_orders(account_id)
+    if error:
+        return None, error
+
+    filtered = [
+        o for o in orders
+        if o.get("symbol") == symbol
+        and o.get("linked_position_id") == linked_position_id
+        and o.get("role") in ("stop_loss", "tp1", "tp2", "tp3")
+    ]
+
+    return filtered, None
 
 def send_execution_to_guardian(execution_event: dict):
     try:
@@ -163,9 +192,11 @@ def simulate_entry(payload: dict):
     attempt_number = int(payload.get("attempt_number", 1))
     max_attempts = int(payload.get("max_attempts", 2))
 
-    candle, error = fetch_latest_candle(symbol, "5m")
+    candles, error = fetch_recent_candles(symbol, "5m", limit=1)
     if error:
         return {"ok": False, "error": error}
+
+    candle = candles[-1]
 
     if order_type == "limit":
         if candle_touches_limit(candle, entry_price):
@@ -244,66 +275,99 @@ def simulate_maintenance(payload: dict):
     if error:
         return {"ok": False, "error": error}
 
-    candle, c_error = fetch_latest_candle(symbol, "5m")
+    candles, c_error = fetch_recent_candles(symbol, "5m", limit=3)
     if c_error:
         return {"ok": False, "error": c_error}
 
-    high = float(candle["high"])
-    low = float(candle["low"])
+    protective_orders, o_error = get_symbol_protective_orders(
+        account_id,
+        symbol,
+        position["position_id"],
+    )
+    if o_error:
+        return {"ok": False, "error": o_error}
 
     side = position["side"]
     execution_type = None
     trigger_price = None
     close_size = None
+    trigger_order = None
 
-    # Conservative rule: if both touched in same candle, assume SL first.
-    if side == "long":
-        sl_hit = position["stop_loss"] is not None and low <= float(position["stop_loss"])
-        tp1_hit = (not position["tp1_hit"]) and position["tp1_price"] is not None and high >= float(position["tp1_price"])
-        tp2_hit = position["tp1_hit"] and (not position["tp2_hit"]) and position["tp2_price"] is not None and high >= float(position["tp2_price"])
-        tp3_hit = (not position["tp3_hit"]) and position["tp3_price"] is not None and high >= float(position["tp3_price"])
+    orders_by_role = {o["role"]: o for o in protective_orders}
 
-        if sl_hit:
-            execution_type = "STOP_LOSS"
-            trigger_price = float(position["stop_loss"])
-            close_size = float(position["remaining_size"])
-        elif tp1_hit:
-            execution_type = "TP1"
-            trigger_price = float(position["tp1_price"])
-            close_size = round(float(position["original_size"]) * 0.40, 8)
-        elif tp2_hit:
-            execution_type = "TP2"
-            trigger_price = float(position["tp2_price"])
-            close_size = round(float(position["original_size"]) * 0.40, 8)
-        elif tp3_hit:
-            execution_type = "TP3"
-            trigger_price = float(position["tp3_price"])
-            close_size = float(position["remaining_size"])
+    for candle in candles:
+        high = float(candle["high"])
+        low = float(candle["low"])
 
-    elif side == "short":
-        sl_hit = position["stop_loss"] is not None and high >= float(position["stop_loss"])
-        tp1_hit = (not position["tp1_hit"]) and position["tp1_price"] is not None and low <= float(position["tp1_price"])
-        tp2_hit = position["tp1_hit"] and (not position["tp2_hit"]) and position["tp2_price"] is not None and low <= float(position["tp2_price"])
-        tp3_hit = (not position["tp3_hit"]) and position["tp3_price"] is not None and low <= float(position["tp3_price"])
+        sl_order = orders_by_role.get("stop_loss")
+        tp1_order = orders_by_role.get("tp1")
+        tp2_order = orders_by_role.get("tp2")
+        tp3_order = orders_by_role.get("tp3")
 
-        if sl_hit:
-            execution_type = "STOP_LOSS"
-            trigger_price = float(position["stop_loss"])
-            close_size = float(position["remaining_size"])
-        elif tp1_hit:
-            execution_type = "TP1"
-            trigger_price = float(position["tp1_price"])
-            close_size = round(float(position["original_size"]) * 0.40, 8)
-        elif tp2_hit:
-            execution_type = "TP2"
-            trigger_price = float(position["tp2_price"])
-            close_size = round(float(position["original_size"]) * 0.40, 8)
-        elif tp3_hit:
-            execution_type = "TP3"
-            trigger_price = float(position["tp3_price"])
-            close_size = float(position["remaining_size"])
-    else:
-        return {"ok": False, "error": "unsupported_position_side"}
+        if side == "long":
+            sl_hit = sl_order is not None and sl_order.get("entry_price") is not None and low <= float(sl_order["entry_price"])
+            tp1_hit = tp1_order is not None and tp1_order.get("entry_price") is not None and high >= float(tp1_order["entry_price"])
+            tp2_hit = tp2_order is not None and tp2_order.get("entry_price") is not None and high >= float(tp2_order["entry_price"])
+            tp3_hit = tp3_order is not None and tp3_order.get("entry_price") is not None and high >= float(tp3_order["entry_price"])
+
+            # Conservative rule: SL first if touched in same candle.
+            if sl_hit:
+                execution_type = "STOP_LOSS"
+                trigger_price = float(sl_order["entry_price"])
+                close_size = float(position["remaining_size"])
+                trigger_order = sl_order
+                break
+            elif tp1_hit:
+                execution_type = "TP1"
+                trigger_price = float(tp1_order["entry_price"])
+                close_size = float(tp1_order["requested_size"] or 0.0)
+                trigger_order = tp1_order
+                break
+            elif tp2_hit:
+                execution_type = "TP2"
+                trigger_price = float(tp2_order["entry_price"])
+                close_size = float(tp2_order["requested_size"] or 0.0)
+                trigger_order = tp2_order
+                break
+            elif tp3_hit:
+                execution_type = "TP3"
+                trigger_price = float(tp3_order["entry_price"])
+                close_size = float(position["remaining_size"])
+                trigger_order = tp3_order
+                break
+
+        elif side == "short":
+            sl_hit = sl_order is not None and sl_order.get("entry_price") is not None and high >= float(sl_order["entry_price"])
+            tp1_hit = tp1_order is not None and tp1_order.get("entry_price") is not None and low <= float(tp1_order["entry_price"])
+            tp2_hit = tp2_order is not None and tp2_order.get("entry_price") is not None and low <= float(tp2_order["entry_price"])
+            tp3_hit = tp3_order is not None and tp3_order.get("entry_price") is not None and low <= float(tp3_order["entry_price"])
+
+            if sl_hit:
+                execution_type = "STOP_LOSS"
+                trigger_price = float(sl_order["entry_price"])
+                close_size = float(position["remaining_size"])
+                trigger_order = sl_order
+                break
+            elif tp1_hit:
+                execution_type = "TP1"
+                trigger_price = float(tp1_order["entry_price"])
+                close_size = float(tp1_order["requested_size"] or 0.0)
+                trigger_order = tp1_order
+                break
+            elif tp2_hit:
+                execution_type = "TP2"
+                trigger_price = float(tp2_order["entry_price"])
+                close_size = float(tp2_order["requested_size"] or 0.0)
+                trigger_order = tp2_order
+                break
+            elif tp3_hit:
+                execution_type = "TP3"
+                trigger_price = float(tp3_order["entry_price"])
+                close_size = float(position["remaining_size"])
+                trigger_order = tp3_order
+                break
+        else:
+            return {"ok": False, "error": "unsupported_position_side"}   
 
     if execution_type is None:
         return {
@@ -323,13 +387,13 @@ def simulate_maintenance(payload: dict):
         "position_side": side,
         "execution_type": execution_type,
         "order_type": "limit" if execution_type.startswith("TP") else "market",
+        "order_id": int(trigger_order["order_id"]) if trigger_order and trigger_order.get("order_id") is not None else None,
         "fill_price": actual_fill_price,
         "filled_size": close_size,
         "fee_paid": fee_paid,
         "slippage_bps": 0.0 if execution_type.startswith("TP") else MARKET_SLIPPAGE_PCT * 100,
         "notes": f"paper maintenance {execution_type.lower()} trigger"
     }
-
     guardian_result, g_error = send_execution_to_guardian(execution_event)
     if g_error:
         return {"ok": False, "error": g_error}

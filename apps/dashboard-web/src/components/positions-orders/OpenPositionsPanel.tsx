@@ -7,37 +7,39 @@ function money(value: number | null | undefined) {
   return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function numberText(value: number | null | undefined, digits = 8) {
+  if (value == null) return "-";
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: digits,
+  });
+}
+
 function statusTone(status?: string | null) {
-  if (!status) return "bg-white/10 text-white/70";
-  if (status.includes("TP")) return "bg-emerald-500/12 text-emerald-200";
-  if (status.includes("BREAKEVEN")) return "bg-amber-500/12 text-amber-200";
+  const normalized = (status ?? "").toLowerCase();
+  if (normalized.includes("tp")) return "bg-emerald-500/12 text-emerald-200";
+  if (normalized.includes("breakeven")) return "bg-amber-500/12 text-amber-200";
+  if (normalized.includes("stop")) return "bg-rose-500/12 text-rose-200";
   return "bg-white/10 text-white/70";
 }
 
-function protectionChipTone(
-  kind: "sl" | "tp1" | "tp2" | "tp3",
-  status?: string | null
-) {
-  const normalized = status ?? "";
-
+function protectionChipTone(kind: "sl" | "tp1" | "tp2" | "tp3", hit?: boolean) {
   if (kind === "sl") {
-    if (normalized.includes("BREAKEVEN")) {
-      return "border-amber-400/15 bg-amber-500/10 text-amber-200";
-    }
     return "border-rose-400/15 bg-rose-500/10 text-rose-200";
   }
 
-  if (kind === "tp1" && normalized.includes("TP1")) {
-    return "border-emerald-300/25 bg-emerald-400/18 text-emerald-100";
-  }
-  if (kind === "tp2" && normalized.includes("TP2")) {
-    return "border-emerald-300/25 bg-emerald-400/18 text-emerald-100";
-  }
-  if (kind === "tp3" && normalized.includes("TP3")) {
+  if (hit) {
     return "border-emerald-300/25 bg-emerald-400/18 text-emerald-100";
   }
 
   return "border-emerald-400/15 bg-emerald-500/10 text-emerald-200";
+}
+
+function inferredStatus(position: OpenPosition) {
+  if (position.tp3_hit) return "TP3 Reached";
+  if (position.tp2_hit) return "TP2 Reached";
+  if (position.tp1_hit) return "TP1 Reached";
+  return position.status ?? "open";
 }
 
 export default function OpenPositionsPanel({
@@ -60,6 +62,8 @@ export default function OpenPositionsPanel({
             const pnlTone =
               pnl > 0 ? "text-emerald-300" : pnl < 0 ? "text-rose-300" : "text-white";
 
+            const displayStatus = inferredStatus(p);
+
             return (
               <div
                 key={`${p.symbol}-${p.position_id ?? index}`}
@@ -80,7 +84,9 @@ export default function OpenPositionsPanel({
 
                 <div>
                   <div className="text-white/40">Size</div>
-                  <div className="mt-1 text-white">{p.remaining_size ?? p.original_size ?? "-"}</div>
+                  <div className="mt-1 text-white">
+                    {numberText(p.remaining_size ?? p.original_size ?? p.size, 8)}
+                  </div>
                 </div>
 
                 <div>
@@ -101,7 +107,7 @@ export default function OpenPositionsPanel({
                 <div>
                   <div className="text-white/40">Entry / Current</div>
                   <div className="mt-1 text-white">
-                    {p.entry_price ?? "-"} / {p.current_price ?? "-"}
+                    {numberText(p.entry_price)} / {numberText(p.current_price)}
                   </div>
                 </div>
 
@@ -119,45 +125,44 @@ export default function OpenPositionsPanel({
 
                 <div>
                   <div className="text-white/40">Status</div>
-                  <div className={`mt-1 inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${statusTone(p.status)}`}>
-                    {p.status ?? "OPEN"}
+                  <div className={`mt-1 inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${statusTone(displayStatus)}`}>
+                    {displayStatus}
                   </div>
                 </div>
 
-                
                 <div>
                   <div className="text-white/40">Protection</div>
 
                   <div className="mt-1 flex flex-wrap gap-1.5">
                     {p.stop_loss != null ? (
                       <span
-                        className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("sl", p.status)}`}
+                        className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("sl")}`}
                       >
-                        SL {p.stop_loss}
+                        SL {numberText(p.stop_loss)}
                       </span>
                     ) : null}
 
-                    {p.tp1 != null ? (
+                    {p.tp1_price != null ? (
                       <span
-                        className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("tp1", p.status)}`}
+                        className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("tp1", p.tp1_hit)}`}
                       >
-                        TP1 {p.tp1}
+                        TP1 {numberText(p.tp1_price)}
                       </span>
                     ) : null}
 
-                    {p.tp2 != null ? (
+                    {p.tp2_price != null ? (
                       <span
-                        className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("tp2", p.status)}`}
+                        className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("tp2", p.tp2_hit)}`}
                       >
-                        TP2 {p.tp2}
+                        TP2 {numberText(p.tp2_price)}
                       </span>
                     ) : null}
 
-                    {p.tp3 != null ? (
+                    {p.tp3_price != null ? (
                       <span
-                        className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("tp3", p.status)}`}
+                        className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("tp3", p.tp3_hit)}`}
                       >
-                        TP3 {p.tp3}
+                        TP3 {numberText(p.tp3_price)}
                       </span>
                     ) : null}
                   </div>

@@ -1,38 +1,58 @@
 export type OpenPosition = {
   position_id?: number;
+  account_id?: number;
   symbol: string;
   side: "long" | "short" | string;
+
   entry_price?: number | null;
   current_price?: number | null;
+
   remaining_size?: number | null;
   original_size?: number | null;
+  size?: number | null;
+
   leverage?: number | null;
   notional?: number | null;
   margin_used?: number | null;
   unrealized_pnl?: number | null;
+  unrealized_pnl_pct?: number | null;
   fees_paid?: number | null;
+
   opened_at?: string | null;
+  closed_at?: string | null;
   status?: string | null;
 
   stop_loss?: number | null;
-  tp1?: number | null;
-  tp2?: number | null;
-  tp3?: number | null;
+  take_profit?: number | null;
+
+  tp1_price?: number | null;
+  tp2_price?: number | null;
+  tp3_price?: number | null;
+
+  tp1_hit?: boolean;
+  tp2_hit?: boolean;
+  tp3_hit?: boolean;
 };
 
 export type OpenPositionsResponse = {
   ok: boolean;
   account_id: number;
-  count: number;
-  items: OpenPosition[];
+  positions?: OpenPosition[];
+  items?: OpenPosition[];
+  count?: number;
   account_status?: {
     equity?: number;
     cash_balance?: number;
     realized_pnl?: number;
     unrealized_pnl?: number;
+    fees_paid_total?: number;
     open_positions_count?: number;
+    trading_enabled?: boolean;
+    manual_halt?: boolean;
+    daily_kill_switch?: boolean;
+    weekly_kill_switch?: boolean;
   };
-  pricing_errors?: string[];
+  pricing_errors?: Array<string | Record<string, unknown>>;
 };
 
 export type RecentClosedPosition = {
@@ -85,9 +105,26 @@ export type PositionsAnalytics = {
 export type PositionsOrdersViewModel = {
   openPositions: OpenPosition[];
   recentClosed: RecentClosedPosition[];
+  workingOrders: WorkingOrder[];
   analytics: PositionsAnalytics;
   exposureSegments: ExposureRibbonSegment[];
 };
+
+export type WorkingOrderRole =
+  | "entry"
+  | "stop_loss"
+  | "tp1"
+  | "tp2"
+  | "tp3"
+  | string;
+
+export type WorkingOrderStatus =
+  | "PENDING_ENTRY"
+  | "RESTING"
+  | "FILLED"
+  | "CANCELLED"
+  | "REJECTED"
+  | string;
 
 export type WorkingOrder = {
   order_id: string;
@@ -95,15 +132,19 @@ export type WorkingOrder = {
   symbol: string;
   side: "long" | "short" | string;
   order_type: string;
-  role?: string;
+  role?: WorkingOrderRole;
+
   entry_price?: number | null;
   requested_size?: number | null;
+
   stop_loss?: number | null;
   tp1?: number | null;
   tp2?: number | null;
   tp3?: number | null;
-  status: string;
+
+  status: WorkingOrderStatus;
   linked_position_id?: number | null;
+
   submitted_at?: string | null;
   updated_at?: string | null;
 };

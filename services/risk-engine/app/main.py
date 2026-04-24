@@ -14,8 +14,8 @@ TRADE_GUARDIAN_BASE_URL = os.getenv("TRADE_GUARDIAN_BASE_URL", "http://trade-gua
 MAX_RISK_PCT = float(os.getenv("MAX_RISK_PCT", "1.0"))
 MAX_LEVERAGE = float(os.getenv("MAX_LEVERAGE", "15.0"))
 MIN_NOTIONAL_PCT_OF_MAX_DEPLOYABLE = float(os.getenv("MIN_NOTIONAL_PCT_OF_MAX_DEPLOYABLE", "1.0"))
-
-LEVERAGE_SEQUENCE = [7.0, 10.0, 12.5, 15.0]
+MIN_LIQUIDATION_BUFFER_PCT = float(os.getenv("MIN_LIQUIDATION_BUFFER_PCT", "0.35"))
+LEVERAGE_SEQUENCE = [15.0, 14.0, 13.0, 12.0, 11.0, 10.0, 9.0, 8.0, 7.0]
 
 
 def iso_now():
@@ -82,6 +82,42 @@ def compute_stop_distance(side: str, entry: float, stop: float) -> float:
         return stop - entry
     return 0.0
 
+def approximate_liquidation_price(side: str, entry: float, leverage: float) -> float | None:
+    if leverage <= 0:
+        return None
+
+    # Simplified isolated-margin style approximation for paper trading.
+    # Long liquidation is below entry, short liquidation is above entry.
+    if side == "long":
+        return entry * (1.0 - (1.0 / leverage))
+    if side == "short":
+        return entry * (1.0 + (1.0 / leverage))
+    return None
+
+
+def liquidation_buffer_pct(side: str, stop: float, liquidation_price: float, entry: float) -> float:
+    if entry <= 0:
+        return 0.0
+
+    if side == "long":
+        # want liquidation below stop; positive buffer means safe
+        return ((stop - liquidation_price) / entry) * 100.0
+
+    if side == "short":
+        # want liquidation above stop; positive buffer means safe
+        return ((liquidation_price - stop) / entry) * 100.0
+
+    return 0.0
+
+
+def is_liquidation_safely_beyond_stop(
+    side: str,
+    stop: float,
+    liquidation_price: float,
+    entry: float,
+) -> bool:
+    buffer_pct = liquidation_buffer_pct(side, stop, liquidation_price, entry)
+    return buffer_pct >= MIN_LIQUIDATION_BUFFER_PCT
 
 def get_minimum_notional_required(equity: float) -> float:
     max_deployable = equity * MAX_LEVERAGE
@@ -100,16 +136,19 @@ def pick_starting_leverage(leverage_hint):
         except Exception:
             return None, "INVALID_LEVERAGE_HINT"
 
-    return 7.0, None
+    return MAX_LEVERAGE, None
 
 
-def build_leverage_candidates(start_leverage: float):
-    seq = sorted(set(LEVERAGE_SEQUENCE + [start_leverage]))
+def build_leverage_candidates(start_leverage: float | None = None):
+    seq = sorted(set(LEVERAGE_SEQUENCE), reverse=True)
     seq = [x for x in seq if x <= MAX_LEVERAGE and x > 0]
-    seq.sort()
 
-    # start from requested leverage, then only move upward
-    return [x for x in seq if x >= start_leverage]
+    if start_leverage is not None and start_leverage > 0 and start_leverage <= MAX_LEVERAGE:
+        if start_leverage not in seq:
+            seq.append(start_leverage)
+            seq = sorted(set(seq), reverse=True)
+
+    return seq
 
 
 def plan_trade(payload: dict):
@@ -182,19 +221,58 @@ def plan_trade(payload: dict):
     leverage_candidates = build_leverage_candidates(start_leverage)
     chosen_leverage = None
     margin_required = None
+    liquidation_price = None
+    liquidation_buffer = None
+    leverage_rejections = []
 
     for lev in leverage_candidates:
         required = notional / lev
-        if required <= cash_balance:
-            chosen_leverage = lev
-            margin_required = required
-            break
+        liq_price = approximate_liquidation_price(side, entry, lev)
+
+        if liq_price is None:
+            leverage_rejections.append({
+                "leverage": lev,
+                "reason": "INVALID_LIQUIDATION_MODEL"
+            })
+            continue
+
+        if required > cash_balance:
+            leverage_rejections.append({
+                "leverage": lev,
+                "reason": "MARGIN_EXCEEDS_AVAILABLE_CAPITAL",
+                "margin_required": round(required, 8),
+            })
+            continue
+
+        if not is_liquidation_safely_beyond_stop(side, stop, liq_price, entry):
+            leverage_rejections.append({
+                "leverage": lev,
+                "reason": "LIQUIDATION_TOO_CLOSE_TO_STOP",
+                "liquidation_price": round(liq_price, 8),
+                "liquidation_buffer_pct": round(liquidation_buffer_pct(side, stop, liq_price, entry), 6),
+            })
+            continue
+
+        chosen_leverage = lev
+        margin_required = required
+        liquidation_price = liq_price
+        liquidation_buffer = liquidation_buffer_pct(side, stop, liq_price, entry)
+        break
 
     if chosen_leverage is None:
+        rejection_codes = [x["reason"] for x in leverage_rejections] or ["NO_VALID_LEVERAGE_FOUND"]
+
+        primary_reason = (
+            "LIQUIDATION_CONSTRAINT_OR_MARGIN_EXCEEDED"
+            if any(x["reason"] == "LIQUIDATION_TOO_CLOSE_TO_STOP" for x in leverage_rejections)
+            else "MARGIN_EXCEEDS_AVAILABLE_CAPITAL"
+        )
+
         return {
             "ok": True,
             "approved": False,
-            "reason_codes": ["MARGIN_EXCEEDS_AVAILABLE_CAPITAL"]
+            "reason_codes": [primary_reason],
+            "leverage_rejections": leverage_rejections,
         }
 
     return {
@@ -217,6 +295,8 @@ def plan_trade(payload: dict):
         "leverage": round(chosen_leverage, 8),
         "margin_required": round(margin_required, 8),
         "minimum_notional_required": round(minimum_notional_required, 8),
+        "liquidation_price_estimate": round(liquidation_price, 8) if liquidation_price is not None else None,
+        "liquidation_buffer_pct": round(liquidation_buffer, 6) if liquidation_buffer is not None else None,
         "reason_codes": []
     }
 

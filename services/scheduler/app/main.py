@@ -385,7 +385,7 @@ def ingest_equity_snapshot_to_evaluator(status_payload: dict):
         "equity": status_payload["equity"],
         "realized_pnl": status_payload["realized_pnl"],
         "unrealized_pnl": status_payload["unrealized_pnl"],
-        "fees_paid_total": 0.0,
+        "fees_paid_total": status_payload.get("fees_paid_total", 0.0),
         "trading_enabled": status_payload["trading_enabled"],
         "manual_halt": status_payload["manual_halt"],
         "daily_kill_switch": status_payload["daily_kill_switch"],
