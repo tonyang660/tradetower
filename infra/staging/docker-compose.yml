@@ -174,7 +174,15 @@ services:
       - ../env/staging.env
     environment:
       - FEATURE_FACTORY_BASE_URL=http://feature-factory:8080
-      - STRICT_SCORE_THRESHOLD=75
+      - STRICT_SCORE_THRESHOLD=68
+      - TRADE_SCORE_THRESHOLD=68
+      - OBSERVE_SCORE_THRESHOLD=55
+      - MACRO_NEUTRAL_PENALTY=8
+      - MACRO_TRANSITION_PENALTY=15
+      - REGIME_TRANSITION_CAP=72
+      - REGIME_CHOP_CAP=62
+      - REGIME_RANGE_TREND_CAP=58
+      - REGIME_TREND_MEAN_REVERSION_CAP=52
     ports:
       - "8111:8080"
 
