@@ -580,6 +580,9 @@ def build_cycle_summary_strip(cycle: dict | None):
         "maintenance_actions_triggered": int(maintenance.get("actions_triggered", 0) or 0),
         "candidates_found": candidates_found,
         "strategy_analyzed": int(strategy_engine.get("analyzed", 0) or 0),
+        "strategy_trade_candidates": int(strategy_engine.get("trade_candidates", strategy_engine.get("accepted", 0)) or 0),
+        "strategy_observe_candidates": int(strategy_engine.get("observe_candidates", 0) or 0),
+        "strategy_no_trade": int(strategy_engine.get("no_trade", 0) or 0),
         "strategy_accepted": int(strategy_engine.get("accepted", 0) or 0),
         "risk_approved": int(risk_engine.get("approved", 0) or 0),
         "paper_submitted": int(paper_execution.get("submitted", 0) or 0),
@@ -604,6 +607,10 @@ def build_pipeline_stages(cycle: dict | None):
     errors = summary.get("errors", []) or []
 
     candidates_found = len(candidate_filter.get("candidates", []) or [])
+    strategy_analyzed = int(strategy_engine.get("analyzed", 0) or 0)
+    strategy_trade_candidates = int(strategy_engine.get("trade_candidates", strategy_engine.get("accepted", 0)) or 0)
+    strategy_observe_candidates = int(strategy_engine.get("observe_candidates", 0) or 0)
+    strategy_no_trade = int(strategy_engine.get("no_trade", 0) or 0)
 
     stages = [
         {
@@ -637,9 +644,9 @@ def build_pipeline_stages(cycle: dict | None):
         {
             "key": "strategy_engine",
             "label": "Strategy Engine",
-            "status": "ok" if int(strategy_engine.get("analyzed", 0) or 0) > 0 else "idle",
-            "primary_value": int(strategy_engine.get("accepted", 0) or 0),
-            "secondary_text": f"{int(strategy_engine.get('analyzed', 0) or 0)} analyzed",
+            "status": "ok" if strategy_analyzed > 0 else "idle",
+            "primary_value": strategy_trade_candidates,
+            "secondary_text": f"{strategy_observe_candidates} observe · {strategy_analyzed} analyzed · {strategy_no_trade} no-trade",
         },
         {
             "key": "risk_engine",
@@ -691,6 +698,9 @@ def build_recent_cycle_card(cycle: dict):
         "refreshed_symbols_count": int(summary.get("refreshed_symbols_count", 0) or 0),
         "candidates_found": len(candidate_filter.get("candidates", []) or []),
         "strategy_analyzed": int(strategy_engine.get("analyzed", 0) or 0),
+        "strategy_trade_candidates": int(strategy_engine.get("trade_candidates", strategy_engine.get("accepted", 0)) or 0),
+        "strategy_observe_candidates": int(strategy_engine.get("observe_candidates", 0) or 0),
+        "strategy_no_trade": int(strategy_engine.get("no_trade", 0) or 0),
         "strategy_accepted": int(strategy_engine.get("accepted", 0) or 0),
         "paper_fills": int(paper_execution.get("fills", 0) or 0),
         "error_count": len(errors),
@@ -702,7 +712,8 @@ def build_cycle_trends(cycles: list[dict]):
     trend_cycles = list(reversed(cycles))
 
     candidates_per_cycle = []
-    accepted_per_cycle = []
+    trade_candidates_per_cycle = []
+    observe_per_cycle = []
     fills_per_cycle = []
     errors_per_cycle = []
 
@@ -719,9 +730,13 @@ def build_cycle_trends(cycles: list[dict]):
             "label": label,
             "value": len(candidate_filter.get("candidates", []) or []),
         })
-        accepted_per_cycle.append({
+        trade_candidates_per_cycle.append({
             "label": label,
-            "value": int(strategy_engine.get("accepted", 0) or 0),
+            "value": int(strategy_engine.get("trade_candidates", strategy_engine.get("accepted", 0)) or 0),
+        })
+        observe_per_cycle.append({
+            "label": label,
+            "value": int(strategy_engine.get("observe_candidates", 0) or 0),
         })
         fills_per_cycle.append({
             "label": label,
@@ -734,7 +749,8 @@ def build_cycle_trends(cycles: list[dict]):
 
     return {
         "candidates_per_cycle": candidates_per_cycle,
-        "accepted_per_cycle": accepted_per_cycle,
+        "trade_candidates_per_cycle": trade_candidates_per_cycle,
+        "observe_per_cycle": observe_per_cycle,
         "fills_per_cycle": fills_per_cycle,
         "errors_per_cycle": errors_per_cycle,
     }

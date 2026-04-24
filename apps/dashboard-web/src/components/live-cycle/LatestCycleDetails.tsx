@@ -103,8 +103,35 @@ export default function LatestCycleDetails({
           <div className="rounded-[24px] border border-white/8 bg-white/5 p-4">
             <div className="mb-4">
               <div className="text-xs uppercase tracking-[0.16em] text-white/35">Strategy Engine</div>
-              <div className="mt-2 text-sm text-white/55">
-                Analyzed: {strategyEngine.analyzed ?? 0} · Accepted: {strategyEngine.accepted ?? 0}
+
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-2xl border border-white/8 bg-white/4 p-3">
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-white/35">Analyzed</div>
+                  <div className="mt-2 text-xl font-semibold text-white">
+                    {strategyEngine.analyzed ?? 0}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-emerald-400/10 bg-emerald-500/6 p-3">
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-white/35">Trade Candidates</div>
+                  <div className="mt-2 text-xl font-semibold text-white">
+                    {strategyEngine.trade_candidates ?? strategyEngine.accepted ?? 0}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-violet-400/10 bg-violet-500/6 p-3">
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-white/35">Observe</div>
+                  <div className="mt-2 text-xl font-semibold text-white">
+                    {strategyEngine.observe_candidates ?? 0}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-white/8 bg-white/4 p-3">
+                  <div className="text-[11px] uppercase tracking-[0.14em] text-white/35">No Trade</div>
+                  <div className="mt-2 text-xl font-semibold text-white">
+                    {strategyEngine.no_trade ?? 0}
+                  </div>
+                </div>
               </div>
             </div>
 

@@ -14,6 +14,9 @@ export type RecentCycleCard = {
   refreshed_symbols_count: number;
   candidates_found: number;
   strategy_analyzed: number;
+  strategy_trade_candidates: number;
+  strategy_observe_candidates: number;
+  strategy_no_trade: number;
   strategy_accepted: number;
   paper_fills: number;
   error_count: number;
@@ -38,6 +41,9 @@ export type LiveCycleMonitorBootstrap = {
     maintenance_actions_triggered: number;
     candidates_found: number;
     strategy_analyzed: number;
+    strategy_trade_candidates: number;
+    strategy_observe_candidates: number;
+    strategy_no_trade: number;
     strategy_accepted: number;
     risk_approved: number;
     paper_submitted: number;
@@ -48,7 +54,9 @@ export type LiveCycleMonitorBootstrap = {
   recent_cycles: RecentCycleCard[];
   trends: {
     candidates_per_cycle: { label: string; value: number }[];
-    accepted_per_cycle: { label: string; value: number }[];
+    trade_candidates_per_cycle?: { label: string; value: number }[];
+    observe_per_cycle?: { label: string; value: number }[];
+    accepted_per_cycle?: { label: string; value: number }[];
     fills_per_cycle: { label: string; value: number }[];
     errors_per_cycle: { label: string; value: number }[];
   };

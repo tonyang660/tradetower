@@ -27,13 +27,15 @@ export default function CycleSummaryStrip({
     refreshed_symbols_count: number;
     candidates_found: number;
     strategy_analyzed: number;
-    strategy_accepted: number;
+    strategy_trade_candidates: number;
+    strategy_observe_candidates: number;
+    strategy_no_trade: number;
     paper_fills: number;
     error_count: number;
   };
 }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-7">
       <SummaryMiniCard
         label="Cycle ID"
         value={summary.cycle_id.slice(11, 19)}
@@ -57,11 +59,16 @@ export default function CycleSummaryStrip({
       <SummaryMiniCard
         label="Analyzed"
         value={String(summary.strategy_analyzed)}
-        hint="Strategy analyzed"
+        hint={`${summary.strategy_no_trade} no-trade`}
       />
       <SummaryMiniCard
-        label="Accepted · Fills"
-        value={`${summary.strategy_accepted} · ${summary.paper_fills}`}
+        label="Trade · Observe"
+        value={`${summary.strategy_trade_candidates} · ${summary.strategy_observe_candidates}`}
+        hint="Strategy output split"
+      />
+      <SummaryMiniCard
+        label="Fills"
+        value={String(summary.paper_fills)}
         hint={summary.error_count > 0 ? `${summary.error_count} errors` : "No errors"}
       />
     </div>

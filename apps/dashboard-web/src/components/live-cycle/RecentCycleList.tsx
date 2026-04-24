@@ -20,7 +20,7 @@ export default function RecentCycleList({
           cycles.map((cycle) => (
             <div
               key={cycle.cycle_id}
-              className="grid gap-3 rounded-2xl border border-white/8 bg-white/5 p-4 text-sm text-white/60 transition hover:bg-white/7 xl:grid-cols-[1.2fr_repeat(6,0.7fr)]"
+              className="grid gap-3 rounded-2xl border border-white/8 bg-white/5 p-4 text-sm text-white/60 transition hover:bg-white/7 xl:grid-cols-[1.2fr_repeat(7,0.7fr)]"
             >
               <div>
                 <div className="font-medium text-white">{cycle.cycle_id}</div>
@@ -50,8 +50,15 @@ export default function RecentCycleList({
               </div>
 
               <div>
-                <div className="text-white/40">Accepted</div>
-                <div className="mt-1 text-white">{cycle.strategy_accepted}</div>
+                <div className="text-white/40">Trade</div>
+                <div className="mt-1 text-white">
+                  {cycle.strategy_trade_candidates ?? cycle.strategy_accepted}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-white/40">Observe</div>
+                <div className="mt-1 text-white">{cycle.strategy_observe_candidates ?? 0}</div>
               </div>
 
               <div>

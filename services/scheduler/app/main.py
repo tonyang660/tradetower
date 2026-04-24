@@ -396,6 +396,9 @@ def run_one_cycle():
 
         "strategy_engine": {
             "analyzed": 0,
+            "trade_candidates": 0,
+            "observe_candidates": 0,
+            "no_trade": 0,
             "accepted": 0,
             "results": []
         },
@@ -564,9 +567,23 @@ def run_one_cycle():
             if not strategy_result.get("ok", False):
                 continue
 
-            if strategy_result.get("decision") == "no_trade":
+            decision = str(strategy_result.get("decision", "no_trade")).lower()
+
+            if decision == "no_trade":
+                summary["strategy_engine"]["no_trade"] += 1
                 continue
 
+            if decision == "observe":
+                summary["strategy_engine"]["observe_candidates"] += 1
+                continue
+
+            if decision not in ("long", "short"):
+                summary["errors"].append(
+                    f"unexpected_strategy_decision_for_{symbol}: {decision}"
+                )
+                continue
+
+            summary["strategy_engine"]["trade_candidates"] += 1
             summary["strategy_engine"]["accepted"] += 1
 
             # Phase 7: risk-engine
@@ -582,7 +599,10 @@ def run_one_cycle():
                 })
                 continue
 
-            summary["risk_engine"]["results"].append(risk_result)
+            summary["risk_engine"]["results"].append({
+                "symbol": symbol,
+                **risk_result
+            })
 
             if not risk_result.get("approved", False):
                 continue
@@ -601,7 +621,10 @@ def run_one_cycle():
                 })
                 continue
 
-            summary["final_entry_gate"]["results"].append(final_gate)
+            summary["final_entry_gate"]["results"].append({
+                "symbol": symbol,
+                **final_gate
+            })
 
             if not final_gate.get("trade_allowed", False):
                 summary["final_entry_gate"]["blocked"] += 1
@@ -613,6 +636,8 @@ def run_one_cycle():
             if paper_error:
                 summary["paper_execution"]["results"].append({
                     "symbol": symbol,
+                    "decision": strategy_result.get("decision"),
+                    "selected_strategy": strategy_result.get("selected_strategy"),
                     "ok": False,
                     "error": paper_error
                 })
@@ -624,7 +649,10 @@ def run_one_cycle():
             if action == "ENTRY_FILLED":
                 summary["paper_execution"]["fills"] += 1
 
-            summary["paper_execution"]["results"].append(paper_result)
+            summary["paper_execution"]["results"].append({
+                "symbol": symbol,
+                **paper_result
+            })
 
     except Exception as e:
         summary["ok"] = False
