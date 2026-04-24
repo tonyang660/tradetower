@@ -117,12 +117,23 @@ export default function OverviewPage() {
     const micro = data.overview.micro_metrics;
     const perf = data.performance_summary.performance;
     const latestCycle = data.latest_cycle.cycle?.summary ?? data.overview.latest_cycle?.summary ?? {};
+    const openPositions = data.overview.open_positions ?? [];
+
+    const usedMargin = openPositions.reduce((acc, pos) => {
+      const value =
+        typeof pos?.margin_used === "number" && Number.isFinite(pos.margin_used)
+          ? pos.margin_used
+          : 0;
+      return acc + value;
+    }, 0);
 
     return {
       equity: account.equity,
       cash: account.cash_balance,
       realized: account.realized_pnl,
       unrealized: account.unrealized_pnl,
+      feesPaid: account.fees_paid_total ?? perf.fees_paid_total ?? 0,
+      usedMargin,
       openPositions: micro.open_positions_count,
       dailyPnl: micro.daily_pnl,
       dailyWinRate: micro.daily_win_rate,
@@ -288,11 +299,37 @@ export default function OverviewPage() {
         </GlassCard>
       </div>
 
-      <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Live Equity" value={formatMoney(summary.equity)} hint="Current account equity" />
-        <MetricCard label="Cash Balance" value={formatMoney(summary.cash)} hint="Available cash balance" />
-        <MetricCard label="Realized PnL" value={formatMoney(summary.realized)} hint="Closed profit and loss" />
-        <MetricCard label="Open Positions" value={String(summary.openPositions)} hint="Currently active positions" />
+      <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-6">
+        <MetricCard
+          label="Live Equity"
+          value={formatMoney(summary.equity)}
+          hint="Total account value"
+        />
+        <MetricCard
+          label="Cash Balance"
+          value={formatMoney(summary.cash)}
+          hint="Available free cash"
+        />
+        <MetricCard
+          label="Used Margin"
+          value={formatMoney(summary.usedMargin)}
+          hint="Reserved capital in open positions"
+        />
+        <MetricCard
+          label="Fees Paid"
+          value={formatMoney(summary.feesPaid)}
+          hint="Cumulative execution costs"
+        />
+        <MetricCard
+          label="Realized PnL"
+          value={formatMoney(summary.realized)}
+          hint="Closed profit and loss"
+        />
+        <MetricCard
+          label="Open Positions"
+          value={String(summary.openPositions)}
+          hint="Currently active positions"
+        />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.6fr_1fr]">
@@ -303,12 +340,28 @@ export default function OverviewPage() {
 
         <div className="space-y-6">
           <GlassCard>
-            <SectionTitle title="Micro Metrics" subtitle="Today’s operating metrics" />
+            <SectionTitle title="Micro Metrics" subtitle="Realized trade activity for today" />
             <div className="grid grid-cols-2 gap-3">
-              <MetricCard label="Daily PnL" value={formatMoney(summary.dailyPnl)} />
-              <MetricCard label="Daily Win Rate" value={`${summary.dailyWinRate.toFixed(2)}%`} />
-              <MetricCard label="Daily Completed Trades" value={String(data.overview.micro_metrics.daily_completed_trades)} />
-              <MetricCard label="Total Trades" value={String(summary.completedTrades)} />
+              <MetricCard
+                label="Daily PnL"
+                value={formatMoney(summary.dailyPnl)}
+                hint="Realized only"
+              />
+              <MetricCard
+                label="Daily Win Rate"
+                value={`${summary.dailyWinRate.toFixed(2)}%`}
+                hint="Closed trades only"
+              />
+              <MetricCard
+                label="Daily Completed Trades"
+                value={String(data.overview.micro_metrics.daily_completed_trades)}
+                hint="Fully closed today"
+              />
+              <MetricCard
+                label="Total Trades"
+                value={String(summary.completedTrades)}
+                hint="Closed trade history"
+              />
             </div>
           </GlassCard>
 
