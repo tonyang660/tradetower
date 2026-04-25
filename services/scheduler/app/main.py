@@ -35,7 +35,7 @@ REFRESH_LIMIT = 72
 
 MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST = os.getenv("MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST", "true").lower() == "true"
 
-ENTRY_RETRY_MAX_ATTEMPTS = int(os.getenv("ENTRY_RETRY_MAX_ATTEMPTS", "2"))
+ENTRY_RETRY_MAX_ATTEMPTS = int(os.getenv("ENTRY_RETRY_MAX_ATTEMPTS", "4"))
 PENDING_ENTRY_ORDERS = {}
 
 def iso_now():
@@ -266,9 +266,6 @@ def build_risk_payload_from_strategy(account_id: int, strategy_result: dict):
         "entry_order_type": strategy_result["entry_order_type"],
         "entry_price": strategy_result["entry_price"],
         "stop_loss": strategy_result["stop_loss"],
-        "tp1_price": strategy_result["tp1_price"],
-        "tp2_price": strategy_result["tp2_price"],
-        "tp3_price": strategy_result["tp3_price"],
     }
 
 
@@ -299,9 +296,6 @@ def build_paper_execution_payload(account_id: int, strategy_result: dict, risk_r
         "order_type": strategy_result["entry_order_type"],
         "entry_price": strategy_result["entry_price"],
         "stop_loss": strategy_result["stop_loss"],
-        "tp1_price": strategy_result["tp1_price"],
-        "tp2_price": strategy_result["tp2_price"],
-        "tp3_price": strategy_result["tp3_price"],
     }
 
     if isinstance(risk_result, dict):

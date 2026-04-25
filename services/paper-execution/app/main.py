@@ -122,9 +122,19 @@ def send_execution_to_guardian(execution_event: dict):
             json=execution_event,
             timeout=15
         )
+    except Exception as e:
+        return None, f"trade_guardian_execution_apply_failed: {str(e)}"
+
+    try:
         payload = r.json()
-    except Exception:
-        return None, "trade_guardian_request_failed"
+    except Exception as e:
+        return None, f"trade_guardian_invalid_json_response: {str(e)}"
+
+    if r.status_code != 200:
+        return None, f"trade_guardian_http_{r.status_code}: {payload}"
+
+    if not payload.get("ok", False):
+        return None, f"trade_guardian_apply_rejected: {payload}"
 
     return payload, None
 
@@ -132,6 +142,11 @@ def send_execution_to_guardian(execution_event: dict):
 def candle_touches_limit(candle: dict, price: float) -> bool:
     return float(candle["low"]) <= price <= float(candle["high"])
 
+def recent_candles_touch_limit(candles: list[dict], price: float) -> bool:
+    for candle in candles:
+        if candle_touches_limit(candle, price):
+            return True
+    return False
 
 def execute_market_entry(
     account_id: int,
@@ -192,14 +207,12 @@ def simulate_entry(payload: dict):
     attempt_number = int(payload.get("attempt_number", 1))
     max_attempts = int(payload.get("max_attempts", 2))
 
-    candles, error = fetch_recent_candles(symbol, "5m", limit=1)
+    candles, error = fetch_recent_candles(symbol, "5m", limit=3)
     if error:
         return {"ok": False, "error": error}
 
-    candle = candles[-1]
-
     if order_type == "limit":
-        if candle_touches_limit(candle, entry_price):
+        if recent_candles_touch_limit(candles, entry_price):
             notional = entry_price * size
             fee_paid = calc_fee(notional, LIMIT_FEE_PCT)
 

@@ -48,9 +48,6 @@ def validate_proposal(payload: dict):
     try:
         entry = float(payload["entry_price"])
         stop = float(payload["stop_loss"])
-        tp1 = float(payload["tp1_price"])
-        tp2 = float(payload["tp2_price"])
-        tp3 = float(payload["tp3_price"])
     except Exception:
         return ["INVALID_NUMERIC_FIELDS"]
 
@@ -63,14 +60,10 @@ def validate_proposal(payload: dict):
     if side == "long":
         if not (stop < entry):
             reason_codes.append("INVALID_STOP_LOSS")
-        if not (tp1 > entry and tp2 > tp1 and tp3 > tp2):
-            reason_codes.append("INVALID_TP_LADDER")
 
     elif side == "short":
         if not (stop > entry):
             reason_codes.append("INVALID_STOP_LOSS")
-        if not (tp1 < entry and tp2 < tp1 and tp3 < tp2):
-            reason_codes.append("INVALID_TP_LADDER")
 
     return reason_codes
 
@@ -81,6 +74,28 @@ def compute_stop_distance(side: str, entry: float, stop: float) -> float:
     if side == "short":
         return stop - entry
     return 0.0
+
+def build_tp_ladder(side: str, entry: float, stop: float):
+    risk_unit = abs(entry - stop)
+
+    if risk_unit <= 0:
+        return None
+
+    if side == "long":
+        return {
+            "tp1_price": entry + (1.0 * risk_unit),
+            "tp2_price": entry + (2.0 * risk_unit),
+            "tp3_price": entry + (3.5 * risk_unit),
+        }
+
+    if side == "short":
+        return {
+            "tp1_price": entry - (1.0 * risk_unit),
+            "tp2_price": entry - (2.0 * risk_unit),
+            "tp3_price": entry - (3.5 * risk_unit),
+        }
+
+    return None
 
 def approximate_liquidation_price(side: str, entry: float, leverage: float) -> float | None:
     if leverage <= 0:
@@ -158,9 +173,6 @@ def plan_trade(payload: dict):
     entry_order_type = payload["entry_order_type"]
     entry = float(payload["entry_price"])
     stop = float(payload["stop_loss"])
-    tp1 = float(payload["tp1_price"])
-    tp2 = float(payload["tp2_price"])
-    tp3 = float(payload["tp3_price"])
     leverage_hint = payload.get("leverage_hint")
 
     guardian_status, g_error = fetch_guardian_status(account_id)
@@ -184,6 +196,14 @@ def plan_trade(payload: dict):
 
     risk_amount = equity * (MAX_RISK_PCT / 100.0)
     stop_distance = compute_stop_distance(side, entry, stop)
+
+    tp_ladder = build_tp_ladder(side, entry, stop)
+    if tp_ladder is None:
+        return {
+            "ok": True,
+            "approved": False,
+            "reason_codes": ["INVALID_TP_LADDER_BUILD"]
+        }
 
     if stop_distance <= 0:
         return {
@@ -284,9 +304,9 @@ def plan_trade(payload: dict):
         "entry_order_type": entry_order_type,
         "entry_price": round(entry, 8),
         "stop_loss": round(stop, 8),
-        "tp1_price": round(tp1, 8),
-        "tp2_price": round(tp2, 8),
-        "tp3_price": round(tp3, 8),
+        "tp1_price": round(tp_ladder["tp1_price"], 8),
+        "tp2_price": round(tp_ladder["tp2_price"], 8),
+        "tp3_price": round(tp_ladder["tp3_price"], 8),
         "risk_amount": round(risk_amount, 8),
         "risk_pct": MAX_RISK_PCT,
         "stop_distance": round(stop_distance, 8),

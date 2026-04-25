@@ -988,6 +988,256 @@ def apply_exit_balance_update(account_id: int, released_margin: float, realized_
             )
         conn.commit()
 
+def insert_execution_report_tx(cur, account_id: int, order_id, symbol: str, fill_price: float, filled_size: float,
+                               fee_paid: float, slippage_bps: float, notes: str | None,
+                               execution_type: str, position_side: str):
+    cur.execute(
+        """
+        INSERT INTO execution_reports (
+            order_id,
+            account_id,
+            symbol,
+            fill_price,
+            filled_size,
+            fee_paid,
+            slippage_bps,
+            execution_timestamp,
+            notes,
+            execution_type,
+            position_side
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, %s, %s)
+        RETURNING execution_id
+        """,
+        (
+            order_id,
+            account_id,
+            symbol,
+            fill_price,
+            filled_size,
+            fee_paid,
+            slippage_bps,
+            notes,
+            execution_type,
+            position_side,
+        ),
+    )
+    return int(cur.fetchone()[0])
+
+
+def create_open_position_tx(cur, account_id: int, symbol: str, position_side: str, size: float, entry_price: float,
+                            leverage: float, stop_loss: float, tp1_price: float, tp2_price: float,
+                            tp3_price: float, risk_amount: float):
+    margin_used = size * entry_price / leverage if leverage != 0 else size * entry_price
+
+    cur.execute(
+        """
+        INSERT INTO positions (
+            account_id,
+            symbol,
+            side,
+            size,
+            original_size,
+            remaining_size,
+            entry_price,
+            leverage,
+            margin_used,
+            stop_loss,
+            take_profit,
+            risk_amount,
+            tp1_price,
+            tp2_price,
+            tp3_price,
+            tp1_hit,
+            tp2_hit,
+            tp3_hit,
+            opened_at,
+            status
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, FALSE, FALSE, NOW(), 'open')
+        RETURNING position_id, margin_used
+        """,
+        (
+            account_id,
+            symbol,
+            position_side,
+            size,
+            size,
+            size,
+            entry_price,
+            leverage,
+            margin_used,
+            stop_loss,
+            tp3_price,
+            risk_amount,
+            tp1_price,
+            tp2_price,
+            tp3_price,
+        ),
+    )
+    row = cur.fetchone()
+    return int(row[0]), float(row[1])
+
+
+def create_order_record_tx(
+    cur,
+    account_id: int,
+    symbol: str,
+    side: str,
+    order_type: str,
+    requested_price: float | None,
+    requested_size: float,
+    status: str,
+    role: str,
+    linked_position_id: int | None = None,
+    stop_loss: float | None = None,
+    tp1: float | None = None,
+    tp2: float | None = None,
+    tp3: float | None = None,
+):
+    cur.execute(
+        """
+        INSERT INTO orders (
+            account_id,
+            symbol,
+            side,
+            order_type,
+            requested_price,
+            requested_size,
+            status,
+            role,
+            linked_position_id,
+            stop_loss,
+            tp1,
+            tp2,
+            tp3,
+            created_at,
+            updated_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+        RETURNING order_id
+        """,
+        (
+            account_id,
+            symbol,
+            side,
+            order_type,
+            requested_price,
+            requested_size,
+            status,
+            role,
+            linked_position_id,
+            stop_loss,
+            tp1,
+            tp2,
+            tp3,
+        ),
+    )
+    return int(cur.fetchone()[0])
+
+
+def create_protective_orders_for_position_tx(
+    cur,
+    account_id: int,
+    symbol: str,
+    position_side: str,
+    original_size: float,
+    stop_loss: float,
+    tp1_price: float,
+    tp2_price: float,
+    tp3_price: float,
+    linked_position_id: int,
+):
+    exit_side = opposite_order_side(position_side)
+
+    tp1_size = round(original_size * 0.40, 8)
+    tp2_size = round(original_size * 0.40, 8)
+    tp3_size = round(max(original_size - tp1_size - tp2_size, 0.0), 8)
+
+    return {
+        "stop_loss_order_id": create_order_record_tx(
+            cur=cur,
+            account_id=account_id,
+            symbol=symbol,
+            side=exit_side,
+            order_type="market",
+            requested_price=stop_loss,
+            requested_size=original_size,
+            status="submitted",
+            role="stop_loss",
+            linked_position_id=linked_position_id,
+            stop_loss=stop_loss,
+        ),
+        "tp1_order_id": create_order_record_tx(
+            cur=cur,
+            account_id=account_id,
+            symbol=symbol,
+            side=exit_side,
+            order_type="limit",
+            requested_price=tp1_price,
+            requested_size=tp1_size,
+            status="submitted",
+            role="tp1",
+            linked_position_id=linked_position_id,
+            tp1=tp1_price,
+        ),
+        "tp2_order_id": create_order_record_tx(
+            cur=cur,
+            account_id=account_id,
+            symbol=symbol,
+            side=exit_side,
+            order_type="limit",
+            requested_price=tp2_price,
+            requested_size=tp2_size,
+            status="submitted",
+            role="tp2",
+            linked_position_id=linked_position_id,
+            tp2=tp2_price,
+        ),
+        "tp3_order_id": create_order_record_tx(
+            cur=cur,
+            account_id=account_id,
+            symbol=symbol,
+            side=exit_side,
+            order_type="limit",
+            requested_price=tp3_price,
+            requested_size=tp3_size,
+            status="submitted",
+            role="tp3",
+            linked_position_id=linked_position_id,
+            tp3=tp3_price,
+        ),
+    }
+
+
+def apply_entry_balance_update_tx(cur, account_id: int, margin_used: float, fee_paid: float):
+    cur.execute(
+        """
+        UPDATE account_balances
+        SET cash_balance = cash_balance - %s - %s,
+            equity = equity - %s,
+            fees_paid_total = fees_paid_total + %s,
+            updated_at = NOW()
+        WHERE account_id = %s
+        """,
+        (margin_used, fee_paid, fee_paid, fee_paid, account_id),
+    )
+
+
+def insert_guardian_event_tx(cur, account_id: int, event_type: str, reason_code: str, details: dict | None = None):
+    cur.execute(
+        """
+        INSERT INTO guardian_events (account_id, event_type, reason_code, details_json, created_at)
+        VALUES (%s, %s, %s, %s::jsonb, NOW())
+        """,
+        (
+            account_id,
+            event_type,
+            reason_code,
+            json.dumps(details or {}),
+        ),
+    )
+
 def update_position_after_partial_exit(
     position_id: int,
     remaining_size: float,
@@ -1156,7 +1406,6 @@ def apply_execution_report(payload: dict):
             return {
                 "ok": False,
                 "error": "position_already_open",
-                "execution_id": execution_id
             }
 
         stop_loss = float(payload["stop_loss"])
@@ -1166,65 +1415,98 @@ def apply_execution_report(payload: dict):
         risk_amount = float(payload["risk_amount"])
         leverage = float(payload.get("leverage", 1.0))
 
-        position_id = create_open_position(
-            account_id=account_id,
-            symbol=symbol,
-            position_side=position_side,
-            size=filled_size,
-            entry_price=fill_price,
-            leverage=leverage,
-            stop_loss=stop_loss,
-            tp1_price=tp1_price,
-            tp2_price=tp2_price,
-            tp3_price=tp3_price,
-            risk_amount=risk_amount
-        )
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    execution_id = insert_execution_report_tx(
+                        cur=cur,
+                        account_id=account_id,
+                        order_id=order_id,
+                        symbol=symbol,
+                        fill_price=fill_price,
+                        filled_size=filled_size,
+                        fee_paid=fee_paid,
+                        slippage_bps=slippage_bps,
+                        notes=notes,
+                        execution_type=execution_type,
+                        position_side=position_side,
+                    )
 
-        protective_orders = create_protective_orders_for_position(
-            account_id=account_id,
-            symbol=symbol,
-            position_side=position_side,
-            original_size=filled_size,
-            stop_loss=stop_loss,
-            tp1_price=tp1_price,
-            tp2_price=tp2_price,
-            tp3_price=tp3_price,
-            linked_position_id=position_id,
-        )
+                    position_id, position_margin_used = create_open_position_tx(
+                        cur=cur,
+                        account_id=account_id,
+                        symbol=symbol,
+                        position_side=position_side,
+                        size=filled_size,
+                        entry_price=fill_price,
+                        leverage=leverage,
+                        stop_loss=stop_loss,
+                        tp1_price=tp1_price,
+                        tp2_price=tp2_price,
+                        tp3_price=tp3_price,
+                        risk_amount=risk_amount,
+                    )
 
-        position_margin_used = (filled_size * fill_price / leverage) if leverage != 0 else (filled_size * fill_price)
-        apply_entry_balance_update(account_id, position_margin_used, fee_paid)
+                    protective_orders = create_protective_orders_for_position_tx(
+                        cur=cur,
+                        account_id=account_id,
+                        symbol=symbol,
+                        position_side=position_side,
+                        original_size=filled_size,
+                        stop_loss=stop_loss,
+                        tp1_price=tp1_price,
+                        tp2_price=tp2_price,
+                        tp3_price=tp3_price,
+                        linked_position_id=position_id,
+                    )
 
-        insert_guardian_event(
-            account_id,
-            "POSITION_OPENED",
-            "ENTRY_FILLED",
-            {
-                "symbol": symbol,
-                "position_id": position_id,
+                    apply_entry_balance_update_tx(
+                        cur=cur,
+                        account_id=account_id,
+                        margin_used=position_margin_used,
+                        fee_paid=fee_paid,
+                    )
+
+                    insert_guardian_event_tx(
+                        cur=cur,
+                        account_id=account_id,
+                        event_type="POSITION_OPENED",
+                        reason_code="ENTRY_FILLED",
+                        details={
+                            "symbol": symbol,
+                            "position_id": position_id,
+                            "execution_id": execution_id,
+                            "position_side": position_side,
+                            "fill_price": fill_price,
+                            "filled_size": filled_size,
+                            "fee_paid": fee_paid,
+                            "execution_type": execution_type,
+                            "order_type": order_type,
+                            "risk_amount": risk_amount,
+                            "stop_loss": stop_loss,
+                            "tp1_price": tp1_price,
+                            "tp2_price": tp2_price,
+                            "tp3_price": tp3_price,
+                            "protective_orders": protective_orders,
+                        },
+                    )
+
+                conn.commit()
+
+            return {
+                "ok": True,
+                "action": "position_opened",
                 "execution_id": execution_id,
-                "position_side": position_side,
-                "fill_price": fill_price,
-                "filled_size": filled_size,
-                "fee_paid": fee_paid,
-                "execution_type": execution_type,
-                "order_type": order_type,
-                "risk_amount": risk_amount,
-                "stop_loss": stop_loss,
-                "tp1_price": tp1_price,
-                "tp2_price": tp2_price,
-                "tp3_price": tp3_price,
+                "position_id": position_id,
                 "protective_orders": protective_orders,
             }
-        )
 
-        return {
-            "ok": True,
-            "action": "position_opened",
-            "execution_id": execution_id,
-            "position_id": position_id,
-            "protective_orders": protective_orders,
-        }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": "entry_apply_failed",
+                "details": str(e),
+            }
 
     # Maintenance actions below must have an open position
     if open_position is None:
