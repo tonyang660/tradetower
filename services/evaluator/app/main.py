@@ -1332,7 +1332,7 @@ def get_decision_funnel(account_id: int):
                 SELECT
                     COUNT(*),
                     COALESCE(SUM(CASE WHEN candidate_score IS NOT NULL THEN 1 ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN final_decision = 'no_trade' THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN final_decision IN ('no_trade', 'observe') THEN 1 ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN risk_approved = TRUE THEN 1 ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN guardian_allowed = TRUE THEN 1 ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN paper_submitted = TRUE THEN 1 ELSE 0 END), 0),

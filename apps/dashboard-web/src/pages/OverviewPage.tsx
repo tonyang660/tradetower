@@ -376,7 +376,7 @@ export default function OverviewPage() {
               {[
                 ["Decision Rows", data?.decision_funnel?.funnel?.decision_rows],
                 ["Candidates Seen", data?.decision_funnel?.funnel?.candidate_filter_seen],
-                ["No Trade", data?.decision_funnel?.funnel?.no_trade],
+                ["No Action", data?.decision_funnel?.funnel?.no_trade],
                 ["Risk Approved", data?.decision_funnel?.funnel?.risk_approved],
                 ["Submitted", data?.decision_funnel?.funnel?.paper_submitted],
                 ["Filled", data?.decision_funnel?.funnel?.filled],
