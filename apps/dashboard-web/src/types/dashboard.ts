@@ -4,6 +4,7 @@ export type BootstrapOverview = {
   generated_at: string;
   market_banner: {
     current_utc_time: string;
+    active_session?: string | null;
     active_sessions?: string[];
     overlap_count?: number;
     is_weekend?: boolean;
@@ -26,10 +27,18 @@ export type BootstrapOverview = {
     maintenance_remains_active: boolean;
   };
   scheduler_health?: {
+    ok?: boolean;
+    service?: string;
+    timestamp?: string;
     auto_loop_enabled?: boolean;
+    auto_loop_default?: boolean;
     loop_interval_seconds?: number;
+    paper_execution_entry_path?: string;
   };
   overview: {
+    ok?: boolean;
+    account_id?: number;
+    overview_generated_at?: string;
     account_status: {
       account_name: string;
       equity: number;
@@ -66,6 +75,8 @@ export type BootstrapOverview = {
     } | null;
   };
   performance_summary: {
+    ok?: boolean;
+    account_id?: number;
     performance: {
       completed_trades: number;
       net_realized_pnl: number;
@@ -77,16 +88,20 @@ export type BootstrapOverview = {
       worst_trade: number;
       fees_paid_total: number;
     };
-  };
+  } | null;
   latest_cycle: {
+    ok?: boolean;
+    account_id?: number;
     cycle: {
       cycle_id: string;
       started_at: string;
       completed_at: string | null;
       summary: Record<string, any>;
     } | null;
-  };
+  } | null;
   decision_funnel: {
+    ok?: boolean;
+    account_id?: number;
     funnel: {
       decision_rows: number;
       candidate_filter_seen: number;
@@ -96,6 +111,6 @@ export type BootstrapOverview = {
       paper_submitted: number;
       filled: number;
     };
-  };
+  } | null;
   errors: Array<Record<string, unknown>>;
 };

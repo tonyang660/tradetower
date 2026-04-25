@@ -26,6 +26,16 @@ export type RecentCycleCard = {
   summary: Record<string, any>;
 };
 
+export type MaintenanceResultItem = {
+  symbol: string;
+  ok: boolean;
+  action?: string;
+  stage?: string;
+  error?: string;
+  execution_event?: Record<string, unknown>;
+  guardian_result?: Record<string, unknown>;
+};
+
 export type LiveCycleMonitorBootstrap = {
   ok: boolean;
   account_id: number;

@@ -115,9 +115,14 @@ export default function OverviewPage() {
 
     const account = data.overview.account_status;
     const micro = data.overview.micro_metrics;
-    const perf = data.performance_summary.performance;
-    const latestCycle = data.latest_cycle.cycle?.summary ?? data.overview.latest_cycle?.summary ?? {};
+    const perf: PerformanceData = data?.performance_summary?.performance ?? {};
+    const latestCycle = data?.latest_cycle?.cycle?.summary ?? data?.overview?.latest_cycle?.summary ?? {};
     const openPositions = data.overview.open_positions ?? [];
+
+    interface PerformanceData {
+      fees_paid_total?: number;
+      completed_trades?: number;
+    }
 
     const usedMargin = openPositions.reduce((acc, pos) => {
       const value =
@@ -369,16 +374,19 @@ export default function OverviewPage() {
             <SectionTitle title="Decision Funnel" subtitle="Current evaluator decision flow totals" />
             <div className="grid grid-cols-2 gap-3 text-sm">
               {[
-                ["Decision Rows", data.decision_funnel.funnel.decision_rows],
-                ["Candidates Seen", data.decision_funnel.funnel.candidate_filter_seen],
-                ["No Trade", data.decision_funnel.funnel.no_trade],
-                ["Risk Approved", data.decision_funnel.funnel.risk_approved],
-                ["Submitted", data.decision_funnel.funnel.paper_submitted],
-                ["Filled", data.decision_funnel.funnel.filled],
+                ["Decision Rows", data?.decision_funnel?.funnel?.decision_rows],
+                ["Candidates Seen", data?.decision_funnel?.funnel?.candidate_filter_seen],
+                ["No Trade", data?.decision_funnel?.funnel?.no_trade],
+                ["Risk Approved", data?.decision_funnel?.funnel?.risk_approved],
+                ["Submitted", data?.decision_funnel?.funnel?.paper_submitted],
+                ["Filled", data?.decision_funnel?.funnel?.filled],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-2xl border border-white/8 bg-white/5 p-3">
                   <div className="text-white/45">{label}</div>
-                  <div className="mt-1 text-xl font-semibold text-white">{String(value)}</div>
+                  {/* Fallback to '0' or 'N/A' if value is null/undefined */}
+                  <div className="mt-1 text-xl font-semibold text-white">
+                    {value?.toLocaleString() ?? "N/A"}
+                  </div>
                 </div>
               ))}
             </div>

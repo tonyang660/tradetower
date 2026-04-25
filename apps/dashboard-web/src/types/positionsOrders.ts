@@ -16,6 +16,7 @@ export type OpenPosition = {
   margin_used?: number | null;
   unrealized_pnl?: number | null;
   unrealized_pnl_pct?: number | null;
+  pnl_pct_on_margin?: number | null;
   fees_paid?: number | null;
 
   opened_at?: string | null;
@@ -41,6 +42,9 @@ export type OpenPositionsResponse = {
   items?: OpenPosition[];
   count?: number;
   account_status?: {
+    account_id?: number;
+    account_name?: string;
+    is_active?: boolean;
     equity?: number;
     cash_balance?: number;
     realized_pnl?: number;
@@ -51,8 +55,18 @@ export type OpenPositionsResponse = {
     manual_halt?: boolean;
     daily_kill_switch?: boolean;
     weekly_kill_switch?: boolean;
+    max_concurrent_positions?: number;
+    daily_loss_limit_pct?: number;
+    weekly_loss_limit_pct?: number;
+    daily_basis_equity?: number;
+    weekly_basis_equity?: number;
+    daily_basis_date?: string;
+    weekly_basis_start?: string;
+    weekly_kill_switch_expires_at?: string | null;
   };
-  pricing_errors?: Array<string | Record<string, unknown>>;
+  pricing_errors?: Array<
+    string | { symbol?: string; error?: string; [key: string]: unknown }
+  >;
 };
 
 export type RecentClosedPosition = {
@@ -102,14 +116,6 @@ export type PositionsAnalytics = {
   biggest_loser_pnl: number | null;
 };
 
-export type PositionsOrdersViewModel = {
-  openPositions: OpenPosition[];
-  recentClosed: RecentClosedPosition[];
-  workingOrders: WorkingOrder[];
-  analytics: PositionsAnalytics;
-  exposureSegments: ExposureRibbonSegment[];
-};
-
 export type WorkingOrderRole =
   | "entry"
   | "stop_loss"
@@ -154,4 +160,12 @@ export type OpenOrdersResponse = {
   account_id: number;
   count: number;
   items: WorkingOrder[];
+};
+
+export type PositionsOrdersViewModel = {
+  openPositions: (OpenPosition & { pnl_pct_on_margin?: number })[];
+  recentClosed: RecentClosedPosition[];
+  workingOrders: WorkingOrder[];
+  analytics: PositionsAnalytics;
+  exposureSegments: ExposureRibbonSegment[];
 };
