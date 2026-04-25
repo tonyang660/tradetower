@@ -9,6 +9,7 @@ import ServiceHealthGrid from "../components/system-health/ServiceHealthGrid";
 import AvailabilityTimelinePanel from "../components/system-health/AvailabilityTimelinePanel";
 import FreshnessPanel from "../components/system-health/FreshnessPanel";
 import IssuesPanel from "../components/system-health/IssuesPanel";
+import OrderCycleStatusCard from "../components/positions-orders/OrderCycleStatusCard";
 
 export default function SystemHealthPage() {
   const [data, setData] = useState<SystemHealthBootstrapResponse | null>(null);
@@ -68,6 +69,21 @@ export default function SystemHealthPage() {
       </div>
 
       <SystemHealthSummaryStrip summary={data.summary_strip} />
+
+      {data.order_cycle ? (
+        <OrderCycleStatusCard
+          autoLoopEnabled={data.freshness.scheduler_auto_loop_enabled ?? false}
+          loopIntervalSeconds={data.freshness.scheduler_loop_interval_seconds ?? 300}
+          pendingEntryLoopIntervalSeconds={
+            data.order_cycle.pending_entry_loop_interval_seconds ?? 60
+          }
+          pendingEntryMaxAttempts={
+            data.order_cycle.pending_entry_max_attempts ?? 15
+          }
+          pendingEntriesCount={data.order_cycle.pending_entries_count ?? 0}
+          pendingEntries={data.order_cycle.pending_entries ?? []}
+        />
+      ) : null}      
 
       <OperationalFlowPanel nodes={data.dependency_flow} />
 

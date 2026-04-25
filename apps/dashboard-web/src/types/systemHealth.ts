@@ -58,6 +58,9 @@ export type SystemHealthFreshness = {
   last_cycle_age_seconds: number | null;
   scheduler_auto_loop_enabled: boolean | null;
   scheduler_loop_interval_seconds: number | null;
+  pending_entry_loop_interval_seconds?: number | null;
+  pending_entry_max_attempts?: number | null;
+  pending_entries_count?: number | null;
 };
 
 export type SystemHealthIssue = {
@@ -80,4 +83,17 @@ export type SystemHealthBootstrapResponse = {
   freshness: SystemHealthFreshness;
   issues: SystemHealthIssue[];
   errors: Array<Record<string, unknown>>;
+  order_cycle?: {
+    pending_entry_loop_interval_seconds?: number | null;
+    pending_entry_max_attempts?: number | null;
+    pending_entries_count?: number | null;
+    pending_entries?: Array<{
+      symbol: string;
+      attempt_number: number;
+      updated_at?: string;
+      order_type?: string;
+      position_side?: string;
+      entry_price?: number;
+    }>;
+  };
 };

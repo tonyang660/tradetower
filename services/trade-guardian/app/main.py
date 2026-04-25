@@ -538,28 +538,35 @@ def fetch_open_position_for_api(account_id: int, symbol: str):
 def fetch_all_open_positions(account_id: int):
     query = """
     SELECT
-        position_id,
-        account_id,
-        symbol,
-        side,
-        original_size,
-        remaining_size,
-        entry_price,
-        leverage,
-        margin_used,
-        stop_loss,
-        tp1_price,
-        tp2_price,
-        tp3_price,
-        tp1_hit,
-        tp2_hit,
-        tp3_hit,
-        opened_at,
-        status
-    FROM positions
-    WHERE account_id = %s
-      AND status = 'open'
-    ORDER BY opened_at ASC
+        p.position_id,
+        p.account_id,
+        p.symbol,
+        p.side,
+        p.original_size,
+        p.remaining_size,
+        p.entry_price,
+        p.leverage,
+        p.margin_used,
+        p.stop_loss,
+        p.tp1_price,
+        p.tp2_price,
+        p.tp3_price,
+        p.tp1_hit,
+        p.tp2_hit,
+        p.tp3_hit,
+        p.opened_at,
+        p.status,
+        COALESCE((
+            SELECT SUM(er.fee_paid)
+            FROM execution_reports er
+            WHERE er.account_id = p.account_id
+            AND er.symbol = p.symbol
+            AND er.execution_timestamp >= p.opened_at
+        ), 0)
+    FROM positions p
+    WHERE p.account_id = %s
+    AND p.status = 'open'
+    ORDER BY p.opened_at ASC
     """
 
     with get_conn() as conn:
@@ -579,15 +586,16 @@ def fetch_all_open_positions(account_id: int):
             "entry_price": float(row[6]),
             "leverage": float(row[7]),
             "margin_used": float(row[8]) if row[8] is not None else 0.0,
-            "stop_loss": float(row[9]) if row[8] is not None else None,
-            "tp1_price": float(row[10]) if row[9] is not None else None,
-            "tp2_price": float(row[11]) if row[10] is not None else None,
-            "tp3_price": float(row[12]) if row[11] is not None else None,
+            "stop_loss": float(row[9]) if row[9] is not None else None,
+            "tp1_price": float(row[10]) if row[10] is not None else None,
+            "tp2_price": float(row[11]) if row[11] is not None else None,
+            "tp3_price": float(row[12]) if row[12] is not None else None,
             "tp1_hit": row[13],
             "tp2_hit": row[14],
             "tp3_hit": row[15],
             "opened_at": row[16].isoformat().replace("+00:00", "Z") if row[15] else None,
             "status": row[17],
+            "fees_paid": float(row[18]) if row[18] is not None else 0.0,
         })
 
     return results

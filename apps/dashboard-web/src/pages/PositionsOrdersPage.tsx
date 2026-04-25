@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCcw } from "lucide-react";
 import { buildPositionsOrdersViewModel } from "../lib/positionsOrders";
-import { fetchOpenPositions, fetchRecentClosedPositions, fetchOpenOrders } from "../lib/api";
+import { fetchOpenPositions, fetchRecentClosedPositions, fetchOpenOrders, fetchConfigurationBootstrap } from "../lib/api";
+import type { ConfigurationBootstrapResponse } from "../types/configuration";
+
 import type {
   OpenPositionsResponse,
   RecentClosedPositionsResponse,
@@ -21,6 +23,7 @@ import ExposureRibbon from "../components/positions-orders/ExposureRibbon";
 import OpenPositionsPanel from "../components/positions-orders/OpenPositionsPanel";
 import WorkingOrdersPanel from "../components/positions-orders/WorkingOrdersPanel";
 import RecentClosedPositionsPanel from "../components/positions-orders/RecentClosedPositionsPanel";
+import OrderCycleStatusCard from "../components/positions-orders/OrderCycleStatusCard";
 
 export default function PositionsOrdersPage() {
   const [openPayload, setOpenPayload] = useState<OpenPositionsResponse | null>(null);
@@ -31,6 +34,7 @@ export default function PositionsOrdersPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [configurationBootstrap, setConfigurationBootstrap] = useState<ConfigurationBootstrapResponse | null>(null);
   const USE_MOCK_POSITIONS = false;
 
   async function load(showLoading = false, showRefreshing = false) {
@@ -54,15 +58,17 @@ export default function PositionsOrdersPage() {
         return;
       }
 
-      const [openRes, recentRes, ordersRes] = await Promise.all([
+      const [openRes, recentRes, ordersRes, configurationRes] = await Promise.all([
         fetchOpenPositions(1, true),
         fetchRecentClosedPositions(1, 20),
         fetchOpenOrders(1),
+        fetchConfigurationBootstrap(),
       ]);
 
       setOpenPayload(openRes);
       setRecentPayload(recentRes);
       setOrdersPayload(ordersRes);
+      setConfigurationBootstrap(configurationRes);
 
       setError(null);
       setLastUpdated(new Date());
@@ -154,6 +160,21 @@ export default function PositionsOrdersPage() {
       <PositionAnalyticsStrip analytics={model.analytics} />
 
       <ExposureRibbon analytics={model.analytics} segments={model.exposureSegments} />
+
+      {configurationBootstrap ? (
+        <OrderCycleStatusCard
+          autoLoopEnabled={configurationBootstrap.settings.auto_loop_enabled}
+          loopIntervalSeconds={configurationBootstrap.settings.loop_interval_seconds}
+          pendingEntryLoopIntervalSeconds={
+            configurationBootstrap.settings.pending_entry_loop_interval_seconds
+          }
+          pendingEntryMaxAttempts={
+            configurationBootstrap.settings.pending_entry_max_attempts
+          }
+          pendingEntriesCount={configurationBootstrap.settings.pending_entries_count}
+          pendingEntries={configurationBootstrap.settings.pending_entries}
+        />
+      ) : null}
 
       <OpenPositionsPanel positions={model.openPositions} />
 

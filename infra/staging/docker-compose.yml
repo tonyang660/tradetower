@@ -148,7 +148,8 @@ services:
       - LOOP_INTERVAL_SECONDS=300
       - ACCOUNT_ID=1
       - MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST=true
-      - ENTRY_RETRY_MAX_ATTEMPTS=4
+      - ENTRY_RETRY_MAX_ATTEMPTS=15
+      - PENDING_ENTRY_LOOP_INTERVAL_SECONDS=60
     volumes:
       - ../../config:/app/config
     ports:

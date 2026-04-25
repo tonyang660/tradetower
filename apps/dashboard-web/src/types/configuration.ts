@@ -13,6 +13,17 @@ export type ConfigurationSettings = {
   limit_fee_pct: number;
   market_fee_pct: number;
   market_slippage_pct: number;
+  pending_entry_loop_interval_seconds: number;
+  pending_entry_max_attempts: number;
+  pending_entries_count: number;
+  pending_entries: Array<{
+    symbol: string;
+    attempt_number: number;
+    updated_at?: string;
+    order_type?: string;
+    position_side?: string;
+    entry_price?: number;
+  }>;
 };
 
 export type ConfigurationBootstrapResponse = {

@@ -35,7 +35,8 @@ REFRESH_LIMIT = 72
 
 MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST = os.getenv("MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST", "true").lower() == "true"
 
-ENTRY_RETRY_MAX_ATTEMPTS = int(os.getenv("ENTRY_RETRY_MAX_ATTEMPTS", "4"))
+PENDING_ENTRY_LOOP_INTERVAL_SECONDS = int(os.getenv("PENDING_ENTRY_LOOP_INTERVAL_SECONDS", "60"))
+ENTRY_RETRY_MAX_ATTEMPTS = int(os.getenv("ENTRY_RETRY_MAX_ATTEMPTS", "15"))
 PENDING_ENTRY_ORDERS = {}
 
 def iso_now():
@@ -53,6 +54,29 @@ def run_mark_to_market_refresh(account_id: int):
         return None, f"trade_guardian_mark_to_market_failed: {str(e)}"
 
     return payload, None
+
+def fetch_latest_price(symbol: str):
+    try:
+        r = requests.get(
+            f"{API_GATEWAY_BASE_URL}/providers/bitget/ticker",
+            params={"symbol": symbol},
+            timeout=10,
+        )
+        payload = r.json()
+    except Exception as e:
+        return None, f"api_gateway_latest_price_failed: {str(e)}"
+
+    if not payload.get("ok", False):
+        return None, payload.get("error", "latest_price_fetch_failed")
+
+    price = payload.get("mark_price")
+    if price is None:
+        price = payload.get("last_price")
+
+    if price is None:
+        return None, "latest_price_missing"
+
+    return float(price), None
 
 def fetch_trade_guardian_status(account_id: int):
     try:
@@ -257,6 +281,27 @@ def run_strategy_engine(symbol: str):
 
     return payload, None
 
+def build_pending_entry_status():
+    items = []
+
+    for symbol, pending in PENDING_ENTRY_ORDERS.items():
+        items.append({
+            "symbol": symbol,
+            "attempt_number": int(pending.get("attempt_number", 1)),
+            "updated_at": pending.get("updated_at"),
+            "order_type": pending.get("paper_payload", {}).get("order_type"),
+            "position_side": pending.get("paper_payload", {}).get("position_side"),
+            "entry_price": pending.get("paper_payload", {}).get("entry_price"),
+        })
+
+    items.sort(key=lambda x: x["symbol"])
+
+    return {
+        "pending_entries_count": len(items),
+        "pending_entry_loop_interval_seconds": PENDING_ENTRY_LOOP_INTERVAL_SECONDS,
+        "pending_entry_max_attempts": ENTRY_RETRY_MAX_ATTEMPTS,
+        "pending_entries": items,
+    }
 
 def build_risk_payload_from_strategy(account_id: int, strategy_result: dict):
     return {
@@ -268,6 +313,172 @@ def build_risk_payload_from_strategy(account_id: int, strategy_result: dict):
         "stop_loss": strategy_result["stop_loss"],
     }
 
+def build_repriced_risk_payload(account_id: int, pending_payload: dict, new_entry_price: float):
+    return {
+        "account_id": account_id,
+        "symbol": pending_payload["symbol"],
+        "position_side": pending_payload["position_side"],
+        "entry_order_type": "limit",
+        "entry_price": new_entry_price,
+        "stop_loss": float(pending_payload["stop_loss"]),
+    }
+
+def build_repriced_paper_payload(account_id: int, pending_payload: dict, risk_result: dict, new_entry_price: float):
+    payload = {
+        "account_id": account_id,
+        "symbol": pending_payload["symbol"],
+        "selected_strategy": pending_payload.get("selected_strategy"),
+        "regime": pending_payload.get("regime"),
+        "strategy_confidence": pending_payload.get("strategy_confidence"),
+        "strategy_reason_tags": pending_payload.get("strategy_reason_tags", []),
+        "position_side": pending_payload["position_side"],
+        "order_type": "limit",
+        "entry_price": new_entry_price,
+        "stop_loss": float(pending_payload["stop_loss"]),
+    }
+
+    if isinstance(risk_result, dict):
+        payload.update(risk_result)
+
+    payload["attempt_number"] = int(pending_payload.get("attempt_number", 1))
+    payload["max_attempts"] = ENTRY_RETRY_MAX_ATTEMPTS
+
+    return payload
+
+def process_pending_entries_once():
+    results = []
+
+    for symbol in list(get_pending_entry_symbols()):
+        pending = PENDING_ENTRY_ORDERS.get(symbol)
+        if not pending:
+            continue
+
+        pending_payload = dict(pending["paper_payload"])
+        attempt_number = int(pending.get("attempt_number", 1))
+
+        open_positions, positions_error = fetch_open_positions(ACCOUNT_ID)
+        if positions_error:
+            results.append({
+                "symbol": symbol,
+                "ok": False,
+                "stage": "positions_check",
+                "error": positions_error,
+            })
+            continue
+
+        current_open_symbols = {p["symbol"] for p in open_positions}
+        if symbol in current_open_symbols:
+            clear_pending_entry(symbol)
+            results.append({
+                "symbol": symbol,
+                "ok": True,
+                "action": "CLEARED_ALREADY_OPEN",
+            })
+            continue
+
+        retry_gate, retry_gate_error = check_entry_gate_for_symbol(
+            ACCOUNT_ID,
+            symbol,
+            ignore_pending_order=True,
+        )
+        if retry_gate_error:
+            results.append({
+                "symbol": symbol,
+                "ok": False,
+                "stage": "entry_gate",
+                "error": retry_gate_error,
+            })
+            continue
+
+        if not retry_gate.get("trade_allowed", False):
+            results.append({
+                "symbol": symbol,
+                "ok": True,
+                "action": "BLOCKED",
+                "reason_codes": retry_gate.get("reason_codes", []),
+            })
+            continue
+
+        latest_price, latest_price_error = fetch_latest_price(symbol)
+        if latest_price_error:
+            results.append({
+                "symbol": symbol,
+                "ok": False,
+                "stage": "latest_price",
+                "error": latest_price_error,
+            })
+            continue
+
+        repriced_risk_payload = build_repriced_risk_payload(
+            ACCOUNT_ID,
+            pending_payload,
+            latest_price,
+        )
+
+        risk_result, risk_error = run_risk_engine(repriced_risk_payload)
+        if risk_error:
+            results.append({
+                "symbol": symbol,
+                "ok": False,
+                "stage": "risk_engine",
+                "error": risk_error,
+            })
+            continue
+
+        if not risk_result.get("approved", False):
+            clear_pending_entry(symbol)
+            results.append({
+                "symbol": symbol,
+                "ok": True,
+                "action": "CANCELLED_RISK_REJECTED",
+                "risk_result": risk_result,
+            })
+            continue
+
+        new_attempt_number = attempt_number + 1
+
+        paper_payload = build_repriced_paper_payload(
+            ACCOUNT_ID,
+            pending_payload,
+            risk_result,
+            latest_price,
+        )
+        paper_payload["attempt_number"] = new_attempt_number
+        paper_payload["max_attempts"] = ENTRY_RETRY_MAX_ATTEMPTS
+
+        paper_result, paper_error = submit_entry_to_paper_execution(paper_payload)
+        if paper_error:
+            results.append({
+                "symbol": symbol,
+                "ok": False,
+                "stage": "paper_execution",
+                "error": paper_error,
+            })
+            continue
+
+        action = str(paper_result.get("action", "")).upper()
+
+        if action == "ENTRY_PENDING":
+            store_pending_entry(symbol, paper_payload, {
+                "next_attempt_number": new_attempt_number + 1
+            })
+        else:
+            clear_pending_entry(symbol)
+
+        results.append({
+            "symbol": symbol,
+            "ok": True,
+            "action": action,
+            "attempt_number": new_attempt_number,
+            "paper_result": paper_result,
+        })
+
+    return {
+        "ok": True,
+        "processed": len(results),
+        "results": results,
+        "timestamp": iso_now(),
+    }
 
 def run_risk_engine(risk_payload: dict):
     try:
@@ -326,11 +537,13 @@ def get_pending_entry_symbols():
 
 
 def store_pending_entry(symbol: str, paper_payload: dict, paper_result: dict):
-    next_attempt_number = int(paper_result.get("next_attempt_number", 2))
+    current_attempt_number = int(
+        paper_result.get("attempt_number", paper_payload.get("attempt_number", 1))
+    )
 
     PENDING_ENTRY_ORDERS[symbol] = {
         "paper_payload": dict(paper_payload),
-        "attempt_number": next_attempt_number,
+        "attempt_number": current_attempt_number,
         "updated_at": iso_now(),
     }
 
@@ -599,73 +812,6 @@ def run_one_cycle():
         else:
             candidate_symbols = extract_candidate_symbols(summary["candidate_filter"])
 
-        # Phase 6.5: retry pending entry orders directly, without re-running strategy engine
-        for symbol in list(get_pending_entry_symbols()):
-            retry_payload = build_retry_payload(symbol)
-            if not retry_payload:
-                continue
-
-            # skip retry if symbol now has an open position
-            if symbol in current_open_symbols:
-                clear_pending_entry(symbol)
-                continue
-
-            summary["paper_execution"]["pending_retries"] += 1
-
-            retry_gate, retry_gate_error = check_entry_gate_for_symbol(
-                ACCOUNT_ID,
-                symbol,
-                ignore_pending_order=True,
-            )
-            if retry_gate_error:
-                summary["final_entry_gate"]["blocked"] += 1
-                summary["final_entry_gate"]["results"].append({
-                    "symbol": symbol,
-                    "retry": True,
-                    "ok": False,
-                    "error": retry_gate_error
-                })
-                continue
-
-            summary["final_entry_gate"]["checked"] += 1
-            summary["final_entry_gate"]["results"].append({
-                "symbol": symbol,
-                "retry": True,
-                **retry_gate
-            })
-
-            if not retry_gate.get("trade_allowed", False):
-                summary["final_entry_gate"]["blocked"] += 1
-                continue
-
-            paper_result, paper_error = submit_entry_to_paper_execution(retry_payload)
-            if paper_error:
-                summary["paper_execution"]["results"].append({
-                    "symbol": symbol,
-                    "retry": True,
-                    "ok": False,
-                    "error": paper_error
-                })
-                continue
-
-            summary["paper_execution"]["submitted"] += 1
-
-            action = str(paper_result.get("action", "")).upper()
-
-            if action == "ENTRY_PENDING":
-                store_pending_entry(symbol, retry_payload, paper_result)
-            else:
-                clear_pending_entry(symbol)
-
-            if action == "ENTRY_FILLED":
-                summary["paper_execution"]["fills"] += 1
-
-            summary["paper_execution"]["results"].append({
-                "symbol": symbol,
-                "retry": True,
-                **paper_result
-            })
-
         for symbol in candidate_symbols:
             summary["strategy_engine"]["analyzed"] += 1
 
@@ -827,6 +973,24 @@ def run_one_cycle():
 
     return summary
 
+def pending_entry_loop():
+    while True:
+        try:
+            if AUTO_LOOP_ENABLED_STATE and len(PENDING_ENTRY_ORDERS) > 0:
+                result = process_pending_entries_once()
+                print(json.dumps({
+                    "event": "PENDING_ENTRY_LOOP_COMPLETED",
+                    "processed": result["processed"],
+                    "timestamp": result["timestamp"],
+                }))
+        except Exception as e:
+            print(json.dumps({
+                "event": "PENDING_ENTRY_LOOP_FAILED",
+                "error": str(e),
+                "timestamp": iso_now(),
+            }))
+
+        time.sleep(PENDING_ENTRY_LOOP_INTERVAL_SECONDS)
 
 def scheduler_loop():
     while True:
@@ -860,6 +1024,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/health"):
+            pending_status = build_pending_entry_status()
+
             self._send_json({
                 "ok": True,
                 "service": SERVICE_NAME,
@@ -867,7 +1033,11 @@ class Handler(BaseHTTPRequestHandler):
                 "auto_loop_enabled": AUTO_LOOP_ENABLED_STATE,
                 "auto_loop_default": AUTO_LOOP_DEFAULT,
                 "loop_interval_seconds": LOOP_INTERVAL_SECONDS,
-                "paper_execution_entry_path": PAPER_EXECUTION_ENTRY_PATH
+                "paper_execution_entry_path": PAPER_EXECUTION_ENTRY_PATH,
+                "pending_entry_loop_interval_seconds": pending_status["pending_entry_loop_interval_seconds"],
+                "pending_entry_max_attempts": pending_status["pending_entry_max_attempts"],
+                "pending_entries_count": pending_status["pending_entries_count"],
+                "pending_entries": pending_status["pending_entries"],
             })
             return
 
@@ -934,6 +1104,8 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     loop_thread = Thread(target=scheduler_loop, daemon=True)
     loop_thread.start()
+    pending_thread = Thread(target=pending_entry_loop, daemon=True)
+    pending_thread.start()
 
     server = HTTPServer(("0.0.0.0", PORT), Handler)
     print(f"{SERVICE_NAME} listening on {PORT}")

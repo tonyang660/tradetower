@@ -16,6 +16,8 @@ import RuntimeControlsPanel from "../components/configuration/RuntimeControlsPan
 import StrictnessPanel from "../components/configuration/StrictnessPanel";
 import SymbolUniverseManager from "../components/configuration/SymbolUniverseManager";
 import GuardrailsPanel from "../components/configuration/GuardrailsPanel";
+import GlassCard from "../components/ui/GlassCard";
+import SectionTitle from "../components/ui/SectionTitle";
 
 type ValidationMap = Record<
   string,
@@ -255,6 +257,48 @@ export default function ConfigurationPage() {
         />
         <StrictnessPanel strictScoreThreshold={settings.strict_score_threshold} />
       </div>
+
+      <GlassCard>
+        <SectionTitle
+          title="Order Cycle"
+          subtitle="Dedicated pending-entry retry loop runtime"
+        />
+
+        <div className="mt-4 grid gap-4 md:grid-cols-4">
+          <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
+            <div className="text-xs text-white/40">Main Cycle</div>
+            <div className="mt-1 text-lg font-semibold text-white">
+              {settings.loop_interval_seconds}s
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
+            <div className="text-xs text-white/40">Order Cycle</div>
+            <div className="mt-1 text-lg font-semibold text-white">
+              {settings.pending_entry_loop_interval_seconds}s
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
+            <div className="text-xs text-white/40">Max Attempts</div>
+            <div className="mt-1 text-lg font-semibold text-white">
+              {settings.pending_entry_max_attempts}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
+            <div className="text-xs text-white/40">Pending Entries</div>
+            <div className="mt-1 text-lg font-semibold text-white">
+              {settings.pending_entries_count}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 text-sm text-white/45">
+          Pending entries are repriced through the scheduler-owned order cycle.
+          These values are runtime-controlled and currently read-only in the UI.
+        </div>
+      </GlassCard>      
 
       <SymbolUniverseManager
         symbols={settings.enabled_symbols}

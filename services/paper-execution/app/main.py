@@ -271,7 +271,7 @@ def simulate_entry(payload: dict):
     entry_price = float(payload["entry_price"])
     size = float(payload["size"])
     attempt_number = int(payload.get("attempt_number", 1))
-    max_attempts = int(payload.get("max_attempts", 2))
+    max_attempts = int(payload.get("max_attempts", 15))
 
     candles, error = fetch_recent_candles(symbol, "5m", limit=3)
     if error:
