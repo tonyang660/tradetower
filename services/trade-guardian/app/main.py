@@ -546,6 +546,7 @@ def fetch_all_open_positions(account_id: int):
         remaining_size,
         entry_price,
         leverage,
+        margin_used,
         stop_loss,
         tp1_price,
         tp2_price,
@@ -577,15 +578,16 @@ def fetch_all_open_positions(account_id: int):
             "remaining_size": float(row[5]),
             "entry_price": float(row[6]),
             "leverage": float(row[7]),
-            "stop_loss": float(row[8]) if row[8] is not None else None,
-            "tp1_price": float(row[9]) if row[9] is not None else None,
-            "tp2_price": float(row[10]) if row[10] is not None else None,
-            "tp3_price": float(row[11]) if row[11] is not None else None,
-            "tp1_hit": row[12],
-            "tp2_hit": row[13],
-            "tp3_hit": row[14],
-            "opened_at": row[15].isoformat().replace("+00:00", "Z") if row[15] else None,
-            "status": row[16],
+            "margin_used": float(row[8]) if row[8] is not None else 0.0,
+            "stop_loss": float(row[9]) if row[8] is not None else None,
+            "tp1_price": float(row[10]) if row[9] is not None else None,
+            "tp2_price": float(row[11]) if row[10] is not None else None,
+            "tp3_price": float(row[12]) if row[11] is not None else None,
+            "tp1_hit": row[13],
+            "tp2_hit": row[14],
+            "tp3_hit": row[15],
+            "opened_at": row[16].isoformat().replace("+00:00", "Z") if row[15] else None,
+            "status": row[17],
         })
 
     return results
@@ -1385,19 +1387,7 @@ def apply_execution_report(payload: dict):
     if order_type not in ("market", "limit"):
         return {"ok": False, "error": "unsupported_order_type"}
 
-    execution_id = insert_execution_report(
-        account_id=account_id,
-        order_id=order_id,
-        symbol=symbol,
-        fill_price=fill_price,
-        filled_size=filled_size,
-        fee_paid=fee_paid,
-        slippage_bps=slippage_bps,
-        notes=notes,
-        execution_type=execution_type,
-        position_side=position_side
-    )
-
+    execution_id = None
     open_position = get_open_position(account_id, symbol)
 
     # ENTRY
@@ -1530,6 +1520,19 @@ def apply_execution_report(payload: dict):
         released_margin = open_position["margin_used"] * (close_size / remaining_size) if remaining_size > 0 else 0.0
         new_remaining_margin = round(open_position["margin_used"] - released_margin, 8)
 
+        execution_id = insert_execution_report(
+            account_id=account_id,
+            order_id=order_id,
+            symbol=symbol,
+            fill_price=fill_price,
+            filled_size=filled_size,
+            fee_paid=fee_paid,
+            slippage_bps=slippage_bps,
+            notes=notes,
+            execution_type=execution_type,
+            position_side=position_side
+        )
+
         realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
         new_remaining = round(remaining_size - close_size, 8)
 
@@ -1581,6 +1584,19 @@ def apply_execution_report(payload: dict):
         released_margin = open_position["margin_used"] * (close_size / remaining_size) if remaining_size > 0 else 0.0
         new_remaining_margin = round(open_position["margin_used"] - released_margin, 8)
 
+        execution_id = insert_execution_report(
+            account_id=account_id,
+            order_id=order_id,
+            symbol=symbol,
+            fill_price=fill_price,
+            filled_size=filled_size,
+            fee_paid=fee_paid,
+            slippage_bps=slippage_bps,
+            notes=notes,
+            execution_type=execution_type,
+            position_side=position_side
+        )
+
         realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
         new_remaining = round(remaining_size - close_size, 8)
 
@@ -1622,6 +1638,19 @@ def apply_execution_report(payload: dict):
     if execution_type == "TP3":
         if open_position["tp3_hit"]:
             return {"ok": False, "error": "tp3_already_hit", "execution_id": execution_id}
+
+        execution_id = insert_execution_report(
+            account_id=account_id,
+            order_id=order_id,
+            symbol=symbol,
+            fill_price=fill_price,
+            filled_size=filled_size,
+            fee_paid=fee_paid,
+            slippage_bps=slippage_bps,
+            notes=notes,
+            execution_type=execution_type,
+            position_side=position_side
+        )
 
         close_size = remaining_size
         realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
@@ -1672,6 +1701,20 @@ def apply_execution_report(payload: dict):
 
     if execution_type == "STOP_LOSS":
         close_size = remaining_size
+
+        execution_id = insert_execution_report(
+            account_id=account_id,
+            order_id=order_id,
+            symbol=symbol,
+            fill_price=fill_price,
+            filled_size=filled_size,
+            fee_paid=fee_paid,
+            slippage_bps=slippage_bps,
+            notes=notes,
+            execution_type=execution_type,
+            position_side=position_side
+        )
+
         realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
 
         released_margin = open_position["margin_used"]

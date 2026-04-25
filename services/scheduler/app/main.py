@@ -420,6 +420,8 @@ def run_one_cycle():
         "maintenance": {
             "checked": 0,
             "actions_triggered": 0,
+            "no_action": 0,
+            "errors": 0,
             "results": []
         },
 
@@ -488,6 +490,7 @@ def run_one_cycle():
 
             guard_result, guard_error = check_maintenance(ACCOUNT_ID, symbol)
             if guard_error:
+                summary["maintenance"]["errors"] += 1
                 summary["maintenance"]["results"].append({
                     "symbol": symbol,
                     "ok": False,
@@ -507,6 +510,7 @@ def run_one_cycle():
 
             maintenance_result, maintenance_error = run_maintenance(ACCOUNT_ID, symbol)
             if maintenance_error:
+                summary["maintenance"]["errors"] += 1
                 summary["maintenance"]["results"].append({
                     "symbol": symbol,
                     "ok": False,
@@ -515,15 +519,20 @@ def run_one_cycle():
                 })
                 continue
 
+            action = maintenance_result.get("action", "NO_ACTION")
+
             summary["maintenance"]["results"].append({
                 "symbol": symbol,
                 "ok": True,
-                "result": maintenance_result
+                "action": action,
+                "execution_event": maintenance_result.get("execution_event"),
+                "guardian_result": maintenance_result.get("guardian_result"),
             })
 
-            action = maintenance_result.get("action")
             if action and action != "NO_ACTION":
                 summary["maintenance"]["actions_triggered"] += 1
+            else:
+                summary["maintenance"]["no_action"] += 1
 
         # Refresh open positions after maintenance so entry path uses current state
         post_maintenance_positions, positions_error = fetch_open_positions(ACCOUNT_ID)
