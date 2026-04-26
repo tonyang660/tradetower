@@ -93,6 +93,19 @@ def fetch_latest_price(symbol: str):
 
     return float(price), None
 
+def get_order_trigger_price(order: dict):
+    if order is None:
+        return None
+
+    value = order.get("entry_price")
+    if value is None:
+        value = order.get("requested_price")
+
+    if value is None:
+        return None
+
+    return float(value)
+
 def fetch_open_position(account_id: int, symbol: str):
     try:
         r = requests.get(
@@ -178,39 +191,30 @@ def evaluate_live_price_trigger(side: str, current_price: float, orders_by_role:
     tp2_order = orders_by_role.get("tp2")
     tp3_order = orders_by_role.get("tp3")
 
+    sl_price = get_order_trigger_price(sl_order)
+    tp1_price = get_order_trigger_price(tp1_order)
+    tp2_price = get_order_trigger_price(tp2_order)
+    tp3_price = get_order_trigger_price(tp3_order)
+
     if side == "long":
-        if sl_order is not None and sl_order.get("entry_price") is not None:
-            if current_price <= float(sl_order["entry_price"]):
-                return "STOP_LOSS", float(sl_order["entry_price"]), float(remaining_size), sl_order
-
-        if tp1_order is not None and tp1_order.get("entry_price") is not None:
-            if current_price >= float(tp1_order["entry_price"]):
-                return "TP1", float(tp1_order["entry_price"]), float(tp1_order["requested_size"] or 0.0), tp1_order
-
-        if tp2_order is not None and tp2_order.get("entry_price") is not None:
-            if current_price >= float(tp2_order["entry_price"]):
-                return "TP2", float(tp2_order["entry_price"]), float(tp2_order["requested_size"] or 0.0), tp2_order
-
-        if tp3_order is not None and tp3_order.get("entry_price") is not None:
-            if current_price >= float(tp3_order["entry_price"]):
-                return "TP3", float(tp3_order["entry_price"]), float(remaining_size), tp3_order
+        if sl_price is not None and current_price <= sl_price:
+            return "STOP_LOSS", sl_price, float(remaining_size), sl_order
+        if tp1_price is not None and current_price >= tp1_price:
+            return "TP1", tp1_price, float(tp1_order["requested_size"] or 0.0), tp1_order
+        if tp2_price is not None and current_price >= tp2_price:
+            return "TP2", tp2_price, float(tp2_order["requested_size"] or 0.0), tp2_order
+        if tp3_price is not None and current_price >= tp3_price:
+            return "TP3", tp3_price, float(remaining_size), tp3_order
 
     elif side == "short":
-        if sl_order is not None and sl_order.get("entry_price") is not None:
-            if current_price >= float(sl_order["entry_price"]):
-                return "STOP_LOSS", float(sl_order["entry_price"]), float(remaining_size), sl_order
-
-        if tp1_order is not None and tp1_order.get("entry_price") is not None:
-            if current_price <= float(tp1_order["entry_price"]):
-                return "TP1", float(tp1_order["entry_price"]), float(tp1_order["requested_size"] or 0.0), tp1_order
-
-        if tp2_order is not None and tp2_order.get("entry_price") is not None:
-            if current_price <= float(tp2_order["entry_price"]):
-                return "TP2", float(tp2_order["entry_price"]), float(tp2_order["requested_size"] or 0.0), tp2_order
-
-        if tp3_order is not None and tp3_order.get("entry_price") is not None:
-            if current_price <= float(tp3_order["entry_price"]):
-                return "TP3", float(tp3_order["entry_price"]), float(remaining_size), tp3_order
+        if sl_price is not None and current_price >= sl_price:
+            return "STOP_LOSS", sl_price, float(remaining_size), sl_order
+        if tp1_price is not None and current_price <= tp1_price:
+            return "TP1", tp1_price, float(tp1_order["requested_size"] or 0.0), tp1_order
+        if tp2_price is not None and current_price <= tp2_price:
+            return "TP2", tp2_price, float(tp2_order["requested_size"] or 0.0), tp2_order
+        if tp3_price is not None and current_price <= tp3_price:
+            return "TP3", tp3_price, float(remaining_size), tp3_order
 
     return None
 
@@ -394,65 +398,69 @@ def simulate_maintenance(payload: dict):
             tp2_order = orders_by_role.get("tp2")
             tp3_order = orders_by_role.get("tp3")
 
-            if side == "long":
-                sl_hit = sl_order is not None and sl_order.get("entry_price") is not None and low <= float(sl_order["entry_price"])
-                tp1_hit = tp1_order is not None and tp1_order.get("entry_price") is not None and high >= float(tp1_order["entry_price"])
-                tp2_hit = tp2_order is not None and tp2_order.get("entry_price") is not None and high >= float(tp2_order["entry_price"])
-                tp3_hit = tp3_order is not None and tp3_order.get("entry_price") is not None and high >= float(tp3_order["entry_price"])
+            sl_price = get_order_trigger_price(sl_order)
+            tp1_price = get_order_trigger_price(tp1_order)
+            tp2_price = get_order_trigger_price(tp2_order)
+            tp3_price = get_order_trigger_price(tp3_order)
 
-                # Conservative rule: SL first if touched in same candle.
+            if side == "long":
+                sl_hit = sl_price is not None and low <= sl_price
+                tp1_hit = tp1_price is not None and high >= tp1_price
+                tp2_hit = tp2_price is not None and high >= tp2_price
+                tp3_hit = tp3_price is not None and high >= tp3_price
+
                 if sl_hit:
                     execution_type = "STOP_LOSS"
-                    trigger_price = float(sl_order["entry_price"])
+                    trigger_price = sl_price
                     close_size = float(position["remaining_size"])
                     trigger_order = sl_order
                     break
                 elif tp1_hit:
                     execution_type = "TP1"
-                    trigger_price = float(tp1_order["entry_price"])
+                    trigger_price = tp1_price
                     close_size = float(tp1_order["requested_size"] or 0.0)
                     trigger_order = tp1_order
                     break
                 elif tp2_hit:
                     execution_type = "TP2"
-                    trigger_price = float(tp2_order["entry_price"])
+                    trigger_price = tp2_price
                     close_size = float(tp2_order["requested_size"] or 0.0)
                     trigger_order = tp2_order
                     break
                 elif tp3_hit:
                     execution_type = "TP3"
-                    trigger_price = float(tp3_order["entry_price"])
+                    trigger_price = tp3_price
                     close_size = float(position["remaining_size"])
                     trigger_order = tp3_order
                     break
 
             elif side == "short":
-                sl_hit = sl_order is not None and sl_order.get("entry_price") is not None and high >= float(sl_order["entry_price"])
-                tp1_hit = tp1_order is not None and tp1_order.get("entry_price") is not None and low <= float(tp1_order["entry_price"])
-                tp2_hit = tp2_order is not None and tp2_order.get("entry_price") is not None and low <= float(tp2_order["entry_price"])
-                tp3_hit = tp3_order is not None and tp3_order.get("entry_price") is not None and low <= float(tp3_order["entry_price"])
+                sl_hit = sl_price is not None and high >= sl_price
+                tp1_hit = tp1_price is not None and low <= tp1_price
+                tp2_hit = tp2_price is not None and low <= tp2_price
+                tp3_hit = tp3_price is not None and low <= tp3_price
 
                 if sl_hit:
                     execution_type = "STOP_LOSS"
-                    trigger_price = float(sl_order["entry_price"])
+                    trigger_price = sl_price
                     close_size = float(position["remaining_size"])
                     trigger_order = sl_order
                     break
                 elif tp1_hit:
                     execution_type = "TP1"
-                    trigger_price = float(tp1_order["entry_price"])
+                    trigger_price = tp1_price
                     close_size = float(tp1_order["requested_size"] or 0.0)
                     trigger_order = tp1_order
                     break
                 elif tp2_hit:
                     execution_type = "TP2"
-                    trigger_price = float(tp2_order["entry_price"])
+                    trigger_price = tp2_price
                     close_size = float(tp2_order["requested_size"] or 0.0)
                     trigger_order = tp2_order
                     break
                 elif tp3_hit:
                     execution_type = "TP3"
-                    trigger_price = float(tp3_order["entry_price"])
+                    trigger_price = tp3_price
                     close_size = float(position["remaining_size"])
                     trigger_order = tp3_order
                     break
