@@ -666,6 +666,17 @@ def process_open_position_maintenance_once():
             })
             continue
 
+        if not maintenance_result.get("ok", False):
+            errors_count += 1
+            results.append({
+                "symbol": symbol,
+                "ok": False,
+                "stage": "paper_execution",
+                "error": maintenance_result.get("error", "maintenance_check_failed"),
+                "details": maintenance_result,
+            })
+            continue
+
         action = str(maintenance_result.get("action", "NO_ACTION")).upper()
 
         results.append({

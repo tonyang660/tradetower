@@ -533,7 +533,17 @@ def get_open_entry_order(account_id: int, symbol: str):
     }
 
 def fetch_open_position_for_api(account_id: int, symbol: str):
-    return get_open_position(account_id, symbol)
+    position = get_open_position(account_id, symbol)
+    if position is None:
+        return None
+
+    return {
+        **position,
+        "opened_at": position["opened_at"].isoformat().replace("+00:00", "Z")
+        if position.get("opened_at") else None,
+        "closed_at": position["closed_at"].isoformat().replace("+00:00", "Z")
+        if position.get("closed_at") else None,
+    }
 
 def fetch_all_open_positions(account_id: int):
     query = """
@@ -593,7 +603,7 @@ def fetch_all_open_positions(account_id: int):
             "tp1_hit": row[13],
             "tp2_hit": row[14],
             "tp3_hit": row[15],
-            "opened_at": row[16].isoformat().replace("+00:00", "Z") if row[15] else None,
+            "opened_at": row[16].isoformat().replace("+00:00", "Z") if row[16] else None,
             "status": row[17],
             "fees_paid": float(row[18]) if row[18] is not None else 0.0,
         })
