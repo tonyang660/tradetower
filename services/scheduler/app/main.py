@@ -692,7 +692,6 @@ def process_open_position_maintenance_once():
         "results": results,
     }
 
-    global LAST_MAINTENANCE_LOOP_RESULT
     LAST_MAINTENANCE_LOOP_RESULT = result
 
     return result
