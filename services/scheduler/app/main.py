@@ -886,19 +886,42 @@ def process_open_position_maintenance_once():
         if action == "STOP_LOSS_PENDING":
             order_id = maintenance_result.get("order_id")
             if order_id is not None:
-                PENDING_EXIT_ORDERS[symbol] = {
-                    "order_id": int(order_id),
-                    "attempt_number": 1,
-                    "updated_at": iso_now(),
-                    "requested_price": float(
-                        maintenance_result.get("limit_price")
-                        or maintenance_result.get("trigger_price")
-                        or 0.0
-                    ),
-                    "original_stop_price": float(maintenance_result.get("trigger_price") or 0.0),
-                    "side": str(pos["side"]).lower(),
-                    "trigger_seen_count": 1,
-                }
+                existing_state = PENDING_EXIT_ORDERS.get(symbol)
+
+                if existing_state is None:
+                    PENDING_EXIT_ORDERS[symbol] = {
+                        "order_id": int(order_id),
+                        "attempt_number": 1,
+                        "updated_at": iso_now(),
+                        "requested_price": float(
+                            maintenance_result.get("limit_price")
+                            or maintenance_result.get("trigger_price")
+                            or 0.0
+                        ),
+                        "original_stop_price": float(
+                            maintenance_result.get("trigger_price") or 0.0
+                        ),
+                        "side": str(pos["side"]).lower(),
+                        "trigger_seen_count": 1,
+                    }
+                else:
+                    PENDING_EXIT_ORDERS[symbol] = {
+                        **existing_state,
+                        "order_id": int(order_id),
+                        "updated_at": iso_now(),
+                        "requested_price": float(
+                            maintenance_result.get("limit_price")
+                            or existing_state.get("requested_price")
+                            or maintenance_result.get("trigger_price")
+                            or 0.0
+                        ),
+                        "original_stop_price": float(
+                            existing_state.get("original_stop_price")
+                            or maintenance_result.get("trigger_price")
+                            or 0.0
+                        ),
+                        "side": str(existing_state.get("side") or pos["side"]).lower(),
+                    }
 
         results.append({
             "symbol": symbol,
