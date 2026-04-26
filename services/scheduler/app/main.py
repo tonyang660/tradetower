@@ -62,6 +62,7 @@ LAST_MAINTENANCE_LOOP_RESULT = {
 }
 
 EXIT_RETRY_MAX_ATTEMPTS = int(os.getenv("EXIT_RETRY_MAX_ATTEMPTS", "5"))
+PENDING_EXIT_LOOP_INTERVAL_SECONDS = int(os.getenv("PENDING_EXIT_LOOP_INTERVAL_SECONDS", "60"))
 PENDING_EXIT_ORDERS = {}
 
 LAST_PENDING_EXIT_LOOP_RESULT = {
@@ -254,10 +255,68 @@ def process_pending_exits_once():
             })
             continue
 
+        open_positions, positions_error = fetch_open_positions(ACCOUNT_ID)
+        if positions_error:
+            errors_count += 1
+            results.append({
+                "symbol": symbol,
+                "ok": False,
+                "stage": "positions_fetch",
+                "error": positions_error,
+            })
+            continue
+
+        matching_position = next((p for p in open_positions if p["symbol"] == symbol), None)
+        if not matching_position:
+            PENDING_EXIT_ORDERS.pop(symbol, None)
+            results.append({
+                "symbol": symbol,
+                "ok": True,
+                "action": "POSITION_ALREADY_CLOSED",
+            })
+            continue
+
+        trigger_seen_count = int(state.get("trigger_seen_count", 1))
+
+        if trigger_seen_count < 2:
+            PENDING_EXIT_ORDERS[symbol]["trigger_seen_count"] = trigger_seen_count + 1
+            PENDING_EXIT_ORDERS[symbol]["updated_at"] = iso_now()
+            pending += 1
+            results.append({
+                "symbol": symbol,
+                "ok": True,
+                "action": "STOP_LOSS_PENDING_GRACE",
+                "attempt_number": attempt_number,
+                "trigger_seen_count": trigger_seen_count,
+            })
+            continue
+
+        previous_limit_price = float(state.get("requested_price", latest_price))
+        original_stop_price = float(state.get("original_stop_price", latest_price))
+        side = str(state.get("side", "")).lower()
+
+        candidate_price = latest_price
+
+        if side == "long":
+            bounded_candidate = min(original_stop_price, candidate_price)
+            new_limit_price = min(previous_limit_price, bounded_candidate)
+        elif side == "short":
+            bounded_candidate = max(original_stop_price, candidate_price)
+            new_limit_price = max(previous_limit_price, bounded_candidate)
+        else:
+            errors_count += 1
+            results.append({
+                "symbol": symbol,
+                "ok": False,
+                "stage": "pending_exit_state",
+                "error": "unsupported_position_side",
+            })
+            continue
+
         reprice_result, reprice_error = reprice_protective_order(
             ACCOUNT_ID,
             order_id,
-            latest_price,
+            new_limit_price,
         )
         if reprice_error:
             errors_count += 1
@@ -304,6 +363,7 @@ def process_pending_exits_once():
         if action == "STOP_LOSS_PENDING":
             PENDING_EXIT_ORDERS[symbol]["attempt_number"] = attempt_number + 1
             PENDING_EXIT_ORDERS[symbol]["updated_at"] = iso_now()
+            PENDING_EXIT_ORDERS[symbol]["requested_price"] = float(new_limit_price)
             pending += 1
         else:
             PENDING_EXIT_ORDERS.pop(symbol, None)
@@ -830,7 +890,15 @@ def process_open_position_maintenance_once():
                     "order_id": int(order_id),
                     "attempt_number": 1,
                     "updated_at": iso_now(),
-                }        
+                    "requested_price": float(
+                        maintenance_result.get("limit_price")
+                        or maintenance_result.get("trigger_price")
+                        or 0.0
+                    ),
+                    "original_stop_price": float(maintenance_result.get("trigger_price") or 0.0),
+                    "side": str(pos["side"]).lower(),
+                    "trigger_seen_count": 1,
+                }
 
         results.append({
             "symbol": symbol,
@@ -1329,7 +1397,7 @@ def pending_exit_loop():
                 "timestamp": iso_now(),
             }))
 
-        time.sleep(MAINTENANCE_LOOP_INTERVAL_SECONDS)
+        time.sleep(PENDING_EXIT_LOOP_INTERVAL_SECONDS)
 
 def open_position_maintenance_loop():
     while True:
@@ -1413,6 +1481,7 @@ class Handler(BaseHTTPRequestHandler):
                 "last_maintenance_loop_blocked": LAST_MAINTENANCE_LOOP_RESULT.get("blocked", 0),
                 "last_maintenance_loop_errors": LAST_MAINTENANCE_LOOP_RESULT.get("errors", 0),
                 "last_maintenance_loop_results": LAST_MAINTENANCE_LOOP_RESULT.get("results", []),
+                "pending_exit_loop_interval_seconds": PENDING_EXIT_LOOP_INTERVAL_SECONDS,
                 "pending_exit_orders_count": len(PENDING_EXIT_ORDERS),
                 "last_pending_exit_loop_at": LAST_PENDING_EXIT_LOOP_RESULT.get("timestamp"),
                 "last_pending_exit_loop_processed": LAST_PENDING_EXIT_LOOP_RESULT.get("processed", 0),

@@ -570,8 +570,8 @@ def fetch_all_open_positions(account_id: int):
             SELECT SUM(er.fee_paid)
             FROM execution_reports er
             WHERE er.account_id = p.account_id
-            AND er.symbol = p.symbol
-            AND er.execution_timestamp >= p.opened_at
+                AND er.symbol = p.symbol
+                AND er.execution_timestamp >= (p.opened_at - INTERVAL '10 seconds')
         ), 0)
     FROM positions p
     WHERE p.account_id = %s
@@ -824,7 +824,6 @@ def reprice_protective_order(account_id: int, order_id: int, new_price: float):
     query = """
     UPDATE orders
     SET requested_price = %s,
-        stop_loss = CASE WHEN role = 'stop_loss' THEN %s ELSE stop_loss END,
         tp1 = CASE WHEN role = 'tp1' THEN %s ELSE tp1 END,
         tp2 = CASE WHEN role = 'tp2' THEN %s ELSE tp2 END,
         tp3 = CASE WHEN role = 'tp3' THEN %s ELSE tp3 END,
@@ -833,14 +832,14 @@ def reprice_protective_order(account_id: int, order_id: int, new_price: float):
       AND order_id = %s
       AND status IN ('planned', 'submitted')
       AND role IN ('stop_loss', 'tp1', 'tp2', 'tp3')
-    RETURNING order_id, role, requested_price
+    RETURNING order_id, role, requested_price, stop_loss
     """
 
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 query,
-                (new_price, new_price, new_price, new_price, new_price, account_id, order_id),
+                (new_price, new_price, new_price, new_price, account_id, order_id),
             )
             row = cur.fetchone()
         conn.commit()
@@ -852,6 +851,7 @@ def reprice_protective_order(account_id: int, order_id: int, new_price: float):
         "order_id": int(row[0]),
         "role": row[1],
         "requested_price": float(row[2]),
+        "stop_loss": float(row[3]) if row[3] is not None else None,
     }
 
 def update_order_status(order_id: int, status: str):

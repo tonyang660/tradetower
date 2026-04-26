@@ -109,6 +109,35 @@ def get_order_trigger_price(order: dict):
 
     return float(value)
 
+def get_order_requested_price(order: dict):
+    if order is None:
+        return None
+
+    value = order.get("requested_price")
+    if value is None:
+        value = order.get("entry_price")
+
+    if value is None:
+        return None
+
+    return float(value)
+
+
+def get_stop_trigger_price(order: dict):
+    if order is None:
+        return None
+
+    value = order.get("stop_loss")
+    if value is None:
+        value = order.get("requested_price")
+    if value is None:
+        value = order.get("entry_price")
+
+    if value is None:
+        return None
+
+    return float(value)
+
 def fetch_open_position(account_id: int, symbol: str):
     try:
         r = requests.get(
@@ -194,7 +223,7 @@ def evaluate_live_price_trigger(side: str, current_price: float, orders_by_role:
     tp2_order = orders_by_role.get("tp2")
     tp3_order = orders_by_role.get("tp3")
 
-    sl_price = get_order_trigger_price(sl_order)
+    sl_price = get_stop_trigger_price(sl_order)
     tp1_price = get_order_trigger_price(tp1_order)
     tp2_price = get_order_trigger_price(tp2_order)
     tp3_price = get_order_trigger_price(tp3_order)
@@ -402,7 +431,7 @@ def simulate_maintenance(payload: dict):
             tp2_order = orders_by_role.get("tp2")
             tp3_order = orders_by_role.get("tp3")
 
-            sl_price = get_order_trigger_price(sl_order)
+            sl_price = get_stop_trigger_price(sl_order)
             tp1_price = get_order_trigger_price(tp1_order)
             tp2_price = get_order_trigger_price(tp2_order)
             tp3_price = get_order_trigger_price(tp3_order)
@@ -479,14 +508,16 @@ def simulate_maintenance(payload: dict):
 
     if execution_type == "STOP_LOSS":
         stop_order_type = str(trigger_order.get("order_type", "")).lower()
+        stop_limit_price = get_order_requested_price(trigger_order)
 
         if stop_order_type == "limit" and not force_market_stop_loss:
-            if not can_fill_stop_limit_now(candles, float(trigger_price)):
+            if stop_limit_price is None or not can_fill_stop_limit_now(candles, float(stop_limit_price)):
                 return {
                     "ok": True,
                     "action": "STOP_LOSS_PENDING",
                     "order_id": int(trigger_order["order_id"]) if trigger_order and trigger_order.get("order_id") is not None else None,
                     "trigger_price": float(trigger_price),
+                    "limit_price": float(stop_limit_price) if stop_limit_price is not None else None,
                     "reason_codes": ["STOP_LIMIT_NOT_FILLED"],
                 }
 
@@ -499,10 +530,12 @@ def simulate_maintenance(payload: dict):
         effective_order_type = "market"
         effective_slippage_bps = MARKET_SLIPPAGE_PCT * 100
 
+    stop_limit_price = get_order_requested_price(trigger_order) if execution_type == "STOP_LOSS" else None
+
     actual_fill_price = (
         apply_market_slippage(trigger_price, side, execution_type)
         if effective_order_type == "market"
-        else float(trigger_price)
+        else float(stop_limit_price if execution_type == "STOP_LOSS" and stop_limit_price is not None else trigger_price)
     )
 
     notional = actual_fill_price * close_size
