@@ -173,6 +173,27 @@ export default function PositionsOrdersPage() {
           }
           pendingEntriesCount={configurationBootstrap.settings.pending_entries_count}
           pendingEntries={configurationBootstrap.settings.pending_entries}
+          lastPendingEntryLoopAt={
+            configurationBootstrap.settings.last_pending_entry_loop_at ?? null
+          }
+          lastPendingEntryLoopProcessed={
+            configurationBootstrap.settings.last_pending_entry_loop_processed ?? 0
+          }
+          lastPendingEntryLoopFills={
+            configurationBootstrap.settings.last_pending_entry_loop_fills ?? 0
+          }
+          lastPendingEntryLoopPending={
+            configurationBootstrap.settings.last_pending_entry_loop_pending ?? 0
+          }
+          lastPendingEntryLoopCancelled={
+            configurationBootstrap.settings.last_pending_entry_loop_cancelled ?? 0
+          }
+          lastPendingEntryLoopBlocked={
+            configurationBootstrap.settings.last_pending_entry_loop_blocked ?? 0
+          }
+          lastPendingEntryLoopErrors={
+            configurationBootstrap.settings.last_pending_entry_loop_errors ?? 0
+          }
         />
       ) : null}
 

@@ -279,6 +279,70 @@ def upsert_decision_row(cur, row: dict):
         row,
     )
 
+def apply_pending_entry_event(payload: dict):
+    account_id = int(payload["account_id"])
+    cycle_id = payload.get("cycle_id")
+    symbol = str(payload["symbol"]).upper()
+    event_type = str(payload.get("event_type", "")).upper()
+    attempt_number = int(payload.get("attempt_number", 0))
+    source = payload.get("source", "pending_entry_loop")
+    details = payload.get("details", {})
+
+    if not cycle_id:
+        return {
+            "ok": False,
+            "error": "missing_cycle_id",
+        }
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if event_type == "ENTRY_FILLED":
+                cur.execute(
+                    """
+                    UPDATE evaluator_decision_history
+                    SET paper_submitted = TRUE,
+                        filled = TRUE
+                    WHERE cycle_id = %s
+                      AND account_id = %s
+                      AND symbol = %s
+                    """,
+                    (cycle_id, account_id, symbol),
+                )
+
+            elif event_type == "ENTRY_PENDING":
+                cur.execute(
+                    """
+                    UPDATE evaluator_decision_history
+                    SET paper_submitted = TRUE
+                    WHERE cycle_id = %s
+                      AND account_id = %s
+                      AND symbol = %s
+                    """,
+                    (cycle_id, account_id, symbol),
+                )
+
+            elif event_type in ("ENTRY_BLOCKED", "ENTRY_CANCELLED", "CANCELLED_RISK_REJECTED"):
+                cur.execute(
+                    """
+                    UPDATE evaluator_decision_history
+                    SET paper_submitted = COALESCE(paper_submitted, FALSE),
+                        filled = FALSE
+                    WHERE cycle_id = %s
+                      AND account_id = %s
+                      AND symbol = %s
+                    """,
+                    (cycle_id, account_id, symbol),
+                )
+
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "cycle_id": cycle_id,
+        "symbol": symbol,
+        "event_type": event_type,
+        "attempt_number": attempt_number,
+        "source": source,
+    }
 
 def ingest_cycle_summary(payload: dict):
     cycle_id = payload["cycle_id"]
@@ -1558,6 +1622,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({
                     "ok": False,
                     "error": "equity_ingest_failed",
+                    "details": str(e)
+                }, status=500)
+                return
+
+        if self.path == "/ingest/pending-entry-event":
+            try:
+                result = apply_pending_entry_event(payload)
+                self._send_json(result, status=200 if result.get("ok") else 400)
+                return
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "pending_entry_event_ingest_failed",
                     "details": str(e)
                 }, status=500)
                 return

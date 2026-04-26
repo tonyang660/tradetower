@@ -95,5 +95,12 @@ export type SystemHealthBootstrapResponse = {
       position_side?: string;
       entry_price?: number;
     }>;
+    last_pending_entry_loop_at?: string | null;
+    last_pending_entry_loop_processed?: number | null;
+    last_pending_entry_loop_fills?: number | null;
+    last_pending_entry_loop_pending?: number | null;
+    last_pending_entry_loop_cancelled?: number | null;
+    last_pending_entry_loop_blocked?: number | null;
+    last_pending_entry_loop_errors?: number | null;
   };
 };

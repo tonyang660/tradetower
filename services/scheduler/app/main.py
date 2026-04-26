@@ -38,6 +38,16 @@ MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST = os.getenv("MARK_TO_MARKET_BEFORE_EVALUA
 PENDING_ENTRY_LOOP_INTERVAL_SECONDS = int(os.getenv("PENDING_ENTRY_LOOP_INTERVAL_SECONDS", "60"))
 ENTRY_RETRY_MAX_ATTEMPTS = int(os.getenv("ENTRY_RETRY_MAX_ATTEMPTS", "15"))
 PENDING_ENTRY_ORDERS = {}
+LAST_PENDING_ENTRY_LOOP_RESULT = {
+    "timestamp": None,
+    "processed": 0,
+    "fills": 0,
+    "pending": 0,
+    "cancelled": 0,
+    "blocked": 0,
+    "errors": 0,
+    "results": [],
+}
 
 def iso_now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -54,6 +64,17 @@ def run_mark_to_market_refresh(account_id: int):
         return None, f"trade_guardian_mark_to_market_failed: {str(e)}"
 
     return payload, None
+
+def ingest_pending_loop_event_to_evaluator(payload: dict):
+    try:
+        r = requests.post(
+            f"{EVALUATOR_BASE_URL}/ingest/pending-entry-event",
+            json=payload,
+            timeout=15,
+        )
+        return r.json(), None
+    except Exception as e:
+        return None, f"evaluator_pending_entry_ingest_failed: {str(e)}"
 
 def fetch_latest_price(symbol: str):
     try:
@@ -347,6 +368,11 @@ def build_repriced_paper_payload(account_id: int, pending_payload: dict, risk_re
 
 def process_pending_entries_once():
     results = []
+    fills = 0
+    pending_count = 0
+    cancelled = 0
+    blocked = 0
+    errors_count = 0
 
     for symbol in list(get_pending_entry_symbols()):
         pending = PENDING_ENTRY_ORDERS.get(symbol)
@@ -355,9 +381,11 @@ def process_pending_entries_once():
 
         pending_payload = dict(pending["paper_payload"])
         attempt_number = int(pending.get("attempt_number", 1))
+        originating_cycle_id = pending_payload.get("originating_cycle_id")
 
         open_positions, positions_error = fetch_open_positions(ACCOUNT_ID)
         if positions_error:
+            errors_count += 1
             results.append({
                 "symbol": symbol,
                 "ok": False,
@@ -369,10 +397,26 @@ def process_pending_entries_once():
         current_open_symbols = {p["symbol"] for p in open_positions}
         if symbol in current_open_symbols:
             clear_pending_entry(symbol)
+
+            event_payload = {
+                "account_id": ACCOUNT_ID,
+                "cycle_id": originating_cycle_id,
+                "symbol": symbol,
+                "event_type": "ENTRY_FILLED",
+                "attempt_number": attempt_number,
+                "source": "pending_entry_loop",
+                "details": {
+                    "action": "CLEARED_ALREADY_OPEN",
+                },
+            }
+            ingest_pending_loop_event_to_evaluator(event_payload)
+
+            fills += 1
             results.append({
                 "symbol": symbol,
                 "ok": True,
                 "action": "CLEARED_ALREADY_OPEN",
+                "attempt_number": attempt_number,
             })
             continue
 
@@ -382,6 +426,7 @@ def process_pending_entries_once():
             ignore_pending_order=True,
         )
         if retry_gate_error:
+            errors_count += 1
             results.append({
                 "symbol": symbol,
                 "ok": False,
@@ -391,6 +436,21 @@ def process_pending_entries_once():
             continue
 
         if not retry_gate.get("trade_allowed", False):
+            blocked += 1
+
+            event_payload = {
+                "account_id": ACCOUNT_ID,
+                "cycle_id": originating_cycle_id,
+                "symbol": symbol,
+                "event_type": "ENTRY_BLOCKED",
+                "attempt_number": attempt_number,
+                "source": "pending_entry_loop",
+                "details": {
+                    "reason_codes": retry_gate.get("reason_codes", []),
+                },
+            }
+            ingest_pending_loop_event_to_evaluator(event_payload)
+
             results.append({
                 "symbol": symbol,
                 "ok": True,
@@ -401,6 +461,7 @@ def process_pending_entries_once():
 
         latest_price, latest_price_error = fetch_latest_price(symbol)
         if latest_price_error:
+            errors_count += 1
             results.append({
                 "symbol": symbol,
                 "ok": False,
@@ -417,6 +478,7 @@ def process_pending_entries_once():
 
         risk_result, risk_error = run_risk_engine(repriced_risk_payload)
         if risk_error:
+            errors_count += 1
             results.append({
                 "symbol": symbol,
                 "ok": False,
@@ -427,6 +489,22 @@ def process_pending_entries_once():
 
         if not risk_result.get("approved", False):
             clear_pending_entry(symbol)
+            cancelled += 1
+
+            event_payload = {
+                "account_id": ACCOUNT_ID,
+                "cycle_id": originating_cycle_id,
+                "symbol": symbol,
+                "event_type": "ENTRY_CANCELLED",
+                "attempt_number": attempt_number,
+                "source": "pending_entry_loop",
+                "details": {
+                    "reason": "RISK_REJECTED",
+                    "risk_result": risk_result,
+                },
+            }
+            ingest_pending_loop_event_to_evaluator(event_payload)
+
             results.append({
                 "symbol": symbol,
                 "ok": True,
@@ -445,9 +523,11 @@ def process_pending_entries_once():
         )
         paper_payload["attempt_number"] = new_attempt_number
         paper_payload["max_attempts"] = ENTRY_RETRY_MAX_ATTEMPTS
+        paper_payload["originating_cycle_id"] = originating_cycle_id
 
         paper_result, paper_error = submit_entry_to_paper_execution(paper_payload)
         if paper_error:
+            errors_count += 1
             results.append({
                 "symbol": symbol,
                 "ok": False,
@@ -460,10 +540,29 @@ def process_pending_entries_once():
 
         if action == "ENTRY_PENDING":
             store_pending_entry(symbol, paper_payload, {
-                "next_attempt_number": new_attempt_number + 1
+                "attempt_number": new_attempt_number
             })
+            pending_count += 1
         else:
             clear_pending_entry(symbol)
+
+        if action == "ENTRY_FILLED":
+            fills += 1
+        elif action.startswith("ENTRY_CANCELLED") or action.startswith("CANCELLED"):
+            cancelled += 1
+
+        event_payload = {
+            "account_id": ACCOUNT_ID,
+            "cycle_id": originating_cycle_id,
+            "symbol": symbol,
+            "event_type": action,
+            "attempt_number": new_attempt_number,
+            "source": "pending_entry_loop",
+            "details": {
+                "paper_result": paper_result,
+            },
+        }
+        ingest_pending_loop_event_to_evaluator(event_payload)
 
         results.append({
             "symbol": symbol,
@@ -473,12 +572,22 @@ def process_pending_entries_once():
             "paper_result": paper_result,
         })
 
-    return {
+    result = {
         "ok": True,
         "processed": len(results),
+        "fills": fills,
+        "pending": pending_count,
+        "cancelled": cancelled,
+        "blocked": blocked,
+        "errors": errors_count,
         "results": results,
         "timestamp": iso_now(),
     }
+
+    global LAST_PENDING_ENTRY_LOOP_RESULT
+    LAST_PENDING_ENTRY_LOOP_RESULT = result
+
+    return result
 
 def run_risk_engine(risk_payload: dict):
     try:
@@ -914,6 +1023,7 @@ def run_one_cycle():
                     **paper_payload,
                     "attempt_number": 1,
                     "max_attempts": ENTRY_RETRY_MAX_ATTEMPTS,
+                    "originating_cycle_id": cycle_id,
                 }, paper_result)
             else:
                 clear_pending_entry(symbol)
@@ -1038,6 +1148,14 @@ class Handler(BaseHTTPRequestHandler):
                 "pending_entry_max_attempts": pending_status["pending_entry_max_attempts"],
                 "pending_entries_count": pending_status["pending_entries_count"],
                 "pending_entries": pending_status["pending_entries"],
+                "last_pending_entry_loop_at": LAST_PENDING_ENTRY_LOOP_RESULT.get("timestamp"),
+                "last_pending_entry_loop_processed": LAST_PENDING_ENTRY_LOOP_RESULT.get("processed", 0),
+                "last_pending_entry_loop_fills": LAST_PENDING_ENTRY_LOOP_RESULT.get("fills", 0),
+                "last_pending_entry_loop_pending": LAST_PENDING_ENTRY_LOOP_RESULT.get("pending", 0),
+                "last_pending_entry_loop_cancelled": LAST_PENDING_ENTRY_LOOP_RESULT.get("cancelled", 0),
+                "last_pending_entry_loop_blocked": LAST_PENDING_ENTRY_LOOP_RESULT.get("blocked", 0),
+                "last_pending_entry_loop_errors": LAST_PENDING_ENTRY_LOOP_RESULT.get("errors", 0),
+                "last_pending_entry_loop_results": LAST_PENDING_ENTRY_LOOP_RESULT.get("results", []),
             })
             return
 

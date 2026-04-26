@@ -17,6 +17,13 @@ export default function OrderCycleStatusCard({
   pendingEntryMaxAttempts,
   pendingEntriesCount,
   pendingEntries,
+  lastPendingEntryLoopAt,
+  lastPendingEntryLoopProcessed,
+  lastPendingEntryLoopFills,
+  lastPendingEntryLoopPending,
+  lastPendingEntryLoopCancelled,
+  lastPendingEntryLoopBlocked,
+  lastPendingEntryLoopErrors,
 }: {
   autoLoopEnabled: boolean;
   loopIntervalSeconds: number;
@@ -24,6 +31,13 @@ export default function OrderCycleStatusCard({
   pendingEntryMaxAttempts: number;
   pendingEntriesCount: number;
   pendingEntries: PendingEntryItem[];
+  lastPendingEntryLoopAt?: string | null;
+  lastPendingEntryLoopProcessed?: number | null;
+  lastPendingEntryLoopFills?: number | null;
+  lastPendingEntryLoopPending?: number | null;
+  lastPendingEntryLoopCancelled?: number | null;
+  lastPendingEntryLoopBlocked?: number | null;
+  lastPendingEntryLoopErrors?: number | null;
 }) {
   return (
     <GlassCard>
@@ -62,6 +76,43 @@ export default function OrderCycleStatusCard({
         </div>
       </div>
 
+      <div className="mt-4 grid gap-4 md:grid-cols-5">
+        <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
+          <div className="text-xs text-white/40">Last Processed</div>
+          <div className="mt-1 text-lg font-semibold text-white">
+            {lastPendingEntryLoopProcessed ?? 0}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
+          <div className="text-xs text-white/40">Last Fills</div>
+          <div className="mt-1 text-lg font-semibold text-emerald-300">
+            {lastPendingEntryLoopFills ?? 0}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
+          <div className="text-xs text-white/40">Still Pending</div>
+          <div className="mt-1 text-lg font-semibold text-amber-200">
+            {lastPendingEntryLoopPending ?? 0}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
+          <div className="text-xs text-white/40">Cancelled / Blocked</div>
+          <div className="mt-1 text-lg font-semibold text-white">
+            {(lastPendingEntryLoopCancelled ?? 0) + (lastPendingEntryLoopBlocked ?? 0)}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
+          <div className="text-xs text-white/40">Last Errors</div>
+          <div className="mt-1 text-lg font-semibold text-rose-300">
+            {lastPendingEntryLoopErrors ?? 0}
+          </div>
+        </div>
+      </div>
+
       <div className="mt-4 rounded-2xl border border-white/8 bg-white/5 p-4">
         <div className="flex items-center justify-between">
           <div className="text-sm text-white/70">Scheduler state</div>
@@ -73,6 +124,12 @@ export default function OrderCycleStatusCard({
             }`}
           >
             {autoLoopEnabled ? "Enabled" : "Disabled"}
+          </div>
+          <div className="mt-3 text-xs text-white/45">
+            Last order cycle run:{" "}
+            {lastPendingEntryLoopAt
+              ? new Date(lastPendingEntryLoopAt).toLocaleString()
+              : "No order cycle activity yet"}
           </div>
         </div>
 

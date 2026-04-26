@@ -24,6 +24,13 @@ export type ConfigurationSettings = {
     position_side?: string;
     entry_price?: number;
   }>;
+  last_pending_entry_loop_at?: string | null;
+  last_pending_entry_loop_processed?: number;
+  last_pending_entry_loop_fills?: number;
+  last_pending_entry_loop_pending?: number;
+  last_pending_entry_loop_cancelled?: number;
+  last_pending_entry_loop_blocked?: number;
+  last_pending_entry_loop_errors?: number;
 };
 
 export type ConfigurationBootstrapResponse = {

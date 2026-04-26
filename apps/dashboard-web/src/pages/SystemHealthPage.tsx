@@ -75,13 +75,32 @@ export default function SystemHealthPage() {
           autoLoopEnabled={data.freshness.scheduler_auto_loop_enabled ?? false}
           loopIntervalSeconds={data.freshness.scheduler_loop_interval_seconds ?? 300}
           pendingEntryLoopIntervalSeconds={
-            data.order_cycle.pending_entry_loop_interval_seconds ?? 60
+            data.order_cycle?.pending_entry_loop_interval_seconds ?? 60
           }
           pendingEntryMaxAttempts={
-            data.order_cycle.pending_entry_max_attempts ?? 15
+            data.order_cycle?.pending_entry_max_attempts ?? 15
           }
-          pendingEntriesCount={data.order_cycle.pending_entries_count ?? 0}
-          pendingEntries={data.order_cycle.pending_entries ?? []}
+          pendingEntriesCount={data.order_cycle?.pending_entries_count ?? 0}
+          pendingEntries={data.order_cycle?.pending_entries ?? []}
+          lastPendingEntryLoopAt={data.order_cycle?.last_pending_entry_loop_at ?? null}
+          lastPendingEntryLoopProcessed={
+            data.order_cycle?.last_pending_entry_loop_processed ?? 0
+          }
+          lastPendingEntryLoopFills={
+            data.order_cycle?.last_pending_entry_loop_fills ?? 0
+          }
+          lastPendingEntryLoopPending={
+            data.order_cycle?.last_pending_entry_loop_pending ?? 0
+          }
+          lastPendingEntryLoopCancelled={
+            data.order_cycle?.last_pending_entry_loop_cancelled ?? 0
+          }
+          lastPendingEntryLoopBlocked={
+            data.order_cycle?.last_pending_entry_loop_blocked ?? 0
+          }
+          lastPendingEntryLoopErrors={
+            data.order_cycle?.last_pending_entry_loop_errors ?? 0
+          }
         />
       ) : null}      
 
