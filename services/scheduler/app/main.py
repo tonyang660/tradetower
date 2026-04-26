@@ -49,6 +49,18 @@ LAST_PENDING_ENTRY_LOOP_RESULT = {
     "results": [],
 }
 
+MAINTENANCE_LOOP_INTERVAL_SECONDS = int(os.getenv("MAINTENANCE_LOOP_INTERVAL_SECONDS", "60"))
+
+LAST_MAINTENANCE_LOOP_RESULT = {
+    "timestamp": None,
+    "checked": 0,
+    "actions_triggered": 0,
+    "no_action": 0,
+    "blocked": 0,
+    "errors": 0,
+    "results": [],
+}
+
 def iso_now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -589,6 +601,102 @@ def process_pending_entries_once():
 
     return result
 
+def process_open_position_maintenance_once():
+    results = []
+    checked = 0
+    actions_triggered = 0
+    no_action = 0
+    blocked = 0
+    errors_count = 0
+
+    open_positions, positions_error = fetch_open_positions(ACCOUNT_ID)
+    if positions_error:
+        result = {
+            "ok": False,
+            "timestamp": iso_now(),
+            "checked": 0,
+            "actions_triggered": 0,
+            "no_action": 0,
+            "blocked": 0,
+            "errors": 1,
+            "results": [{
+                "ok": False,
+                "stage": "positions_fetch",
+                "error": positions_error,
+            }],
+        }
+
+        global LAST_MAINTENANCE_LOOP_RESULT
+        LAST_MAINTENANCE_LOOP_RESULT = result
+        return result
+
+    for pos in open_positions:
+        symbol = pos["symbol"]
+        checked += 1
+
+        guard_result, guard_error = check_maintenance(ACCOUNT_ID, symbol)
+        if guard_error:
+            errors_count += 1
+            results.append({
+                "symbol": symbol,
+                "ok": False,
+                "stage": "trade_guardian",
+                "error": guard_error,
+            })
+            continue
+
+        if not guard_result.get("maintenance_allowed", False):
+            blocked += 1
+            results.append({
+                "symbol": symbol,
+                "ok": True,
+                "action": "MAINTENANCE_BLOCKED",
+                "reason_codes": guard_result.get("reason_codes", []),
+            })
+            continue
+
+        maintenance_result, maintenance_error = run_maintenance(ACCOUNT_ID, symbol)
+        if maintenance_error:
+            errors_count += 1
+            results.append({
+                "symbol": symbol,
+                "ok": False,
+                "stage": "paper_execution",
+                "error": maintenance_error,
+            })
+            continue
+
+        action = str(maintenance_result.get("action", "NO_ACTION")).upper()
+
+        results.append({
+            "symbol": symbol,
+            "ok": True,
+            "action": action,
+            "execution_event": maintenance_result.get("execution_event"),
+            "guardian_result": maintenance_result.get("guardian_result"),
+        })
+
+        if action != "NO_ACTION":
+            actions_triggered += 1
+        else:
+            no_action += 1
+
+    result = {
+        "ok": True,
+        "timestamp": iso_now(),
+        "checked": checked,
+        "actions_triggered": actions_triggered,
+        "no_action": no_action,
+        "blocked": blocked,
+        "errors": errors_count,
+        "results": results,
+    }
+
+    global LAST_MAINTENANCE_LOOP_RESULT
+    LAST_MAINTENANCE_LOOP_RESULT = result
+
+    return result
+
 def run_risk_engine(risk_payload: dict):
     try:
         r = requests.post(
@@ -797,79 +905,17 @@ def run_one_cycle():
                 refreshed_ok_symbols.add(item["symbol"])
         summary["refreshed_symbols_count"] = len(refreshed_ok_symbols)
 
-        # Phase 2: maintenance path
+        # Phase 2: fetch current open positions snapshot only
         open_positions, positions_error = fetch_open_positions(ACCOUNT_ID)
         if positions_error:
             summary["errors"].append(positions_error)
             open_positions = []
 
         summary["open_positions_before_maintenance_count"] = len(open_positions)
-        open_symbols_before_maintenance = [p["symbol"] for p in open_positions]
+        summary["open_positions_count"] = len(open_positions)
 
-        for pos in open_positions:
-            symbol = pos["symbol"]
-            summary["maintenance"]["checked"] += 1
-
-            guard_result, guard_error = check_maintenance(ACCOUNT_ID, symbol)
-            if guard_error:
-                summary["maintenance"]["errors"] += 1
-                summary["maintenance"]["results"].append({
-                    "symbol": symbol,
-                    "ok": False,
-                    "stage": "trade_guardian",
-                    "error": guard_error
-                })
-                continue
-
-            if not guard_result.get("maintenance_allowed", False):
-                summary["maintenance"]["results"].append({
-                    "symbol": symbol,
-                    "ok": True,
-                    "action": "MAINTENANCE_BLOCKED",
-                    "reason_codes": guard_result.get("reason_codes", [])
-                })
-                continue
-
-            maintenance_result, maintenance_error = run_maintenance(ACCOUNT_ID, symbol)
-            if maintenance_error:
-                summary["maintenance"]["errors"] += 1
-                summary["maintenance"]["results"].append({
-                    "symbol": symbol,
-                    "ok": False,
-                    "stage": "paper_execution",
-                    "error": maintenance_error
-                })
-                continue
-
-            action = maintenance_result.get("action", "NO_ACTION")
-
-            summary["maintenance"]["results"].append({
-                "symbol": symbol,
-                "ok": True,
-                "action": action,
-                "execution_event": maintenance_result.get("execution_event"),
-                "guardian_result": maintenance_result.get("guardian_result"),
-            })
-
-            if action and action != "NO_ACTION":
-                summary["maintenance"]["actions_triggered"] += 1
-            else:
-                summary["maintenance"]["no_action"] += 1
-
-        # Refresh open positions after maintenance so entry path uses current state
-        post_maintenance_positions, positions_error = fetch_open_positions(ACCOUNT_ID)
-        if positions_error:
-            summary["errors"].append(positions_error)
-            post_maintenance_positions = open_positions
-
-        summary["open_positions_count"] = len(post_maintenance_positions)
-        current_open_symbols = [p["symbol"] for p in post_maintenance_positions]
-
-        maintenance_touched_symbols = {
-            item["symbol"]
-            for item in summary["maintenance"]["results"]
-            if item.get("symbol")
-        }
+        current_open_symbols = [p["symbol"] for p in open_positions]
+        maintenance_touched_symbols = set()
 
         # Phase 3: account-level entry gate
         entry_gate, entry_error = check_entry_gate(ACCOUNT_ID)
@@ -1102,6 +1148,26 @@ def pending_entry_loop():
 
         time.sleep(PENDING_ENTRY_LOOP_INTERVAL_SECONDS)
 
+def open_position_maintenance_loop():
+    while True:
+        try:
+            if AUTO_LOOP_ENABLED_STATE:
+                result = process_open_position_maintenance_once()
+                print(json.dumps({
+                    "event": "MAINTENANCE_LOOP_COMPLETED",
+                    "checked": result.get("checked", 0),
+                    "actions_triggered": result.get("actions_triggered", 0),
+                    "timestamp": result.get("timestamp"),
+                }))
+        except Exception as e:
+            print(json.dumps({
+                "event": "MAINTENANCE_LOOP_FAILED",
+                "error": str(e),
+                "timestamp": iso_now(),
+            }))
+
+        time.sleep(MAINTENANCE_LOOP_INTERVAL_SECONDS)
+
 def scheduler_loop():
     while True:
         global AUTO_LOOP_ENABLED_STATE
@@ -1156,6 +1222,14 @@ class Handler(BaseHTTPRequestHandler):
                 "last_pending_entry_loop_blocked": LAST_PENDING_ENTRY_LOOP_RESULT.get("blocked", 0),
                 "last_pending_entry_loop_errors": LAST_PENDING_ENTRY_LOOP_RESULT.get("errors", 0),
                 "last_pending_entry_loop_results": LAST_PENDING_ENTRY_LOOP_RESULT.get("results", []),
+                "maintenance_loop_interval_seconds": MAINTENANCE_LOOP_INTERVAL_SECONDS,
+                "last_maintenance_loop_at": LAST_MAINTENANCE_LOOP_RESULT.get("timestamp"),
+                "last_maintenance_loop_checked": LAST_MAINTENANCE_LOOP_RESULT.get("checked", 0),
+                "last_maintenance_loop_actions_triggered": LAST_MAINTENANCE_LOOP_RESULT.get("actions_triggered", 0),
+                "last_maintenance_loop_no_action": LAST_MAINTENANCE_LOOP_RESULT.get("no_action", 0),
+                "last_maintenance_loop_blocked": LAST_MAINTENANCE_LOOP_RESULT.get("blocked", 0),
+                "last_maintenance_loop_errors": LAST_MAINTENANCE_LOOP_RESULT.get("errors", 0),
+                "last_maintenance_loop_results": LAST_MAINTENANCE_LOOP_RESULT.get("results", []),
             })
             return
 
@@ -1222,8 +1296,12 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     loop_thread = Thread(target=scheduler_loop, daemon=True)
     loop_thread.start()
+
     pending_thread = Thread(target=pending_entry_loop, daemon=True)
     pending_thread.start()
+
+    maintenance_thread = Thread(target=open_position_maintenance_loop, daemon=True)
+    maintenance_thread.start()
 
     server = HTTPServer(("0.0.0.0", PORT), Handler)
     print(f"{SERVICE_NAME} listening on {PORT}")
