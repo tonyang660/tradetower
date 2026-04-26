@@ -772,7 +772,7 @@ def create_protective_orders_for_position(
             account_id=account_id,
             symbol=symbol,
             side=exit_side,
-            order_type="market",
+            order_type="limit",
             requested_price=stop_loss,
             requested_size=original_size,
             status="submitted",
@@ -820,6 +820,39 @@ def create_protective_orders_for_position(
 
     return created
 
+def reprice_protective_order(account_id: int, order_id: int, new_price: float):
+    query = """
+    UPDATE orders
+    SET requested_price = %s,
+        stop_loss = CASE WHEN role = 'stop_loss' THEN %s ELSE stop_loss END,
+        tp1 = CASE WHEN role = 'tp1' THEN %s ELSE tp1 END,
+        tp2 = CASE WHEN role = 'tp2' THEN %s ELSE tp2 END,
+        tp3 = CASE WHEN role = 'tp3' THEN %s ELSE tp3 END,
+        updated_at = NOW()
+    WHERE account_id = %s
+      AND order_id = %s
+      AND status IN ('planned', 'submitted')
+      AND role IN ('stop_loss', 'tp1', 'tp2', 'tp3')
+    RETURNING order_id, role, requested_price
+    """
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                query,
+                (new_price, new_price, new_price, new_price, new_price, account_id, order_id),
+            )
+            row = cur.fetchone()
+        conn.commit()
+
+    if not row:
+        return None
+
+    return {
+        "order_id": int(row[0]),
+        "role": row[1],
+        "requested_price": float(row[2]),
+    }
 
 def update_order_status(order_id: int, status: str):
     with get_conn() as conn:
@@ -1180,7 +1213,7 @@ def create_protective_orders_for_position_tx(
             account_id=account_id,
             symbol=symbol,
             side=exit_side,
-            order_type="market",
+            order_type="limit",
             requested_price=stop_loss,
             requested_size=original_size,
             status="submitted",
@@ -2163,6 +2196,41 @@ class Handler(BaseHTTPRequestHandler):
 
                 result = refresh_mark_to_market(account_id)
                 self._send_json(result)
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "internal_error",
+                    "details": str(e)
+                }, status=500)
+                return
+            
+        if self.path == "/orders/reprice-protective":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+
+                account_id = int(payload["account_id"])
+                order_id = int(payload["order_id"])
+                new_price = float(payload["new_price"])
+
+                updated = reprice_protective_order(account_id, order_id, new_price)
+                if not updated:
+                    self._send_json({
+                        "ok": False,
+                        "error": "protective_order_not_found_or_not_open",
+                        "account_id": account_id,
+                        "order_id": order_id,
+                    }, status=404)
+                    return
+
+                self._send_json({
+                    "ok": True,
+                    "account_id": account_id,
+                    **updated
+                })
                 return
 
             except Exception as e:

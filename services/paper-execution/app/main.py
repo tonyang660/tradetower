@@ -45,8 +45,11 @@ def apply_market_slippage(price: float, position_side: str, execution_type: str)
 
     return price
 
+def can_fill_stop_limit_now(candles: list[dict], stop_price: float) -> bool:
+    return recent_candles_touch_limit(candles, stop_price)
+
 def apply_exit_fill_price(trigger_price: float, position_side: str, execution_type: str) -> float:
-    if execution_type.startswith("TP"):
+    if execution_type.startswith("TP") or execution_type == "STOP_LOSS":
         return trigger_price
     return apply_market_slippage(trigger_price, position_side, execution_type)
 
@@ -353,6 +356,7 @@ def simulate_entry(payload: dict):
 def simulate_maintenance(payload: dict):
     account_id = int(payload["account_id"])
     symbol = payload["symbol"].upper()
+    force_market_stop_loss = bool(payload.get("force_market_stop_loss", False))
 
     position, error = fetch_open_position(account_id, symbol)
     if error:
@@ -473,10 +477,36 @@ def simulate_maintenance(payload: dict):
             "action": "NO_ACTION"
         }
 
+    if execution_type == "STOP_LOSS":
+        stop_order_type = str(trigger_order.get("order_type", "")).lower()
+
+        if stop_order_type == "limit" and not force_market_stop_loss:
+            if not can_fill_stop_limit_now(candles, float(trigger_price)):
+                return {
+                    "ok": True,
+                    "action": "STOP_LOSS_PENDING",
+                    "order_id": int(trigger_order["order_id"]) if trigger_order and trigger_order.get("order_id") is not None else None,
+                    "trigger_price": float(trigger_price),
+                    "reason_codes": ["STOP_LIMIT_NOT_FILLED"],
+                }
+
     close_size = min(float(close_size), float(position["remaining_size"]))
-    actual_fill_price = apply_exit_fill_price(trigger_price, side, execution_type)
+
+    effective_order_type = "limit"
+    effective_slippage_bps = 0.0
+
+    if execution_type == "STOP_LOSS" and force_market_stop_loss:
+        effective_order_type = "market"
+        effective_slippage_bps = MARKET_SLIPPAGE_PCT * 100
+
+    actual_fill_price = (
+        apply_market_slippage(trigger_price, side, execution_type)
+        if effective_order_type == "market"
+        else float(trigger_price)
+    )
+
     notional = actual_fill_price * close_size
-    fee_pct = LIMIT_FEE_PCT if execution_type.startswith("TP") else MARKET_FEE_PCT
+    fee_pct = LIMIT_FEE_PCT if effective_order_type == "limit" else MARKET_FEE_PCT
     fee_paid = calc_fee(notional, fee_pct)
 
     execution_event = {
@@ -484,12 +514,12 @@ def simulate_maintenance(payload: dict):
         "symbol": symbol,
         "position_side": side,
         "execution_type": execution_type,
-        "order_type": "limit" if execution_type.startswith("TP") else "market",
+        "order_type": effective_order_type,
         "order_id": int(trigger_order["order_id"]) if trigger_order and trigger_order.get("order_id") is not None else None,
         "fill_price": actual_fill_price,
         "filled_size": close_size,
         "fee_paid": fee_paid,
-        "slippage_bps": 0.0 if execution_type.startswith("TP") else MARKET_SLIPPAGE_PCT * 100,
+        "slippage_bps": effective_slippage_bps,
         "notes": f"paper maintenance {execution_type.lower()} trigger"
     }
     guardian_result, g_error = send_execution_to_guardian(execution_event)

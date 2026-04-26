@@ -61,6 +61,19 @@ LAST_MAINTENANCE_LOOP_RESULT = {
     "results": [],
 }
 
+EXIT_RETRY_MAX_ATTEMPTS = int(os.getenv("EXIT_RETRY_MAX_ATTEMPTS", "5"))
+PENDING_EXIT_ORDERS = {}
+
+LAST_PENDING_EXIT_LOOP_RESULT = {
+    "timestamp": None,
+    "processed": 0,
+    "filled": 0,
+    "pending": 0,
+    "forced_market": 0,
+    "errors": 0,
+    "results": [],
+}
+
 def iso_now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -215,6 +228,113 @@ def fetch_open_positions(account_id: int):
 
     return payload.get("positions", []), None
 
+def process_pending_exits_once():
+    results = []
+    filled = 0
+    pending = 0
+    forced_market = 0
+    errors_count = 0
+
+    for symbol in list(PENDING_EXIT_ORDERS.keys()):
+        state = PENDING_EXIT_ORDERS.get(symbol)
+        if not state:
+            continue
+
+        attempt_number = int(state.get("attempt_number", 1))
+        order_id = int(state["order_id"])
+
+        latest_price, latest_price_error = fetch_latest_price(symbol)
+        if latest_price_error:
+            errors_count += 1
+            results.append({
+                "symbol": symbol,
+                "ok": False,
+                "stage": "latest_price",
+                "error": latest_price_error,
+            })
+            continue
+
+        reprice_result, reprice_error = reprice_protective_order(
+            ACCOUNT_ID,
+            order_id,
+            latest_price,
+        )
+        if reprice_error:
+            errors_count += 1
+            results.append({
+                "symbol": symbol,
+                "ok": False,
+                "stage": "reprice_protective",
+                "error": reprice_error,
+            })
+            continue
+
+        use_force_market = attempt_number >= EXIT_RETRY_MAX_ATTEMPTS
+        if use_force_market:
+            forced_market += 1
+
+        maintenance_result, maintenance_error = run_maintenance(
+            ACCOUNT_ID,
+            symbol,
+            force_market_stop_loss=use_force_market,
+        )
+        if maintenance_error:
+            errors_count += 1
+            results.append({
+                "symbol": symbol,
+                "ok": False,
+                "stage": "paper_execution",
+                "error": maintenance_error,
+            })
+            continue
+
+        if not maintenance_result.get("ok", False):
+            errors_count += 1
+            results.append({
+                "symbol": symbol,
+                "ok": False,
+                "stage": "paper_execution",
+                "error": maintenance_result.get("error", "maintenance_failed"),
+                "details": maintenance_result,
+            })
+            continue
+
+        action = str(maintenance_result.get("action", "")).upper()
+
+        if action == "STOP_LOSS_PENDING":
+            PENDING_EXIT_ORDERS[symbol]["attempt_number"] = attempt_number + 1
+            PENDING_EXIT_ORDERS[symbol]["updated_at"] = iso_now()
+            pending += 1
+        else:
+            PENDING_EXIT_ORDERS.pop(symbol, None)
+
+        if action in ("STOP_LOSS_TRIGGERED", "STOP_LOSS_APPLIED_POSITION_CLOSED"):
+            filled += 1
+
+        results.append({
+            "symbol": symbol,
+            "ok": True,
+            "action": action,
+            "attempt_number": attempt_number,
+            "forced_market": use_force_market,
+            "maintenance_result": maintenance_result,
+            "reprice_result": reprice_result,
+        })
+
+    result = {
+        "ok": True,
+        "timestamp": iso_now(),
+        "processed": len(results),
+        "filled": filled,
+        "pending": pending,
+        "forced_market": forced_market,
+        "errors": errors_count,
+        "results": results,
+    }
+
+    global LAST_PENDING_EXIT_LOOP_RESULT
+    LAST_PENDING_EXIT_LOOP_RESULT = result
+    return result
 
 def check_maintenance(account_id: int, symbol: str):
     try:
@@ -230,11 +350,15 @@ def check_maintenance(account_id: int, symbol: str):
     return payload, None
 
 
-def run_maintenance(account_id: int, symbol: str):
+def run_maintenance(account_id: int, symbol: str, force_market_stop_loss: bool = False):
     try:
         r = requests.post(
             f"{PAPER_EXECUTION_BASE_URL}/maintenance/check",
-            json={"account_id": account_id, "symbol": symbol},
+            json={
+                "account_id": account_id,
+                "symbol": symbol,
+                "force_market_stop_loss": force_market_stop_loss,
+            },
             timeout=20
         )
         payload = r.json()
@@ -311,6 +435,26 @@ def run_strategy_engine(symbol: str):
         payload = r.json()
     except Exception as e:
         return None, f"strategy_engine_request_failed: {str(e)}"
+
+    return payload, None
+
+def reprice_protective_order(account_id: int, order_id: int, new_price: float):
+    try:
+        r = requests.post(
+            f"{TRADE_GUARDIAN_BASE_URL}/orders/reprice-protective",
+            json={
+                "account_id": account_id,
+                "order_id": order_id,
+                "new_price": new_price,
+            },
+            timeout=10,
+        )
+        payload = r.json()
+    except Exception as e:
+        return None, f"trade_guardian_reprice_protective_failed: {str(e)}"
+
+    if not payload.get("ok", False):
+        return None, payload.get("error", "protective_reprice_failed")
 
     return payload, None
 
@@ -678,6 +822,15 @@ def process_open_position_maintenance_once():
             continue
 
         action = str(maintenance_result.get("action", "NO_ACTION")).upper()
+
+        if action == "STOP_LOSS_PENDING":
+            order_id = maintenance_result.get("order_id")
+            if order_id is not None:
+                PENDING_EXIT_ORDERS[symbol] = {
+                    "order_id": int(order_id),
+                    "attempt_number": 1,
+                    "updated_at": iso_now(),
+                }        
 
         results.append({
             "symbol": symbol,
@@ -1158,6 +1311,26 @@ def pending_entry_loop():
 
         time.sleep(PENDING_ENTRY_LOOP_INTERVAL_SECONDS)
 
+def pending_exit_loop():
+    while True:
+        try:
+            if AUTO_LOOP_ENABLED_STATE and len(PENDING_EXIT_ORDERS) > 0:
+                result = process_pending_exits_once()
+                print(json.dumps({
+                    "event": "PENDING_EXIT_LOOP_COMPLETED",
+                    "processed": result["processed"],
+                    "filled": result["filled"],
+                    "timestamp": result["timestamp"],
+                }))
+        except Exception as e:
+            print(json.dumps({
+                "event": "PENDING_EXIT_LOOP_FAILED",
+                "error": str(e),
+                "timestamp": iso_now(),
+            }))
+
+        time.sleep(MAINTENANCE_LOOP_INTERVAL_SECONDS)
+
 def open_position_maintenance_loop():
     while True:
         try:
@@ -1240,6 +1413,14 @@ class Handler(BaseHTTPRequestHandler):
                 "last_maintenance_loop_blocked": LAST_MAINTENANCE_LOOP_RESULT.get("blocked", 0),
                 "last_maintenance_loop_errors": LAST_MAINTENANCE_LOOP_RESULT.get("errors", 0),
                 "last_maintenance_loop_results": LAST_MAINTENANCE_LOOP_RESULT.get("results", []),
+                "pending_exit_orders_count": len(PENDING_EXIT_ORDERS),
+                "last_pending_exit_loop_at": LAST_PENDING_EXIT_LOOP_RESULT.get("timestamp"),
+                "last_pending_exit_loop_processed": LAST_PENDING_EXIT_LOOP_RESULT.get("processed", 0),
+                "last_pending_exit_loop_filled": LAST_PENDING_EXIT_LOOP_RESULT.get("filled", 0),
+                "last_pending_exit_loop_pending": LAST_PENDING_EXIT_LOOP_RESULT.get("pending", 0),
+                "last_pending_exit_loop_forced_market": LAST_PENDING_EXIT_LOOP_RESULT.get("forced_market", 0),
+                "last_pending_exit_loop_errors": LAST_PENDING_EXIT_LOOP_RESULT.get("errors", 0),
+                "last_pending_exit_loop_results": LAST_PENDING_EXIT_LOOP_RESULT.get("results", []),
             })
             return
 
@@ -1309,6 +1490,9 @@ if __name__ == "__main__":
 
     pending_thread = Thread(target=pending_entry_loop, daemon=True)
     pending_thread.start()
+
+    pending_exit_thread = Thread(target=pending_exit_loop, daemon=True)
+    pending_exit_thread.start()
 
     maintenance_thread = Thread(target=open_position_maintenance_loop, daemon=True)
     maintenance_thread.start()
