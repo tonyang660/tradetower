@@ -74,6 +74,31 @@
       "symbol": "ARBUSDT",
       "enabled": true,
       "priority": 1
+    },
+    {
+      "symbol": "ZECUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "ADAUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "SUIUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "XMRUSDT",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "symbol": "HYPEUSDT",
+      "enabled": true,
+      "priority": 1
     }
   ]
 }
