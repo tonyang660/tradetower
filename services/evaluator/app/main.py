@@ -806,7 +806,7 @@ def get_performance_summary_extended(account_id: int):
                 """
                 SELECT
                     COALESCE(COUNT(*), 0),
-                    COALESCE(SUM(COALESCE(realized_pnl, 0) - COALESCE(fees_paid, 0)), 0),
+                    COALESCE(SUM(COALESCE(realized_pnl, 0) + COALESCE(fees_paid, 0)), 0),
                     COALESCE(SUM(realized_pnl), 0),
                     COALESCE(SUM(fees_paid), 0),
                     COALESCE(AVG(realized_pnl), 0),
