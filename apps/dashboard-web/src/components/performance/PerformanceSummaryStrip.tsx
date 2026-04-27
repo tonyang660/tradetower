@@ -11,7 +11,11 @@ export default function PerformanceSummaryStrip({
 
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-8">
-      <MetricCard label="Gross PnL" value={money(s?.gross_pnl)} hint="Winning pnl before fees" />
+      <MetricCard
+        label="Gross PnL"
+        value={money(s?.gross_pnl)}
+        hint="PnL before fees"
+      />
       <MetricCard label="Net PnL" value={money(s?.net_pnl)} hint="After losses and fees" />
       <MetricCard label="Fees Paid" value={money(s?.total_fees_paid)} hint="Cumulative execution costs" />
       <MetricCard
