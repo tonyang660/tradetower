@@ -652,6 +652,36 @@ def process_pending_entries_once():
             continue
 
         if not retry_gate.get("trade_allowed", False):
+            reason_codes = retry_gate.get("reason_codes", [])
+
+            # If capacity is full, stop retrying this pending entry.
+            # A fresh candidate can be generated later once capacity opens again.
+            if "MAX_CONCURRENT_POSITIONS_REACHED" in reason_codes:
+                clear_pending_entry(symbol)
+                cancelled += 1
+
+                event_payload = {
+                    "account_id": ACCOUNT_ID,
+                    "cycle_id": originating_cycle_id,
+                    "symbol": symbol,
+                    "event_type": "ENTRY_CANCELLED",
+                    "attempt_number": attempt_number,
+                    "source": "pending_entry_loop",
+                    "details": {
+                        "reason": "MAX_CONCURRENT_POSITIONS_REACHED",
+                        "reason_codes": reason_codes,
+                    },
+                }
+                ingest_pending_loop_event_to_evaluator(event_payload)
+
+                results.append({
+                    "symbol": symbol,
+                    "ok": True,
+                    "action": "CANCELLED_CAPACITY_BLOCKED",
+                    "reason_codes": reason_codes,
+                })
+                continue
+
             blocked += 1
 
             event_payload = {
@@ -662,7 +692,7 @@ def process_pending_entries_once():
                 "attempt_number": attempt_number,
                 "source": "pending_entry_loop",
                 "details": {
-                    "reason_codes": retry_gate.get("reason_codes", []),
+                    "reason_codes": reason_codes,
                 },
             }
             ingest_pending_loop_event_to_evaluator(event_payload)
@@ -671,7 +701,7 @@ def process_pending_entries_once():
                 "symbol": symbol,
                 "ok": True,
                 "action": "BLOCKED",
-                "reason_codes": retry_gate.get("reason_codes", []),
+                "reason_codes": reason_codes,
             })
             continue
 

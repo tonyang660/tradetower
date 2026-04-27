@@ -263,9 +263,17 @@ def fetch_guardian_status(account_id: int):
         a.is_active,
         ab.cash_balance,
         ab.equity,
-        ab.realized_pnl,
+        COALESCE((
+            SELECT SUM(t.realized_pnl)
+            FROM trades t
+            WHERE t.account_id = a.account_id
+        ), 0) AS realized_pnl,
         ab.unrealized_pnl,
-        ab.fees_paid_total,
+        COALESCE((
+            SELECT SUM(er.fee_paid)
+            FROM execution_reports er
+            WHERE er.account_id = a.account_id
+        ), 0) AS fees_paid_total,
         gs.trading_enabled,
         gs.manual_halt,
         gs.daily_kill_switch,
