@@ -203,10 +203,10 @@ def evaluate_and_refresh_guardian_state(status: dict):
         status = fetch_guardian_status(account_id)
 
     # --- Daily net realized loss check ---
-    daily_realized_pnl = get_realized_pnl_for_period(account_id, start_of_today_utc())
     daily_limit_amount = status["daily_basis_equity"] * (status["daily_loss_limit_pct"] / 100.0)
+    daily_drawdown = status["daily_basis_equity"] - status["equity"]
 
-    if daily_realized_pnl < 0 and abs(daily_realized_pnl) >= daily_limit_amount:
+    if daily_drawdown >= daily_limit_amount:
         if not status["daily_kill_switch"]:
             update_guardian_state_fields(account_id, {"daily_kill_switch": True})
 
@@ -215,7 +215,9 @@ def evaluate_and_refresh_guardian_state(status: dict):
                 "DAILY_KILL_SWITCH_TRIGGERED",
                 "DAILY_MAX_LOSS_REACHED",
                 {
-                    "daily_realized_pnl": daily_realized_pnl,
+                    "daily_basis_equity": status["daily_basis_equity"],
+                    "current_equity": status["equity"],
+                    "daily_drawdown": daily_drawdown,
                     "daily_limit_amount": daily_limit_amount
                 }
             )
@@ -223,10 +225,10 @@ def evaluate_and_refresh_guardian_state(status: dict):
             status = fetch_guardian_status(account_id)
 
     # --- Weekly net realized loss check ---
-    weekly_realized_pnl = get_realized_pnl_for_period(account_id, start_of_week_utc())
     weekly_limit_amount = status["weekly_basis_equity"] * (status["weekly_loss_limit_pct"] / 100.0)
+    weekly_drawdown = status["weekly_basis_equity"] - status["equity"]
 
-    if weekly_realized_pnl < 0 and abs(weekly_realized_pnl) >= weekly_limit_amount:
+    if weekly_drawdown >= weekly_limit_amount:
         if not status["weekly_kill_switch"]:
             expiry_candidate = now + timedelta(hours=48)
             sunday_cutoff = sunday_end_utc()
@@ -245,7 +247,9 @@ def evaluate_and_refresh_guardian_state(status: dict):
                 "WEEKLY_KILL_SWITCH_TRIGGERED",
                 "WEEKLY_MAX_LOSS_REACHED",
                 {
-                    "weekly_realized_pnl": weekly_realized_pnl,
+                    "weekly_basis_equity": status["weekly_basis_equity"],
+                    "current_equity": status["equity"],
+                    "weekly_drawdown": weekly_drawdown,
                     "weekly_limit_amount": weekly_limit_amount,
                     "expires_at": final_expiry.isoformat().replace("+00:00", "Z")
                 }
