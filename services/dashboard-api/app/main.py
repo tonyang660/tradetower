@@ -61,6 +61,26 @@ def post_json(url: str, payload: dict, timeout: int = 15):
     except Exception as e:
         return None, None, str(e)
     
+def get_execution_history(account_id: int, limit: int):
+    payload, status_code, error = get_json(
+        f"{EVALUATOR_BASE_URL}/orders/executed",
+        params={"account_id": account_id, "limit": limit},
+        timeout=20,
+    )
+
+    if error:
+        return {
+            "ok": False,
+            "error": error,
+        }, 500
+
+    if status_code != 200:
+        return {
+            "ok": False,
+            "error": payload,
+        }, status_code or 500
+
+    return payload, 200
 
 def load_symbol_universe_config():
     path = Path(SYMBOL_UNIVERSE_PATH)
@@ -1589,6 +1609,13 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/orders/open":
             account_id = int(query.get("account_id", ["1"])[0])
             payload, status = get_open_orders(account_id)
+            self._send_json(payload, status=status)
+            return
+        
+        if parsed.path == "/orders/executed":
+            account_id = int(query.get("account_id", ["1"])[0])
+            limit = int(query.get("limit", ["50"])[0])
+            payload, status = get_execution_history(account_id, limit)
             self._send_json(payload, status=status)
             return
         

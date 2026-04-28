@@ -212,6 +212,86 @@ def get_open_orders(account_id: int):
         "items": orders,
     }, 200
 
+def get_executed_orders(account_id: int, limit: int):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    er.execution_id,
+                    er.order_id,
+                    er.account_id,
+                    er.symbol,
+                    er.execution_type,
+                    er.position_side,
+                    er.fill_price,
+                    er.filled_size,
+                    er.fee_paid,
+                    er.slippage_bps,
+                    er.execution_timestamp,
+                    er.notes,
+                    COALESCE(o.order_type,
+                        CASE
+                            WHEN er.notes ILIKE '%limit%' THEN 'limit'
+                            WHEN er.notes ILIKE '%market%' THEN 'market'
+                            ELSE NULL
+                        END
+                    ) AS order_type,
+                    o.linked_position_id
+                FROM execution_reports er
+                LEFT JOIN orders o
+                    ON o.order_id = er.order_id
+                WHERE er.account_id = %s
+                ORDER BY er.execution_timestamp DESC
+                LIMIT %s
+                """,
+                (account_id, limit),
+            )
+            rows = cur.fetchall()
+
+    items = []
+    for row in rows:
+        (
+            execution_id,
+            order_id,
+            account_id_row,
+            symbol,
+            execution_type,
+            position_side,
+            fill_price,
+            filled_size,
+            fee_paid,
+            slippage_bps,
+            execution_timestamp,
+            notes,
+            order_type,
+            linked_position_id,
+        ) = row
+
+        items.append({
+            "execution_id": int(execution_id),
+            "order_id": int(order_id) if order_id is not None else None,
+            "account_id": int(account_id_row),
+            "symbol": symbol,
+            "execution_type": execution_type,
+            "position_side": position_side,
+            "order_type": order_type.lower() if isinstance(order_type, str) else None,
+            "fill_price": float(fill_price) if fill_price is not None else None,
+            "filled_size": float(filled_size) if filled_size is not None else None,
+            "fee_paid": float(fee_paid) if fee_paid is not None else 0.0,
+            "slippage_bps": float(slippage_bps) if slippage_bps is not None else 0.0,
+            "execution_timestamp": execution_timestamp.isoformat().replace("+00:00", "Z") if execution_timestamp else None,
+            "notes": notes,
+            "linked_position_id": int(linked_position_id) if linked_position_id is not None else None,
+        })
+
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "count": len(items),
+        "items": items,
+    }
+
 def upsert_decision_row(cur, row: dict):
     cur.execute(
         """
@@ -1537,6 +1617,12 @@ class Handler(BaseHTTPRequestHandler):
             account_id = int(query.get("account_id", ["1"])[0])
             payload, status = get_open_orders(account_id)
             self._send_json(payload, status=status)
+            return
+        
+        if parsed.path == "/orders/executed":
+            account_id = int(query.get("account_id", ["1"])[0])
+            limit = int(query.get("limit", ["50"])[0])
+            self._send_json(get_executed_orders(account_id, limit))
             return
 
         if parsed.path == "/performance/summary-extended":

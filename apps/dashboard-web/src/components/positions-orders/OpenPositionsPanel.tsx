@@ -112,7 +112,7 @@ export default function OpenPositionsPanel({
                 </div>
 
                 <div>
-                  <div className="text-white/40">PnL / Margin %</div>
+                  <div className="text-white/40">Open PnL / Margin %</div>
                   <div className={`mt-1 text-[1.02rem] font-semibold tracking-tight ${pnlTone}`}>
                     {money(p.unrealized_pnl)} · {(p.pnl_pct_on_margin ?? 0).toFixed(2)}%
                   </div>

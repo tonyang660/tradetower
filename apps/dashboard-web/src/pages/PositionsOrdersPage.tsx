@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCcw } from "lucide-react";
 import { buildPositionsOrdersViewModel } from "../lib/positionsOrders";
-import { fetchOpenPositions, fetchRecentClosedPositions, fetchOpenOrders, fetchConfigurationBootstrap } from "../lib/api";
+import { fetchOpenPositions, fetchRecentClosedPositions, fetchOpenOrders, fetchExecutedOrders, fetchConfigurationBootstrap } from "../lib/api";
 import type { ConfigurationBootstrapResponse } from "../types/configuration";
 
-import type {
-  OpenPositionsResponse,
-  RecentClosedPositionsResponse,
-  OpenOrdersResponse,
-  PositionsOrdersViewModel,
+import {
+  type OpenPositionsResponse,
+  type RecentClosedPositionsResponse,
+  type OpenOrdersResponse,
+  type PositionsOrdersViewModel,
+  type ExecutedOrdersResponse,
 } from "../types/positionsOrders";
 import {
   mockOpenPositionsResponse,
@@ -24,10 +25,12 @@ import OpenPositionsPanel from "../components/positions-orders/OpenPositionsPane
 import WorkingOrdersPanel from "../components/positions-orders/WorkingOrdersPanel";
 import RecentClosedPositionsPanel from "../components/positions-orders/RecentClosedPositionsPanel";
 import OrderCycleStatusCard from "../components/positions-orders/OrderCycleStatusCard";
+import ExecutedOrdersPanel from "../components/positions-orders/ExecutedOrdersPanel";
 
 export default function PositionsOrdersPage() {
   const [openPayload, setOpenPayload] = useState<OpenPositionsResponse | null>(null);
   const [recentPayload, setRecentPayload] = useState<RecentClosedPositionsResponse | null>(null);
+  const [executedPayload, setExecutedPayload] = useState<ExecutedOrdersResponse | null>(null);
   const [ordersPayload, setOrdersPayload] = useState<OpenOrdersResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -58,16 +61,18 @@ export default function PositionsOrdersPage() {
         return;
       }
 
-      const [openRes, recentRes, ordersRes, configurationRes] = await Promise.all([
+      const [openRes, recentRes, ordersRes, executedRes, configurationRes] = await Promise.all([
         fetchOpenPositions(1, true),
         fetchRecentClosedPositions(1, 20),
         fetchOpenOrders(1),
+        fetchExecutedOrders(1, 50),
         fetchConfigurationBootstrap(),
       ]);
 
       setOpenPayload(openRes);
       setRecentPayload(recentRes);
       setOrdersPayload(ordersRes);
+      setExecutedPayload(executedRes);
       setConfigurationBootstrap(configurationRes);
 
       setError(null);
@@ -91,14 +96,15 @@ export default function PositionsOrdersPage() {
   }, [autoRefresh]);
 
   const model: PositionsOrdersViewModel | null = useMemo(() => {
-    if (!openPayload || !recentPayload || !ordersPayload) return null;
+    if (!openPayload || !recentPayload || !ordersPayload || !executedPayload) return null;
 
     const openPositions = openPayload.positions ?? openPayload.items ?? [];
     const recentClosed = recentPayload.items ?? [];
     const workingOrders = ordersPayload.items ?? [];
+    const executedOrders = executedPayload.items ?? [];
 
-    return buildPositionsOrdersViewModel(openPositions, recentClosed, workingOrders);
-  }, [openPayload, recentPayload, ordersPayload]);
+    return buildPositionsOrdersViewModel(openPositions, recentClosed, executedOrders, workingOrders);
+  }, [openPayload, recentPayload, executedPayload, ordersPayload]);
 
   if (loading) {
     return <div className="text-white/70">Loading positions & orders...</div>;
@@ -200,6 +206,8 @@ export default function PositionsOrdersPage() {
       <OpenPositionsPanel positions={model.openPositions} />
 
       <WorkingOrdersPanel orders={model.workingOrders} />
+
+      <ExecutedOrdersPanel items={model.executedOrders} />
 
       <RecentClosedPositionsPanel positions={model.recentClosed} />
     </div>

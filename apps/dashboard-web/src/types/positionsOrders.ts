@@ -93,6 +93,47 @@ export type RecentClosedPositionsResponse = {
   items: RecentClosedPosition[];
 };
 
+export type ExecutedOrder = {
+  execution_id: number;
+  order_id?: number | null;
+  account_id: number;
+  symbol: string;
+  execution_type: "ENTRY" | "TP1" | "TP2" | "TP3" | "STOP_LOSS" | string;
+  position_side: "long" | "short" | string;
+  order_type: string | null;
+  fill_price: number;
+  filled_size: number;
+  fee_paid: number;
+  slippage_bps: number;
+  execution_timestamp: string;
+  notes?: string | null;
+  linked_position_id?: number | null;
+};
+
+export type ExecutedOrderItem = {
+  executionId: number;
+  orderId: number | null;
+  accountId: number;
+  symbol: string;
+  executionType: string;
+  positionSide: string;
+  orderType: string;
+  fillPrice: number;
+  filledSize: number;
+  feePaid: number;
+  slippageBps: number;
+  executionTimestamp: string;
+  notes: string | null;
+  linkedPositionId: number | null;
+};
+
+export type ExecutedOrdersResponse = {
+  ok: boolean;
+  account_id: number;
+  count: number;
+  items: ExecutedOrder[];
+};
+
 export type ExposureRibbonSegment = {
   symbol: string;
   side: "long" | "short";
@@ -163,8 +204,9 @@ export type OpenOrdersResponse = {
 };
 
 export type PositionsOrdersViewModel = {
-  openPositions: (OpenPosition & { pnl_pct_on_margin?: number })[];
+  openPositions: (OpenPosition & { pnl_pct_on_margin: number })[];
   recentClosed: RecentClosedPosition[];
+  executedOrders: ExecutedOrderItem[];
   workingOrders: WorkingOrder[];
   analytics: PositionsAnalytics;
   exposureSegments: ExposureRibbonSegment[];

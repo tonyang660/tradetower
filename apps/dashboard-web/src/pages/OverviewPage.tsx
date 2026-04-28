@@ -20,6 +20,25 @@ function formatCountdown(seconds: number) {
   return `${hrs}h ${mins}m ${secs}s`;
 }
 
+function inferredStatus(pos: any) {
+  if (pos.tp3_hit) return "TP3 Reached";
+  if (pos.tp2_hit) return "TP2 Reached";
+  if (pos.tp1_hit) return "TP1 Reached";
+  return "Open";
+}
+
+function pnlTone(value: number | null | undefined) {
+  if ((value ?? 0) > 0) return "text-emerald-300";
+  if ((value ?? 0) < 0) return "text-rose-300";
+  return "text-white";
+}
+
+function sideTone(side: string | null | undefined) {
+  return side === "long"
+    ? "bg-emerald-500/12 text-emerald-200"
+    : "bg-rose-500/12 text-rose-200";
+}
+
 function ActionButton({
   onClick,
   children,
@@ -407,16 +426,52 @@ export default function OverviewPage() {
           ) : (
             <div className="space-y-3">
               {data.overview.open_positions.map((pos: any, idx: number) => (
-                <div key={idx} className="rounded-2xl border border-white/8 bg-white/5 p-4 transition hover:bg-white/7">
-                  <div className="flex items-center justify-between">
-                    <div className="font-medium text-white">{pos.symbol}</div>
-                    <div className="text-sm uppercase text-white/55">{pos.side}</div>
+                <div
+                  key={idx}
+                  className="rounded-2xl border border-white/8 bg-white/5 p-4 transition hover:bg-white/7"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-[1.05rem] font-semibold text-white">{pos.symbol}</div>
+                      <div className="mt-2 flex items-center gap-2">
+                        <span className={`inline-flex rounded-full px-2 py-1 text-[10px] uppercase ${sideTone(pos.side)}`}>
+                          {pos.side}
+                        </span>
+                        <span className="inline-flex rounded-full bg-white/8 px-2 py-1 text-[10px] text-white/75">
+                          {inferredStatus(pos)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <div className="text-white/40 text-xs">Open PnL</div>
+                      <div className={`mt-1 text-lg font-semibold ${pnlTone(pos.unrealized_pnl)}`}>
+                        {formatMoney(pos.unrealized_pnl)}
+                      </div>
+                    </div>
                   </div>
-                  <div className="mt-3 grid grid-cols-2 gap-3 text-sm text-white/60">
-                    <div>Entry: {pos.entry_price}</div>
-                    <div>Leverage: {pos.leverage ?? "-"}</div>
-                    <div>Remaining Size: {pos.remaining_size ?? "-"}</div>
-                    <div>Current Price: {pos.current_price ?? "-"}</div>
+
+                  <div className="mt-4 grid grid-cols-2 gap-3 text-sm text-white/60">
+                    <div>
+                      <div className="text-white/40">Entry / Current</div>
+                      <div className="mt-1 text-white">
+                        {pos.entry_price} / {pos.current_price ?? "-"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-white/40">Leverage</div>
+                      <div className="mt-1 text-white">{pos.leverage ?? "-"}</div>
+                    </div>
+                    <div>
+                      <div className="text-white/40">Remaining Size</div>
+                      <div className="mt-1 text-white">{pos.remaining_size ?? "-"}</div>
+                    </div>
+                    <div>
+                      <div className="text-white/40">Open PnL %</div>
+                      <div className={`mt-1 ${pnlTone(pos.unrealized_pnl)}`}>
+                        {pos.unrealized_pnl_pct != null ? `${(pos.unrealized_pnl_pct * pos.leverage).toFixed(2)}%` : "-"}
+                      </div>
+                    </div>
                   </div>
                 </div>
               ))}

@@ -1,4 +1,6 @@
 import type {
+  ExecutedOrder,
+  ExecutedOrderItem,
   ExposureRibbonSegment,
   OpenPosition,
   PositionsAnalytics,
@@ -131,6 +133,7 @@ function normalizeWorkingOrder(order: WorkingOrder): WorkingOrder {
 export function buildPositionsOrdersViewModel(
   openPositions: OpenPosition[],
   recentClosed: RecentClosedPosition[],
+  executedOrders: ExecutedOrder[],
   workingOrders: WorkingOrder[]
 ): PositionsOrdersViewModel {
   const enriched = openPositions.map(enrichOpenPosition);
@@ -149,6 +152,23 @@ export function buildPositionsOrdersViewModel(
 
       return a.symbol.localeCompare(b.symbol);
     });
+
+  const normalizedExecutedOrders: ExecutedOrderItem[] = (executedOrders ?? []).map((item) => ({
+    executionId: item.execution_id,
+    orderId: item.order_id ?? null,
+    accountId: item.account_id,
+    symbol: item.symbol,
+    executionType: item.execution_type,
+    positionSide: item.position_side,
+    orderType: item.order_type ?? "unknown",
+    fillPrice: item.fill_price,
+    filledSize: item.filled_size,
+    feePaid: item.fee_paid,
+    slippageBps: item.slippage_bps,
+    executionTimestamp: item.execution_timestamp,
+    notes: item.notes ?? null,
+    linkedPositionId: item.linked_position_id ?? null,
+  }));  
 
   const totalNotional = enriched.reduce((acc, p) => acc + safeNumber(p.notional, 0), 0);
   const totalMarginUsed = enriched.reduce((acc, p) => acc + safeNumber(p.margin_used, 0), 0);
@@ -208,6 +228,7 @@ export function buildPositionsOrdersViewModel(
   return {
     openPositions: enriched,
     recentClosed,
+    executedOrders: normalizedExecutedOrders,
     workingOrders: normalizedOrders,
     analytics,
     exposureSegments,
