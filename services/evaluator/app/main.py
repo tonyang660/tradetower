@@ -230,11 +230,12 @@ def get_executed_orders(account_id: int, limit: int):
                     er.slippage_bps,
                     er.execution_timestamp,
                     er.notes,
-                    COALESCE(o.order_type,
+                    COALESCE(
+                        o.order_type,
                         CASE
-                            WHEN er.notes ILIKE '%limit%' THEN 'limit'
-                            WHEN er.notes ILIKE '%market%' THEN 'market'
-                            ELSE NULL
+                            WHEN er.notes ILIKE '%%limit%%' THEN 'limit'
+                            WHEN er.notes ILIKE '%%market%%' THEN 'market'
+                            ELSE 'unknown'
                         END
                     ) AS order_type,
                     o.linked_position_id
