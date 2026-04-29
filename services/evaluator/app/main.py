@@ -238,10 +238,20 @@ def get_executed_orders(account_id: int, limit: int):
                             ELSE 'unknown'
                         END
                     ) AS order_type,
-                    o.linked_position_id
+                    o.linked_position_id,
+                    CASE
+                        WHEN ge.details_json ? 'realized_pnl'
+                        THEN (ge.details_json->>'realized_pnl')::numeric
+                        ELSE NULL
+                    END AS realized_pnl
                 FROM execution_reports er
                 LEFT JOIN orders o
                     ON o.order_id = er.order_id
+                LEFT JOIN guardian_events ge
+                    ON ge.account_id = er.account_id
+                   AND (ge.details_json->>'execution_id') ~ '^[0-9]+$'
+                   AND ((ge.details_json->>'execution_id')::int = er.execution_id)
+                   AND ge.event_type IN ('TP1_HIT', 'TP2_HIT', 'TP3_HIT', 'STOP_LOSS_HIT')
                 WHERE er.account_id = %s
                 ORDER BY er.execution_timestamp DESC
                 LIMIT %s
@@ -267,23 +277,25 @@ def get_executed_orders(account_id: int, limit: int):
             notes,
             order_type,
             linked_position_id,
+            realized_pnl,
         ) = row
 
         items.append({
             "execution_id": int(execution_id),
             "order_id": int(order_id) if order_id is not None else None,
             "account_id": int(account_id_row),
-            "symbol": symbol,
-            "execution_type": execution_type,
-            "position_side": position_side,
-            "order_type": order_type.lower() if isinstance(order_type, str) else None,
-            "fill_price": float(fill_price) if fill_price is not None else None,
-            "filled_size": float(filled_size) if filled_size is not None else None,
+            "symbol": str(symbol),
+            "execution_type": str(execution_type),
+            "position_side": str(position_side).lower() if position_side is not None else "unknown",
+            "order_type": str(order_type).lower() if order_type is not None else "unknown",
+            "fill_price": float(fill_price) if fill_price is not None else 0.0,
+            "filled_size": float(filled_size) if filled_size is not None else 0.0,
             "fee_paid": float(fee_paid) if fee_paid is not None else 0.0,
             "slippage_bps": float(slippage_bps) if slippage_bps is not None else 0.0,
             "execution_timestamp": execution_timestamp.isoformat().replace("+00:00", "Z") if execution_timestamp else None,
-            "notes": notes,
+            "notes": str(notes) if notes is not None else None,
             "linked_position_id": int(linked_position_id) if linked_position_id is not None else None,
+            "realized_pnl": float(realized_pnl) if realized_pnl is not None else None,
         })
 
     return {

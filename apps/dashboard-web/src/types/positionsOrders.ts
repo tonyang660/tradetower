@@ -108,6 +108,7 @@ export type ExecutedOrder = {
   execution_timestamp: string;
   notes?: string | null;
   linked_position_id?: number | null;
+  realizedPnl?: number | null;
 };
 
 export type ExecutedOrderItem = {
@@ -125,6 +126,7 @@ export type ExecutedOrderItem = {
   executionTimestamp: string;
   notes: string | null;
   linkedPositionId: number | null;
+  realizedPnl?: number | null;
 };
 
 export type ExecutedOrdersResponse = {

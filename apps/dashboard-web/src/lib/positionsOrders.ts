@@ -168,6 +168,7 @@ export function buildPositionsOrdersViewModel(
     executionTimestamp: item.execution_timestamp,
     notes: item.notes ?? null,
     linkedPositionId: item.linked_position_id ?? null,
+    realizedPnl: item.realizedPnl ?? null,
   }));  
 
   const totalNotional = enriched.reduce((acc, p) => acc + safeNumber(p.notional, 0), 0);

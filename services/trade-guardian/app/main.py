@@ -1368,19 +1368,51 @@ def close_position(position_id: int, tp1_hit=None, tp2_hit=None, tp3_hit=None):
 def maybe_finalize_trade(position: dict):
     query = """
     SELECT
-        COALESCE(SUM((details_json->>'realized_pnl')::numeric), 0),
-        COALESCE(SUM((details_json->>'fee_paid')::numeric), 0),
-        COALESCE(SUM(((details_json->>'fill_price')::numeric) * ((details_json->>'close_size')::numeric)), 0),
-        COALESCE(SUM((details_json->>'close_size')::numeric), 0)
-    FROM guardian_events
-    WHERE account_id = %s
-      AND event_type IN ('TP1_HIT', 'TP2_HIT', 'TP3_HIT', 'STOP_LOSS_HIT')
-      AND details_json->>'position_id' = %s
+        COALESCE(SUM(
+            CASE
+                WHEN er.execution_type IN ('TP1', 'TP2', 'TP3', 'STOP_LOSS')
+                THEN CASE
+                    WHEN p.side = 'long' THEN (er.fill_price - p.entry_price) * er.filled_size
+                    WHEN p.side = 'short' THEN (p.entry_price - er.fill_price) * er.filled_size
+                    ELSE 0
+                END
+                ELSE 0
+            END
+        ), 0) AS realized_pnl_sum,
+        COALESCE(SUM(er.fee_paid), 0) AS total_fees_sum,
+        COALESCE(SUM(
+            CASE
+                WHEN er.execution_type IN ('TP1', 'TP2', 'TP3', 'STOP_LOSS')
+                THEN er.fill_price * er.filled_size
+                ELSE 0
+            END
+        ), 0) AS weighted_exit_numerator,
+        COALESCE(SUM(
+            CASE
+                WHEN er.execution_type IN ('TP1', 'TP2', 'TP3', 'STOP_LOSS')
+                THEN er.filled_size
+                ELSE 0
+            END
+        ), 0) AS total_closed_size
+    FROM execution_reports er
+    JOIN positions p
+      ON p.position_id = %s
+    WHERE er.account_id = %s
+      AND er.symbol = %s
+      AND er.execution_timestamp >= (p.opened_at - INTERVAL '10 seconds')
+      AND er.execution_type IN ('ENTRY', 'TP1', 'TP2', 'TP3', 'STOP_LOSS')
     """
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, (position["account_id"], str(position["position_id"])))
+            cur.execute(
+                query,
+                (
+                    position["position_id"],
+                    position["account_id"],
+                    position["symbol"],
+                ),
+            )
             pnl_sum, fees_sum, weighted_exit_numerator, total_closed_size = cur.fetchone()
 
             avg_exit_price = None
