@@ -169,8 +169,8 @@ const normalizedExecutedOrders: ExecutedOrderItem[] = (executedOrders ?? []).map
   notes: item.notes ?? null,
   linkedPositionId: item.linked_position_id ?? null,
   realizedPnl:
-    item.realizedPnl != null
-      ? item.realizedPnl
+    item.realized_pnl != null
+      ? item.realized_pnl
       : item.execution_type === "ENTRY"
         ? -item.fee_paid
         : null,
