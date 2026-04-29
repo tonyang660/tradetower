@@ -59,117 +59,95 @@ export default function OpenPositionsPanel({
         <div className="mt-3 space-y-3">
           {positions.map((p, index) => {
             const pnl = p.unrealized_pnl ?? 0;
-            const pnlTone =
-              pnl > 0 ? "text-emerald-300" : pnl < 0 ? "text-rose-300" : "text-white";
-
+            const pnlTone = pnl > 0 ? "text-emerald-300" : pnl < 0 ? "text-rose-300" : "text-white";
             const displayStatus = inferredStatus(p);
+            const closedPnl = (p.realized_pnl_closed ?? 0) - (p.fees_paid ?? 0);
+            const closedPnlTone = closedPnl > 0 ? "text-emerald-300" : closedPnl < 0 ? "text-rose-300" : "text-white";
 
             return (
               <div
                 key={`${p.symbol}-${p.position_id ?? index}`}
-                className="grid gap-3 rounded-[24px] border border-white/8 bg-white/5 px-5 py-4 text-sm text-white/60 transition hover:bg-white/7 xl:grid-cols-[0.82fr_0.58fr_0.58fr_0.72fr_0.82fr_0.92fr_1fr_0.72fr_0.88fr_1.5fr]"
+                className="flex flex-col gap-4 rounded-[24px] border border-white/8 bg-white/5 px-5 py-5 text-sm text-white/60 transition hover:bg-white/7"
               >
-                <div>
-                  <div className="text-[1.05rem] font-semibold tracking-tight text-white">{p.symbol}</div>
-                  <div
-                    className={`mt-1 inline-flex rounded-full px-2 py-1 text-[10px] ${
-                      p.side === "long"
-                        ? "bg-emerald-500/12 text-emerald-200"
-                        : "bg-rose-500/12 text-rose-200"
-                    }`}
-                  >
-                    {p.side}
+                {/* FIRST ROW: Position Fundamentals */}
+                <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6 items-start">
+                  <div>
+                    <div className="text-[1.05rem] font-semibold tracking-tight text-white">{p.symbol}</div>
+                    <div className={`mt-1 inline-flex rounded-full px-2 py-1 text-[10px] ${p.side === "long" ? "bg-emerald-500/12 text-emerald-200" : "bg-rose-500/12 text-rose-200"}`}>
+                      {p.side}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-white/40">Size</div>
+                    <div className="mt-1 text-white">{numberText(p.remaining_size ?? p.original_size ?? p.size, 8)}</div>
+                  </div>
+
+                  <div>
+                    <div className="text-white/40">Leverage</div>
+                    <div className="mt-1 text-white">{p.leverage ?? "-"}</div>
+                  </div>
+
+                  <div>
+                    <div className="text-white/40">Margin</div>
+                    <div className="mt-1 text-white">{money(p.margin_used)}</div>
+                  </div>
+
+                  <div>
+                    <div className="text-white/40">Notional</div>
+                    <div className="mt-1 text-white">{money(p.notional)}</div>
+                  </div>
+
+                  <div>
+                    <div className="text-white/40">Entry / Current</div>
+                    <div className="mt-1 text-white">{numberText(p.entry_price)} / {numberText(p.current_price)}</div>
                   </div>
                 </div>
 
-                <div>
-                  <div className="text-white/40">Size</div>
-                  <div className="mt-1 text-white">
-                    {numberText(p.remaining_size ?? p.original_size ?? p.size, 8)}
+                {/* HORIZONTAL DIVIDER (Optional) */}
+                <div className="h-[1px] w-full bg-white/5" />
+
+                {/* SECOND ROW: Financials & Status */}
+                <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-5 items-center">
+                  <div>
+                    <div className="text-white/40">Open PnL / Margin %</div>
+                    <div className={`mt-1 text-[1.02rem] font-semibold tracking-tight ${pnlTone}`}>
+                      {money(p.unrealized_pnl)} · {(p.pnl_pct_on_margin ?? 0).toFixed(2)}%
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-white/40">Closed Net PnL</div>
+                    <div className={`mt-1 font-medium ${closedPnlTone}`}>{money(closedPnl)}</div>
+                  </div>
+
+                  <div>
+                    <div className="text-white/40">Fees</div>
+                    <div className="mt-1 font-medium text-white">{money(p.fees_paid)}</div>
+                  </div>
+
+                  <div>
+                    <div className="text-white/40">Status</div>
+                    <div className={`mt-1 inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${statusTone(displayStatus)}`}>
+                      {displayStatus}
+                    </div>
+                  </div>
+
+                  {/* Protection (Takes up remaining space or its own col) */}
+                  <div className="lg:col-span-1">
+                    <div className="text-white/40">Protection</div>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {p.stop_loss != null && <span className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("sl")}`}>SL {numberText(p.stop_loss)}</span>}
+                      {p.tp1_price != null && <span className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("tp1", p.tp1_hit)}`}>TP1 {numberText(p.tp1_price)}</span>}
+                      {p.tp2_price != null && <span className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("tp2", p.tp2_hit)}`}>TP2 {numberText(p.tp2_price)}</span>}
+                      {p.tp3_price != null && <span className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("tp3", p.tp3_hit)}`}>TP3 {numberText(p.tp3_price)}</span>}
+                    </div>
                   </div>
                 </div>
 
-                <div>
-                  <div className="text-white/40">Leverage</div>
-                  <div className="mt-1 text-white">{p.leverage ?? "-"}</div>
-                </div>
-
-                <div>
-                  <div className="text-white/40">Margin</div>
-                  <div className="mt-1 text-white">{money(p.margin_used)}</div>
-                </div>
-
-                <div>
-                  <div className="text-white/40">Notional</div>
-                  <div className="mt-1 text-white">{money(p.notional)}</div>
-                </div>
-
-                <div>
-                  <div className="text-white/40">Entry / Current</div>
-                  <div className="mt-1 text-white">
-                    {numberText(p.entry_price)} / {numberText(p.current_price)}
-                  </div>
-                </div>
-
-                <div>
-                  <div className="text-white/40">Open PnL / Margin %</div>
-                  <div className={`mt-1 text-[1.02rem] font-semibold tracking-tight ${pnlTone}`}>
-                    {money(p.unrealized_pnl)} · {(p.pnl_pct_on_margin ?? 0).toFixed(2)}%
-                  </div>
-                </div>
-
-                <div>
-                  <div className="text-white/40">Fees</div>
-                  <div className="mt-1 text-white">{money(p.fees_paid)}</div>
-                </div>
-
-                <div>
-                  <div className="text-white/40">Status</div>
-                  <div className={`mt-1 inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${statusTone(displayStatus)}`}>
-                    {displayStatus}
-                  </div>
-                </div>
-
-                <div>
-                  <div className="text-white/40">Protection</div>
-
-                  <div className="mt-1 flex flex-wrap gap-1.5">
-                    {p.stop_loss != null ? (
-                      <span
-                        className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("sl")}`}
-                      >
-                        SL {numberText(p.stop_loss)}
-                      </span>
-                    ) : null}
-
-                    {p.tp1_price != null ? (
-                      <span
-                        className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("tp1", p.tp1_hit)}`}
-                      >
-                        TP1 {numberText(p.tp1_price)}
-                      </span>
-                    ) : null}
-
-                    {p.tp2_price != null ? (
-                      <span
-                        className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("tp2", p.tp2_hit)}`}
-                      >
-                        TP2 {numberText(p.tp2_price)}
-                      </span>
-                    ) : null}
-
-                    {p.tp3_price != null ? (
-                      <span
-                        className={`rounded-full border px-2 py-1 text-[10px] ${protectionChipTone("tp3", p.tp3_hit)}`}
-                      >
-                        TP3 {numberText(p.tp3_price)}
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <div className="mt-2 text-[11px] text-white/30">
-                    {p.opened_at ? new Date(p.opened_at).toLocaleString() : "-"}
-                  </div>
+                {/* TIMESTAMP (Bottom footer) */}
+                <div className="text-[11px] text-white/30 border-t border-white/5 pt-2">
+                   Opened: {p.opened_at ? new Date(p.opened_at).toLocaleString() : "-"}
                 </div>
               </div>
             );

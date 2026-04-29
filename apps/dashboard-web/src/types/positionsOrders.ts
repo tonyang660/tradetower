@@ -16,6 +16,7 @@ export type OpenPosition = {
   margin_used?: number | null;
   unrealized_pnl?: number | null;
   unrealized_pnl_pct?: number | null;
+  realized_pnl_closed?: number | null;
   pnl_pct_on_margin?: number | null;
   fees_paid?: number | null;
 

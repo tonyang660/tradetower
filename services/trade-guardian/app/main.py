@@ -579,15 +579,34 @@ def fetch_all_open_positions(account_id: int):
         p.opened_at,
         p.status,
         COALESCE((
-            SELECT SUM(er.fee_paid)
-            FROM execution_reports er
-            WHERE er.account_id = p.account_id
-                AND er.symbol = p.symbol
-                AND er.execution_timestamp >= (p.opened_at - INTERVAL '10 seconds')
-        ), 0)
+            SELECT SUM(
+                CASE
+                    WHEN ge.details_json ? 'fee_paid'
+                    THEN (ge.details_json->>'fee_paid')::numeric
+                    ELSE 0
+                END
+            )
+            FROM guardian_events ge
+            WHERE ge.account_id = p.account_id
+              AND ge.event_type IN ('POSITION_OPENED', 'TP1_HIT', 'TP2_HIT', 'TP3_HIT', 'STOP_LOSS_HIT')
+              AND ge.details_json->>'position_id' = p.position_id::text
+        ), 0) AS fees_paid_total,
+        COALESCE((
+            SELECT SUM(
+                CASE
+                    WHEN ge.details_json ? 'realized_pnl'
+                    THEN (ge.details_json->>'realized_pnl')::numeric
+                    ELSE 0
+                END
+            )
+            FROM guardian_events ge
+            WHERE ge.account_id = p.account_id
+              AND ge.event_type IN ('TP1_HIT', 'TP2_HIT', 'TP3_HIT', 'STOP_LOSS_HIT')
+              AND ge.details_json->>'position_id' = p.position_id::text
+        ), 0) AS realized_pnl_closed
     FROM positions p
     WHERE p.account_id = %s
-    AND p.status = 'open'
+      AND p.status = 'open'
     ORDER BY p.opened_at ASC
     """
 
@@ -618,6 +637,7 @@ def fetch_all_open_positions(account_id: int):
             "opened_at": row[16].isoformat().replace("+00:00", "Z") if row[16] else None,
             "status": row[17],
             "fees_paid": float(row[18]) if row[18] is not None else 0.0,
+            "realized_pnl_closed": float(row[19]) if row[19] is not None else 0.0,
         })
 
     return results
