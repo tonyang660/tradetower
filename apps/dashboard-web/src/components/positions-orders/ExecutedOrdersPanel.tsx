@@ -141,7 +141,7 @@ export default function ExecutedOrdersPanel({
                     <Metric label="Fee" value={money(item.feePaid)} />
                     <Metric
                       label="Realized PnL"
-                      value={<span className={pnlTone(item.realized_pnl)}>{money(item.realized_pnl)}</span>}
+                      value={<span className={pnlTone(item.realizedPnl)}>{money(item.realizedPnl)}</span>}
                     />
                     <Metric label="Position Link" value={item.linkedPositionId != null ? String(item.linkedPositionId) : "-"} />
                   </div>
