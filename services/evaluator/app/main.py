@@ -899,7 +899,6 @@ def get_performance_summary_extended(account_id: int):
                 """
                 SELECT
                     COALESCE(COUNT(*), 0),
-                    COALESCE(SUM(COALESCE(realized_pnl, 0) + COALESCE(fees_paid, 0)), 0),
                     COALESCE(SUM(realized_pnl), 0),
                     COALESCE(SUM(fees_paid), 0),
                     COALESCE(AVG(realized_pnl), 0),
@@ -929,15 +928,15 @@ def get_performance_summary_extended(account_id: int):
     
     total_trades = int(row[0])
     gross_pnl = safe_float(row[1])
-    net_pnl = safe_float(row[2])
-    total_fees = safe_float(row[3])
-    avg_trade = safe_float(row[4])
-    wins = int(row[5])
-    losses = int(row[6])
-    avg_win = safe_float(row[7])
-    avg_loss = safe_float(row[8])
-    best_trade = safe_float(row[9])
-    worst_trade = safe_float(row[10])
+    total_fees = safe_float(row[2])
+    net_pnl = gross_pnl - total_fees
+    avg_trade = safe_float(row[3])
+    wins = int(row[4])
+    losses = int(row[5])
+    avg_win = safe_float(row[6])
+    avg_loss = safe_float(row[7])
+    best_trade = safe_float(row[8])
+    worst_trade = safe_float(row[9])
 
     win_rate = (wins / total_trades * 100.0) if total_trades > 0 else 0.0
     expectancy = avg_trade
