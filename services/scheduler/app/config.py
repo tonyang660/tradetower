@@ -1,0 +1,34 @@
+import os
+
+SERVICE_NAME = "scheduler"
+PORT = int(os.getenv("PORT", "8080"))
+
+API_GATEWAY_BASE_URL = os.getenv("API_GATEWAY_BASE_URL", "http://api-gateway:8080")
+DATA_HUB_BASE_URL = os.getenv("DATA_HUB_BASE_URL", "http://data-hub:8080")
+TRADE_GUARDIAN_BASE_URL = os.getenv("TRADE_GUARDIAN_BASE_URL", "http://trade-guardian:8080")
+CANDIDATE_FILTER_BASE_URL = os.getenv("CANDIDATE_FILTER_BASE_URL", "http://candidate-filter:8080")
+STRATEGY_ENGINE_BASE_URL = os.getenv("STRATEGY_ENGINE_BASE_URL", "http://strategy-engine:8080")
+RISK_ENGINE_BASE_URL = os.getenv("RISK_ENGINE_BASE_URL", "http://risk-engine:8080")
+PAPER_EXECUTION_BASE_URL = os.getenv("PAPER_EXECUTION_BASE_URL", "http://paper-execution:8080")
+EVALUATOR_BASE_URL = os.getenv("EVALUATOR_BASE_URL", "http://evaluator:8080")
+
+PAPER_EXECUTION_ENTRY_PATH = os.getenv("PAPER_EXECUTION_ENTRY_PATH", "/entry/simulate")
+
+AUTO_LOOP_DEFAULT = os.getenv("AUTO_LOOP_ENABLED", "false").lower() == "true"
+
+LOOP_INTERVAL_SECONDS = int(os.getenv("LOOP_INTERVAL_SECONDS", "300"))
+ACCOUNT_ID = int(os.getenv("ACCOUNT_ID", "1"))
+SYMBOL_UNIVERSE_PATH = os.getenv("SYMBOL_UNIVERSE_PATH", "/app/config/symbol_universe.json")
+
+TIMEFRAMES = ["5m", "15m", "1h", "4h"]
+REFRESH_LIMIT = 72
+
+MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST = os.getenv("MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST", "true").lower() == "true"
+
+PENDING_ENTRY_LOOP_INTERVAL_SECONDS = int(os.getenv("PENDING_ENTRY_LOOP_INTERVAL_SECONDS", "60"))
+ENTRY_RETRY_MAX_ATTEMPTS = int(os.getenv("ENTRY_RETRY_MAX_ATTEMPTS", "15"))
+
+MAINTENANCE_LOOP_INTERVAL_SECONDS = int(os.getenv("MAINTENANCE_LOOP_INTERVAL_SECONDS", "60"))
+
+EXIT_RETRY_MAX_ATTEMPTS = int(os.getenv("EXIT_RETRY_MAX_ATTEMPTS", "5"))
+PENDING_EXIT_LOOP_INTERVAL_SECONDS = int(os.getenv("PENDING_EXIT_LOOP_INTERVAL_SECONDS", "60"))
