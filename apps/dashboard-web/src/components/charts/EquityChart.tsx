@@ -112,6 +112,31 @@ export default function EquityChart({
     return [min - padding, max + padding];
   }, [filteredData]);
 
+const xTicks = useMemo<string[]>(() => {
+  if (!filteredData.length) return [];
+
+  const desiredTickCount =
+    range === "1H" ? 4 :
+    range === "4H" ? 5 :
+    range === "1D" ? 6 :
+    range === "1W" ? 7 :
+    8;
+
+  if (filteredData.length <= desiredTickCount) {
+    return filteredData.map((point: EquityPoint) => point.recorded_at);
+  }
+
+  const ticks: string[] = [];
+  const lastIndex = filteredData.length - 1;
+
+  for (let i = 0; i < desiredTickCount; i++) {
+    const index = Math.round((i / (desiredTickCount - 1)) * lastIndex);
+    ticks.push(filteredData[index].recorded_at);
+  }
+
+  return Array.from(new Set(ticks));
+}, [filteredData, range]);
+
   return (
     <div className="w-full">
       <div className="mb-4 flex items-center justify-between gap-4">
@@ -157,11 +182,12 @@ export default function EquityChart({
 
             <XAxis
               dataKey="recorded_at"
+              ticks={xTicks}
+              interval="preserveStartEnd"
               tick={{ fill: "rgba(255,255,255,0.45)", fontSize: 12 }}
               tickFormatter={(value) => formatXAxis(value, range)}
               axisLine={false}
               tickLine={false}
-              minTickGap={28}
             />
 
             <YAxis

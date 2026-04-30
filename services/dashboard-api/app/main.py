@@ -1129,8 +1129,8 @@ def get_bootstrap_performance(account_id: int):
     errors = []
 
     summary_payload, summary_status = get_performance_summary_extended(account_id)
-    pnl_series_payload, pnl_series_status = get_performance_pnl_series(account_id, 43200)
-    drawdown_payload, drawdown_status = get_performance_drawdown_series(account_id, 43200)
+    pnl_series_payload, pnl_series_status = get_performance_pnl_series(account_id, 8640)
+    drawdown_payload, drawdown_status = get_performance_drawdown_series(account_id, 8640)
     directional_payload, directional_status = get_performance_directional_breakdown(account_id)
     hourly_payload, hourly_status = get_performance_hourly(account_id)
     weekday_payload, weekday_status = get_performance_weekday(account_id)
