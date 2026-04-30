@@ -1,0 +1,413 @@
+from balances import apply_entry_balance_update_tx, apply_exit_balance_update
+from execution_reports import insert_execution_report, insert_execution_report_tx
+from guardian_state import insert_guardian_event, insert_guardian_event_tx
+from orders import (
+    cancel_open_protective_orders_for_position,
+    create_protective_orders_for_position_tx,
+    update_order_status,
+)
+from positions import (
+    calculate_realized_pnl,
+    close_position,
+    create_open_position_tx,
+    get_open_position,
+    update_position_after_partial_exit,
+)
+from trades import maybe_finalize_trade
+from db import get_conn
+
+
+def apply_execution_report(payload: dict):
+    account_id = int(payload["account_id"])
+    symbol = payload["symbol"].upper()
+    position_side = payload["position_side"].lower()
+    execution_type = payload["execution_type"].upper()
+    order_type = payload["order_type"].lower()
+    fill_price = float(payload["fill_price"])
+    filled_size = float(payload["filled_size"])
+    fee_paid = float(payload.get("fee_paid", 0))
+    slippage_bps = float(payload.get("slippage_bps", 0))
+    notes = payload.get("notes")
+    order_id = payload.get("order_id")
+
+    if position_side not in ("long", "short"):
+        return {"ok": False, "error": "unsupported_position_side"}
+
+    if execution_type not in ("ENTRY", "TP1", "TP2", "TP3", "STOP_LOSS"):
+        return {"ok": False, "error": "unsupported_execution_type"}
+
+    if order_type not in ("market", "limit"):
+        return {"ok": False, "error": "unsupported_order_type"}
+
+    execution_id = None
+    open_position = get_open_position(account_id, symbol)
+
+    # ENTRY
+    if execution_type == "ENTRY":
+        if open_position is not None:
+            return {
+                "ok": False,
+                "error": "position_already_open",
+            }
+
+        stop_loss = float(payload["stop_loss"])
+        tp1_price = float(payload["tp1_price"])
+        tp2_price = float(payload["tp2_price"])
+        tp3_price = float(payload["tp3_price"])
+        risk_amount = float(payload["risk_amount"])
+        leverage = float(payload.get("leverage", 1.0))
+
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    execution_id = insert_execution_report_tx(
+                        cur=cur,
+                        account_id=account_id,
+                        order_id=order_id,
+                        symbol=symbol,
+                        fill_price=fill_price,
+                        filled_size=filled_size,
+                        fee_paid=fee_paid,
+                        slippage_bps=slippage_bps,
+                        notes=notes,
+                        execution_type=execution_type,
+                        position_side=position_side,
+                    )
+
+                    position_id, position_margin_used = create_open_position_tx(
+                        cur=cur,
+                        account_id=account_id,
+                        symbol=symbol,
+                        position_side=position_side,
+                        size=filled_size,
+                        entry_price=fill_price,
+                        leverage=leverage,
+                        stop_loss=stop_loss,
+                        tp1_price=tp1_price,
+                        tp2_price=tp2_price,
+                        tp3_price=tp3_price,
+                        risk_amount=risk_amount,
+                    )
+
+                    protective_orders = create_protective_orders_for_position_tx(
+                        cur=cur,
+                        account_id=account_id,
+                        symbol=symbol,
+                        position_side=position_side,
+                        original_size=filled_size,
+                        stop_loss=stop_loss,
+                        tp1_price=tp1_price,
+                        tp2_price=tp2_price,
+                        tp3_price=tp3_price,
+                        linked_position_id=position_id,
+                    )
+
+                    apply_entry_balance_update_tx(
+                        cur=cur,
+                        account_id=account_id,
+                        margin_used=position_margin_used,
+                        fee_paid=fee_paid,
+                    )
+
+                    insert_guardian_event_tx(
+                        cur=cur,
+                        account_id=account_id,
+                        event_type="POSITION_OPENED",
+                        reason_code="ENTRY_FILLED",
+                        details={
+                            "symbol": symbol,
+                            "position_id": position_id,
+                            "execution_id": execution_id,
+                            "position_side": position_side,
+                            "fill_price": fill_price,
+                            "filled_size": filled_size,
+                            "fee_paid": fee_paid,
+                            "execution_type": execution_type,
+                            "order_type": order_type,
+                            "risk_amount": risk_amount,
+                            "stop_loss": stop_loss,
+                            "tp1_price": tp1_price,
+                            "tp2_price": tp2_price,
+                            "tp3_price": tp3_price,
+                            "protective_orders": protective_orders,
+                        },
+                    )
+
+                conn.commit()
+
+            return {
+                "ok": True,
+                "action": "position_opened",
+                "execution_id": execution_id,
+                "position_id": position_id,
+                "protective_orders": protective_orders,
+            }
+
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": "entry_apply_failed",
+                "details": str(e),
+            }
+
+    # Maintenance actions below must have an open position
+    if open_position is None:
+        return {
+            "ok": False,
+            "error": "no_open_position",
+            "execution_id": execution_id,
+        }
+
+    original_size = open_position["original_size"]
+    remaining_size = open_position["remaining_size"]
+
+    if execution_type == "TP1":
+        if open_position["tp1_hit"]:
+            return {"ok": False, "error": "tp1_already_hit", "execution_id": execution_id}
+
+        close_size = round(original_size * 0.40, 8)
+        if close_size > remaining_size:
+            close_size = remaining_size
+
+        released_margin = open_position["margin_used"] * (close_size / remaining_size) if remaining_size > 0 else 0.0
+        new_remaining_margin = round(open_position["margin_used"] - released_margin, 8)
+
+        execution_id = insert_execution_report(
+            account_id=account_id,
+            order_id=order_id,
+            symbol=symbol,
+            fill_price=fill_price,
+            filled_size=filled_size,
+            fee_paid=fee_paid,
+            slippage_bps=slippage_bps,
+            notes=notes,
+            execution_type=execution_type,
+            position_side=position_side,
+        )
+
+        realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
+        new_remaining = round(remaining_size - close_size, 8)
+
+        update_position_after_partial_exit(
+            open_position["position_id"],
+            new_remaining,
+            new_remaining_margin,
+            tp1_hit=True,
+        )
+        apply_exit_balance_update(account_id, released_margin, realized_pnl, fee_paid)
+
+        if order_id is not None:
+            update_order_status(int(order_id), "filled")
+
+        insert_guardian_event(
+            account_id,
+            "TP1_HIT",
+            "TAKE_PROFIT_1",
+            {
+                "symbol": symbol,
+                "position_id": open_position["position_id"],
+                "execution_id": execution_id,
+                "close_size": close_size,
+                "remaining_size": new_remaining,
+                "fill_price": fill_price,
+                "fee_paid": fee_paid,
+                "realized_pnl": realized_pnl,
+            },
+        )
+
+        return {
+            "ok": True,
+            "action": "tp1_applied",
+            "execution_id": execution_id,
+            "realized_pnl": realized_pnl,
+            "remaining_size": new_remaining,
+        }
+
+    if execution_type == "TP2":
+        if not open_position["tp1_hit"]:
+            return {"ok": False, "error": "tp1_not_hit_yet", "execution_id": execution_id}
+        if open_position["tp2_hit"]:
+            return {"ok": False, "error": "tp2_already_hit", "execution_id": execution_id}
+
+        close_size = round(original_size * 0.40, 8)
+        if close_size > remaining_size:
+            close_size = remaining_size
+
+        released_margin = open_position["margin_used"] * (close_size / remaining_size) if remaining_size > 0 else 0.0
+        new_remaining_margin = round(open_position["margin_used"] - released_margin, 8)
+
+        execution_id = insert_execution_report(
+            account_id=account_id,
+            order_id=order_id,
+            symbol=symbol,
+            fill_price=fill_price,
+            filled_size=filled_size,
+            fee_paid=fee_paid,
+            slippage_bps=slippage_bps,
+            notes=notes,
+            execution_type=execution_type,
+            position_side=position_side,
+        )
+
+        realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
+        new_remaining = round(remaining_size - close_size, 8)
+
+        update_position_after_partial_exit(
+            open_position["position_id"],
+            new_remaining,
+            new_remaining_margin,
+            tp2_hit=True,
+        )
+        apply_exit_balance_update(account_id, released_margin, realized_pnl, fee_paid)
+
+        if order_id is not None:
+            update_order_status(int(order_id), "filled")
+
+        insert_guardian_event(
+            account_id,
+            "TP2_HIT",
+            "TAKE_PROFIT_2",
+            {
+                "symbol": symbol,
+                "position_id": open_position["position_id"],
+                "execution_id": execution_id,
+                "close_size": close_size,
+                "remaining_size": new_remaining,
+                "fill_price": fill_price,
+                "fee_paid": fee_paid,
+                "realized_pnl": realized_pnl,
+            },
+        )
+
+        return {
+            "ok": True,
+            "action": "tp2_applied",
+            "execution_id": execution_id,
+            "realized_pnl": realized_pnl,
+            "remaining_size": new_remaining,
+        }
+
+    if execution_type == "TP3":
+        if open_position["tp3_hit"]:
+            return {"ok": False, "error": "tp3_already_hit", "execution_id": execution_id}
+
+        execution_id = insert_execution_report(
+            account_id=account_id,
+            order_id=order_id,
+            symbol=symbol,
+            fill_price=fill_price,
+            filled_size=filled_size,
+            fee_paid=fee_paid,
+            slippage_bps=slippage_bps,
+            notes=notes,
+            execution_type=execution_type,
+            position_side=position_side,
+        )
+
+        close_size = remaining_size
+        realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
+
+        released_margin = open_position["margin_used"]
+
+        close_position(
+            open_position["position_id"],
+            tp3_hit=True,
+        )
+        apply_exit_balance_update(account_id, released_margin, realized_pnl, fee_paid)
+
+        if order_id is not None:
+            update_order_status(int(order_id), "filled")
+
+        cancel_open_protective_orders_for_position(
+            open_position["position_id"],
+            exclude_order_id=int(order_id) if order_id is not None else None,
+        )
+
+        insert_guardian_event(
+            account_id,
+            "TP3_HIT",
+            "TAKE_PROFIT_3",
+            {
+                "symbol": symbol,
+                "position_id": open_position["position_id"],
+                "execution_id": execution_id,
+                "close_size": close_size,
+                "remaining_size": 0,
+                "fill_price": fill_price,
+                "fee_paid": fee_paid,
+                "realized_pnl": realized_pnl,
+            },
+        )
+
+        refreshed_position = open_position.copy()
+        refreshed_position["remaining_size"] = 0
+        trade_id = maybe_finalize_trade(refreshed_position)
+
+        return {
+            "ok": True,
+            "action": "tp3_applied_position_closed",
+            "execution_id": execution_id,
+            "trade_id": trade_id,
+            "realized_pnl": realized_pnl,
+        }
+
+    if execution_type == "STOP_LOSS":
+        close_size = remaining_size
+
+        execution_id = insert_execution_report(
+            account_id=account_id,
+            order_id=order_id,
+            symbol=symbol,
+            fill_price=fill_price,
+            filled_size=filled_size,
+            fee_paid=fee_paid,
+            slippage_bps=slippage_bps,
+            notes=notes,
+            execution_type=execution_type,
+            position_side=position_side,
+        )
+
+        realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
+
+        released_margin = open_position["margin_used"]
+
+        close_position(open_position["position_id"])
+        apply_exit_balance_update(account_id, released_margin, realized_pnl, fee_paid)
+
+        if order_id is not None:
+            update_order_status(int(order_id), "filled")
+
+        cancel_open_protective_orders_for_position(
+            open_position["position_id"],
+            exclude_order_id=int(order_id) if order_id is not None else None,
+        )
+
+        insert_guardian_event(
+            account_id,
+            "STOP_LOSS_HIT",
+            "STOP_LOSS_EXECUTED",
+            {
+                "symbol": symbol,
+                "position_id": open_position["position_id"],
+                "execution_id": execution_id,
+                "close_size": close_size,
+                "remaining_size": 0,
+                "fill_price": fill_price,
+                "fee_paid": fee_paid,
+                "realized_pnl": realized_pnl,
+            },
+        )
+
+        refreshed_position = open_position.copy()
+        refreshed_position["remaining_size"] = 0
+        trade_id = maybe_finalize_trade(refreshed_position)
+
+        return {
+            "ok": True,
+            "action": "stop_loss_applied_position_closed",
+            "execution_id": execution_id,
+            "trade_id": trade_id,
+            "realized_pnl": realized_pnl,
+        }
+
+    return {"ok": False, "error": "unhandled_execution_case"}

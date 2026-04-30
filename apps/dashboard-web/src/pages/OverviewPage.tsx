@@ -345,8 +345,8 @@ export default function OverviewPage() {
           hint="Cumulative execution costs"
         />
         <MetricCard
-          label="Realized PnL"
-          value={formatMoney(summary.realized)}
+          label="Net Realized PnL"
+          value={formatMoney(summary.realized - summary.feesPaid)}
           hint="Closed profit and loss"
         />
         <MetricCard
