@@ -692,7 +692,7 @@ def build_overview(account_id: int):
                 FROM evaluator_equity_history
                 WHERE account_id = %s
                 ORDER BY recorded_at DESC
-                LIMIT 100
+                LIMIT 8640
                 """,
                 (account_id,),
             )
