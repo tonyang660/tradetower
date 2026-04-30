@@ -1,0 +1,137 @@
+from pathlib import Path
+import json
+
+from config import API_GATEWAY_BASE_URL, SYMBOL_UNIVERSE_PATH
+from http_client import get_json
+
+
+def load_symbol_universe_config():
+    path = Path(SYMBOL_UNIVERSE_PATH)
+
+    if not path.exists():
+        return {
+            "ok": False,
+            "error": "symbol_universe_not_found",
+            "path": str(path),
+        }
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": "symbol_universe_read_failed",
+            "details": str(e),
+            "path": str(path),
+        }
+
+    enabled_symbols = []
+    for item in payload.get("symbols", []):
+        symbol = str(item.get("symbol", "")).upper().strip()
+        if symbol and bool(item.get("enabled", False)):
+            enabled_symbols.append(symbol)
+
+    return {
+        "ok": True,
+        "path": str(path),
+        "raw": payload,
+        "enabled_symbols": enabled_symbols,
+    }
+
+
+def save_symbol_universe_config(symbols: list[str]):
+    path = Path(SYMBOL_UNIVERSE_PATH)
+
+    normalized = []
+    seen = set()
+
+    for symbol in symbols:
+        value = str(symbol).upper().strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+
+    if not normalized:
+        return {
+            "ok": False,
+            "error": "empty_symbol_universe_not_allowed",
+        }
+
+    payload = {
+        "symbols": [
+            {
+                "symbol": symbol,
+                "enabled": True,
+                "priority": 1,
+            }
+            for symbol in normalized
+        ]
+    }
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+            f.write("\n")
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": "symbol_universe_write_failed",
+            "details": str(e),
+            "path": str(path),
+        }
+
+    return {
+        "ok": True,
+        "saved": True,
+        "path": str(path),
+        "enabled_symbols": normalized,
+        "count": len(normalized),
+    }
+
+
+def validate_symbol_via_api_gateway(symbol: str):
+    normalized = str(symbol).upper().strip()
+
+    if not normalized:
+        return {
+            "ok": False,
+            "valid": False,
+            "error": "empty_symbol",
+            "symbol": normalized,
+        }, 400
+
+    payload, status_code, error = get_json(
+        f"{API_GATEWAY_BASE_URL}/providers/bitget/ticker",
+        params={"symbol": normalized},
+        timeout=10,
+    )
+
+    if error:
+        return {
+            "ok": False,
+            "valid": False,
+            "symbol": normalized,
+            "provider": "bitget",
+            "error": error,
+        }, 500
+
+    if status_code != 200 or not payload or not payload.get("ok"):
+        return {
+            "ok": False,
+            "valid": False,
+            "symbol": normalized,
+            "provider": "bitget",
+            "error": payload.get("error", "symbol_not_found") if isinstance(payload, dict) else "symbol_not_found",
+        }, 400
+
+    return {
+        "ok": True,
+        "valid": True,
+        "symbol": normalized,
+        "provider": "bitget",
+        "message": "Symbol validated successfully.",
+        "ticker": payload,
+    }, 200
