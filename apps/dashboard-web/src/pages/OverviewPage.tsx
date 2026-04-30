@@ -346,7 +346,7 @@ export default function OverviewPage() {
         />
         <MetricCard
           label="Net Realized PnL"
-          value={formatMoney(summary.realized - summary.feesPaid)}
+          value={formatMoney(summary.realized)}
           hint="Closed profit and loss"
         />
         <MetricCard
