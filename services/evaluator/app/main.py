@@ -22,6 +22,15 @@ from performance import (
     get_weekday_performance,
 )
 from positions import get_recent_closed_positions
+from analytics import (
+    get_strategy_analytics_exit_outcomes,
+    get_strategy_analytics_fee_pressure,
+    get_strategy_analytics_holding_times,
+    get_strategy_analytics_summary,
+    get_strategy_analytics_score_buckets,
+    get_strategy_analytics_symbols
+    
+)
 from time_utils import iso_now
 from trade_guardian_client import (
     fetch_trade_guardian_open_positions,
@@ -192,6 +201,36 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/performance/monthly-summary":
             account_id = int(query.get("account_id", ["1"])[0])
             self._send_json(get_monthly_summary(account_id))
+            return
+
+        if parsed.path == "/strategy-analytics/summary":
+            account_id = int(query.get("account_id", ["1"])[0])
+            self._send_json(get_strategy_analytics_summary(account_id))
+            return
+
+        if parsed.path == "/strategy-analytics/score-buckets":
+            account_id = int(query.get("account_id", ["1"])[0])
+            self._send_json(get_strategy_analytics_score_buckets(account_id))
+            return
+
+        if parsed.path == "/strategy-analytics/symbols":
+            account_id = int(query.get("account_id", ["1"])[0])
+            self._send_json(get_strategy_analytics_symbols(account_id))
+            return
+
+        if parsed.path == "/strategy-analytics/holding-times":
+            account_id = int(query.get("account_id", ["1"])[0])
+            self._send_json(get_strategy_analytics_holding_times(account_id))
+            return
+
+        if parsed.path == "/strategy-analytics/exit-outcomes":
+            account_id = int(query.get("account_id", ["1"])[0])
+            self._send_json(get_strategy_analytics_exit_outcomes(account_id))
+            return
+
+        if parsed.path == "/strategy-analytics/fee-pressure":
+            account_id = int(query.get("account_id", ["1"])[0])
+            self._send_json(get_strategy_analytics_fee_pressure(account_id))
             return
 
         self._send_json({

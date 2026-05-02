@@ -1,5 +1,5 @@
 from config import EVALUATOR_BASE_URL
-from http_client import get_json
+from http_client import get_json, get_json_proxy
 from time_utils import iso_now
 
 
@@ -286,5 +286,68 @@ def get_bootstrap_performance(account_id: int):
         "session_performance": session_payload.get("items", []) if isinstance(session_payload, dict) else [],
         "calendar_days": calendar_payload.get("items", []) if isinstance(calendar_payload, dict) else [],
         "monthly_summary": monthly_payload.get("monthly_summary") if isinstance(monthly_payload, dict) else None,
+        "errors": errors,
+    }
+
+def get_strategy_analytics_summary(account_id: int):
+    return get_json_proxy(f"{EVALUATOR_BASE_URL}/strategy-analytics/summary", {"account_id": account_id})
+
+def get_strategy_analytics_score_buckets(account_id: int):
+    return get_json_proxy(f"{EVALUATOR_BASE_URL}/strategy-analytics/score-buckets", {"account_id": account_id})
+
+def get_strategy_analytics_symbols(account_id: int):
+    return get_json_proxy(f"{EVALUATOR_BASE_URL}/strategy-analytics/symbols", {"account_id": account_id})
+
+def get_strategy_analytics_holding_times(account_id: int):
+    return get_json_proxy(f"{EVALUATOR_BASE_URL}/strategy-analytics/holding-times", {"account_id": account_id})
+
+def get_strategy_analytics_exit_outcomes(account_id: int):
+    return get_json_proxy(f"{EVALUATOR_BASE_URL}/strategy-analytics/exit-outcomes", {"account_id": account_id})
+
+def get_strategy_analytics_fee_pressure(account_id: int):
+    return get_json_proxy(f"{EVALUATOR_BASE_URL}/strategy-analytics/fee-pressure", {"account_id": account_id})
+
+def get_bootstrap_strategy_analytics(account_id: int):
+    errors = []
+
+    summary_payload, summary_status = get_strategy_analytics_summary(account_id)
+    score_payload, score_status = get_strategy_analytics_score_buckets(account_id)
+    symbols_payload, symbols_status = get_strategy_analytics_symbols(account_id)
+    holding_payload, holding_status = get_strategy_analytics_holding_times(account_id)
+    exit_payload, exit_status = get_strategy_analytics_exit_outcomes(account_id)
+    fee_payload, fee_status = get_strategy_analytics_fee_pressure(account_id)
+
+    if summary_status != 200:
+        errors.append({"source": "summary", "error": summary_payload})
+    if score_status != 200:
+        errors.append({"source": "score_buckets", "error": score_payload})
+    if symbols_status != 200:
+        errors.append({"source": "symbols", "error": symbols_payload})
+    if holding_status != 200:
+        errors.append({"source": "holding_times", "error": holding_payload})
+    if exit_status != 200:
+        errors.append({"source": "exit_outcomes", "error": exit_payload})
+    if fee_status != 200:
+        errors.append({"source": "fee_pressure", "error": fee_payload})
+
+    return {
+        "ok": len(errors) == 0,
+        "account_id": account_id,
+        "generated_at": iso_now(),
+        "summary": summary_payload.get("summary") if isinstance(summary_payload, dict) else None,
+        "score_buckets": score_payload.get("items", []) if isinstance(score_payload, dict) else [],
+        "symbols": symbols_payload.get("items", []) if isinstance(symbols_payload, dict) else [],
+        "holding_times": {
+            "summary": holding_payload.get("summary") if isinstance(holding_payload, dict) else None,
+            "items": holding_payload.get("items", []) if isinstance(holding_payload, dict) else [],
+        },
+        "exit_outcomes": {
+            "summary": exit_payload.get("summary") if isinstance(exit_payload, dict) else None,
+            "items": exit_payload.get("items", []) if isinstance(exit_payload, dict) else [],
+        },
+        "fee_pressure": {
+            "summary": fee_payload.get("summary") if isinstance(fee_payload, dict) else None,
+            "items": fee_payload.get("items", []) if isinstance(fee_payload, dict) else [],
+        },
         "errors": errors,
     }

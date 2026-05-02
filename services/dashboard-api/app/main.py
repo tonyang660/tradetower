@@ -16,6 +16,7 @@ from data_fetchers import (
     get_open_orders,
     get_open_positions,
     get_recent_positions,
+    get_bootstrap_strategy_analytics,
 )
 from health import get_market_session_banner, get_system_health
 from symbol_config import save_symbol_universe_config, validate_symbol_via_api_gateway
@@ -210,6 +211,11 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/bootstrap/performance":
             account_id = int(query.get("account_id", ["1"])[0])
             self._send_json(get_bootstrap_performance(account_id))
+            return
+        
+        if parsed.path == "/bootstrap/strategy-analytics":
+            account_id = int(query.get("account_id", ["1"])[0])
+            self._send_json(get_bootstrap_strategy_analytics(account_id))
             return
 
         if parsed.path == "/bootstrap/system-health":

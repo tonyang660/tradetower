@@ -4,6 +4,7 @@ import OverviewPage from "./pages/OverviewPage";
 import LiveCycleMonitorPage from "./pages/LiveCycleMonitorPage";
 import PositionsOrdersPage from "./pages/PositionsOrdersPage";
 import PerformancePage from "./pages/PerformancePage";
+import StrategyAnalyticsPage from "./pages/StrategyAnalyticsPage";
 import SystemHealthPage from "./pages/SystemHealthPage";
 import ConfigurationPage from "./pages/ConfigurationPage";
 
@@ -24,7 +25,7 @@ export default function App() {
         <Route path="/live-cycle-monitor" element={<LiveCycleMonitorPage />} />
         <Route path="/positions-orders" element={<PositionsOrdersPage />} />
         <Route path="/performance" element={<PerformancePage />} />
-        <Route path="/strategy-analytics" element={<PlaceholderPage title="Strategy Analytics" />} />
+        <Route path="/strategy-analytics" element={<StrategyAnalyticsPage />} />
         <Route path="/system-health" element={<SystemHealthPage />} />
         <Route path="/configuration" element={<ConfigurationPage />} />
       </Routes>

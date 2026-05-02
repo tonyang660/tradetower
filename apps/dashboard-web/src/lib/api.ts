@@ -14,6 +14,7 @@ import type {
   SaveSymbolUniverseResponse,
   SetAutoLoopResponse,
 } from "../types/configuration";
+import type { StrategyAnalyticsBootstrapResponse } from "../types/strategyAnalytics";
 
 const BASE_URL = import.meta.env.VITE_DASHBOARD_API_BASE_URL;
 
@@ -118,6 +119,12 @@ export function fetchOpenOrders(accountId = 1) {
 export function fetchPerformanceBootstrap(accountId = 1) {
   return getJson<PerformanceBootstrapResponse>(
     `/bootstrap/performance?account_id=${accountId}`
+  );
+}
+
+export async function fetchStrategyAnalyticsBootstrap(accountId = 1) {
+  return getJson<StrategyAnalyticsBootstrapResponse>(
+    `/bootstrap/strategy-analytics?account_id=${accountId}`
   );
 }
 

@@ -31,7 +31,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   Home Lab Control Center
                 </div>
                 <div className="mt-1 text-sm text-white/45">
-                  Live operations, analytics, and decision telemetry
+                  Autonomous Paper Trading Algorithm
                 </div>
               </div>
 

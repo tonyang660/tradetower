@@ -168,7 +168,10 @@ export default function LatestCycleDetails({
               </div>
             </div>
 
-            <StrategyDecisionList results={strategyResults} />
+            <div style={{ marginTop: '20px' }}>
+              <StrategyDecisionList results={strategyResults} />
+            </div>
+
           </div>
         </div>
       </GlassCard>
