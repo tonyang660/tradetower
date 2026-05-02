@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import type { SymbolAnalyticsRow } from "../../types/strategyAnalytics";
 import {
   money,
-  metricNumber,
   minutesLabel,
   pnlTone,
   ratioPercent,

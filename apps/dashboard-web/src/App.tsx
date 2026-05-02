@@ -26,6 +26,7 @@ export default function App() {
         <Route path="/positions-orders" element={<PositionsOrdersPage />} />
         <Route path="/performance" element={<PerformancePage />} />
         <Route path="/strategy-analytics" element={<StrategyAnalyticsPage />} />
+        <Route path="/backtest" element={<PlaceholderPage title="Backtest"/>} />
         <Route path="/system-health" element={<SystemHealthPage />} />
         <Route path="/configuration" element={<ConfigurationPage />} />
       </Routes>

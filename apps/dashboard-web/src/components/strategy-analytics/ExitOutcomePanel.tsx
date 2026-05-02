@@ -1,5 +1,5 @@
 import type { ExitOutcomesSection } from "../../types/strategyAnalytics";
-import { money, metricNumber, pnlTone, ratioPercent } from "../../lib/strategyAnalytics";
+import { money, pnlTone, ratioPercent } from "../../lib/strategyAnalytics";
 
 export default function ExitOutcomePanel({
   section,

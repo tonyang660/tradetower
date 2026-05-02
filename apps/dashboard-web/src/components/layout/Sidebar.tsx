@@ -8,6 +8,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
+  GrapeIcon,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import clsx from "clsx";
@@ -18,6 +19,7 @@ const items = [
   { to: "/positions-orders", label: "Positions & Orders", icon: Gauge },
   { to: "/performance", label: "Performance", icon: BarChart3 },
   { to: "/strategy-analytics", label: "Strategy Analytics", icon: SlidersHorizontal },
+  { to: "/backtest", label: "Backtest", icon: GrapeIcon},
   { to: "/system-health", label: "System Health", icon: Shield },
   { to: "/configuration", label: "Configuration", icon: Settings},
 ];
@@ -81,20 +83,6 @@ export default function Sidebar({
             );
           })}
         </nav>
-
-        {!collapsed ? (
-          <div className="mt-auto rounded-3xl border border-white/10 bg-white/5 p-4 text-sm text-white/55">
-            <div className="font-medium text-white/80">Paper Account</div>
-            <div className="mt-1">Build each page carefully, then grow it into the full operator dashboard.</div>
-          </div>
-        ) : (
-          <div className="mt-auto flex justify-center">
-            <div
-              className="h-10 w-10 rounded-2xl border border-white/10 bg-white/6"
-              title="Paper account"
-            />
-          </div>
-        )}
       </div>
     </aside>
   );
