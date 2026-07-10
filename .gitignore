@@ -13,3 +13,7 @@ build/
 .DS_Store
 volumes/
 config/symbol_universe.json
+
+# Local environment files
+infra/env/*.env
+!infra/env/*.env.example

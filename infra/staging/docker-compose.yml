@@ -3,10 +3,10 @@ services:
     image: postgres:16
     container_name: trading-postgres
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: trading_platform
-      POSTGRES_USER: trading
-      POSTGRES_PASSWORD: OrignalMath797POSTGRES
+
+    env_file:
+      - ../env/staging.env
+
     volumes:
       - ./volumes/postgres:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
@@ -116,11 +116,6 @@ services:
     env_file:
       - ../env/staging.env
     environment:
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=trading_platform
-      - POSTGRES_USER=trading
-      - POSTGRES_PASSWORD=OrignalMath797POSTGRES
       - TRADE_GUARDIAN_BASE_URL=http://trade-guardian:8080
     volumes:
       - ./volumes/postgres:/var/lib/postgresql/data
