@@ -13,7 +13,7 @@ from guardian_state import (
 from guards import compute_entry_guard_check, compute_maintenance_guard_check
 from loops import mark_to_market_loop
 from market_data import refresh_mark_to_market
-from orders import fetch_all_open_orders, reprice_protective_order
+from orders import fetch_all_open_orders, reprice_protective_order, ensure_entry_order, mark_order_open
 from positions import fetch_all_open_positions, fetch_open_position_for_api
 from time_utils import iso_now
 
@@ -262,6 +262,68 @@ class Handler(BaseHTTPRequestHandler):
                     "error": "internal_error",
                     "details": str(e),
                 }, status=500)
+                return
+
+        if self.path == "/orders/entry/ensure":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+
+                order_id = ensure_entry_order(
+                    account_id=int(payload["account_id"]),
+                    symbol=str(payload["symbol"]),
+                    position_side=str(payload["position_side"]).lower(),
+                    order_type=str(payload["order_type"]).lower(),
+                    requested_price=(
+                        float(payload["requested_price"])
+                        if payload.get("requested_price") is not None
+                        else None
+                    ),
+                    requested_size=float(payload["requested_size"]),
+                    order_id=(
+                        int(payload["order_id"])
+                        if payload.get("order_id") is not None
+                        else None
+                    ),
+                )
+
+                self._send_json({
+                    "ok": True,
+                    "order_id": order_id,
+                })
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "entry_order_ensure_failed",
+                    "details": str(e),
+                }, status=400)
+                return
+
+        if self.path == "/orders/mark-open":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+
+                order_id = int(payload["order_id"])
+                mark_order_open(order_id)
+
+                self._send_json({
+                    "ok": True,
+                    "order_id": order_id,
+                    "status": "open",
+                })
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "order_mark_open_failed",
+                    "details": str(e),
+                }, status=400)
                 return
 
         if self.path == "/execution/apply":

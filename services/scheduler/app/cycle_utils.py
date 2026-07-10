@@ -68,6 +68,9 @@ def build_repriced_paper_payload(account_id: int, pending_payload: dict, risk_re
     payload["attempt_number"] = int(pending_payload.get("attempt_number", 1))
     payload["max_attempts"] = ENTRY_RETRY_MAX_ATTEMPTS
 
+    if pending_payload.get("order_id") is not None:
+        payload["order_id"] = int(pending_payload["order_id"])
+
     return payload
 
 
@@ -103,8 +106,12 @@ def store_pending_entry(symbol: str, paper_payload: dict, paper_result: dict):
         paper_result.get("attempt_number", paper_payload.get("attempt_number", 1))
     )
 
+    stored_payload = dict(paper_payload)
+    if paper_result.get("order_id") is not None:
+        stored_payload["order_id"] = int(paper_result["order_id"])
+
     PENDING_ENTRY_ORDERS[symbol] = {
-        "paper_payload": dict(paper_payload),
+        "paper_payload": stored_payload,
         "attempt_number": current_attempt_number,
         "updated_at": iso_now(),
     }

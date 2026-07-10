@@ -3,8 +3,9 @@ from execution_reports import insert_execution_report, insert_execution_report_t
 from guardian_state import insert_guardian_event, insert_guardian_event_tx
 from orders import (
     cancel_open_protective_orders_for_position,
+    apply_order_fill,
+    apply_order_fill_tx,
     create_protective_orders_for_position_tx,
-    update_order_status,
 )
 from positions import (
     calculate_realized_pnl,
@@ -73,6 +74,16 @@ def apply_execution_report(payload: dict):
                         execution_type=execution_type,
                         position_side=position_side,
                     )
+
+                    if order_id is not None:
+                        order_fill = apply_order_fill_tx(
+                            cur=cur,
+                            order_id=int(order_id),
+                            fill_size=filled_size,
+                            fill_price=fill_price,
+                        )
+                        if order_fill is None:
+                            raise ValueError("entry_order_not_found")
 
                     position_id, position_margin_used = create_open_position_tx(
                         cur=cur,
@@ -197,7 +208,11 @@ def apply_execution_report(payload: dict):
         apply_exit_balance_update(account_id, released_margin, realized_pnl, fee_paid)
 
         if order_id is not None:
-            update_order_status(int(order_id), "filled")
+            apply_order_fill(
+                order_id=int(order_id),
+                fill_size=close_size,
+                fill_price=fill_price,
+            )
 
         insert_guardian_event(
             account_id,
@@ -261,7 +276,11 @@ def apply_execution_report(payload: dict):
         apply_exit_balance_update(account_id, released_margin, realized_pnl, fee_paid)
 
         if order_id is not None:
-            update_order_status(int(order_id), "filled")
+            apply_order_fill(
+                order_id=int(order_id),
+                fill_size=close_size,
+                fill_price=fill_price,
+            )
 
         insert_guardian_event(
             account_id,
@@ -316,7 +335,11 @@ def apply_execution_report(payload: dict):
         apply_exit_balance_update(account_id, released_margin, realized_pnl, fee_paid)
 
         if order_id is not None:
-            update_order_status(int(order_id), "filled")
+            apply_order_fill(
+                order_id=int(order_id),
+                fill_size=close_size,
+                fill_price=fill_price,
+            )
 
         cancel_open_protective_orders_for_position(
             open_position["position_id"],
@@ -375,7 +398,11 @@ def apply_execution_report(payload: dict):
         apply_exit_balance_update(account_id, released_margin, realized_pnl, fee_paid)
 
         if order_id is not None:
-            update_order_status(int(order_id), "filled")
+            apply_order_fill(
+                order_id=int(order_id),
+                fill_size=close_size,
+                fill_price=fill_price,
+            )
 
         cancel_open_protective_orders_for_position(
             open_position["position_id"],

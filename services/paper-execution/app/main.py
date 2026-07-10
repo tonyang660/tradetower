@@ -184,6 +184,48 @@ def get_symbol_protective_orders(account_id: int, symbol: str, linked_position_i
 
     return filtered, None
 
+def ensure_entry_order(payload: dict, order_type: str):
+    try:
+        r = requests.post(
+            f"{TRADE_GUARDIAN_BASE_URL}/orders/entry/ensure",
+            json={
+                "account_id": int(payload["account_id"]),
+                "symbol": str(payload["symbol"]).upper(),
+                "position_side": str(payload["position_side"]).lower(),
+                "order_type": order_type,
+                "requested_price": float(payload["entry_price"]),
+                "requested_size": float(payload["size"]),
+                "order_id": payload.get("order_id"),
+            },
+            timeout=15,
+        )
+        result = r.json()
+    except Exception as e:
+        return None, f"entry_order_ensure_failed: {str(e)}"
+
+    if r.status_code != 200 or not result.get("ok", False):
+        return None, result.get("error", "entry_order_ensure_failed")
+
+    return int(result["order_id"]), None
+
+
+def mark_entry_order_open(order_id: int):
+    try:
+        r = requests.post(
+            f"{TRADE_GUARDIAN_BASE_URL}/orders/mark-open",
+            json={"order_id": order_id},
+            timeout=10,
+        )
+        result = r.json()
+    except Exception as e:
+        return False, f"order_mark_open_failed: {str(e)}"
+
+    if r.status_code != 200 or not result.get("ok", False):
+        return False, result.get("error", "order_mark_open_failed")
+
+    return True, None
+
+
 def send_execution_to_guardian(execution_event: dict):
     try:
         r = requests.post(
@@ -259,12 +301,19 @@ def execute_market_entry(
     payload: dict,
     notes: str = "paper market entry fill",
 ):
+    order_id, order_error = ensure_entry_order(payload, "market")
+    if order_error:
+        return {"ok": False, "error": order_error}
+
+    payload["order_id"] = order_id
+
     slipped_price = apply_market_slippage(entry_price, position_side, "ENTRY")
     notional = slipped_price * size
     fee_paid = calc_fee(notional, MARKET_FEE_PCT)
 
     execution_event = {
         "account_id": account_id,
+        "order_id": order_id,
         "symbol": symbol,
         "position_side": position_side,
         "execution_type": "ENTRY",
@@ -292,6 +341,7 @@ def execute_market_entry(
         "fill_method": "market",
         "execution_event": execution_event,
         "guardian_result": guardian_result,
+        "order_id": order_id,
     }
 
 
@@ -306,6 +356,13 @@ def simulate_entry(payload: dict):
 
     entry_price = float(payload["entry_price"])
     size = float(payload["size"])
+
+    order_id, order_error = ensure_entry_order(payload, order_type)
+    if order_error:
+        return {"ok": False, "error": order_error}
+
+    payload["order_id"] = order_id
+
     attempt_number = int(payload.get("attempt_number", 1))
     max_attempts = int(payload.get("max_attempts", 15))
 
@@ -320,6 +377,7 @@ def simulate_entry(payload: dict):
 
             execution_event = {
                 "account_id": account_id,
+                "order_id": order_id,
                 "symbol": symbol,
                 "position_side": position_side,
                 "execution_type": "ENTRY",
@@ -346,13 +404,19 @@ def simulate_entry(payload: dict):
                 "action": "ENTRY_FILLED",
                 "fill_method": "limit",
                 "execution_event": execution_event,
-                "guardian_result": guardian_result
+                "guardian_result": guardian_result,
+                "order_id": order_id,
             }
 
         if attempt_number < max_attempts:
+            marked_open, mark_open_error = mark_entry_order_open(order_id)
+            if not marked_open:
+                return {"ok": False, "error": mark_open_error}
+
             return {
                 "ok": True,
                 "action": "ENTRY_PENDING",
+                "order_id": order_id,
                 "attempt_number": attempt_number,
                 "next_attempt_number": attempt_number + 1,
                 "reason_codes": ["LIMIT_NOT_TOUCHED"],
