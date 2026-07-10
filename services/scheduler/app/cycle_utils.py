@@ -1,26 +1,34 @@
 from config import ENTRY_RETRY_MAX_ATTEMPTS, PENDING_ENTRY_LOOP_INTERVAL_SECONDS
-from state import PENDING_ENTRY_ORDERS
-from time_utils import iso_now
 
 
-def build_pending_entry_status():
+def build_pending_entry_status(
+    pending_entries: list[dict] | None = None,
+):
+    pending_entries = pending_entries or []
+
     items = []
+    for order in pending_entries:
+        context = order.get("execution_context") or {}
 
-    for symbol, pending in PENDING_ENTRY_ORDERS.items():
         items.append({
-            "symbol": symbol,
-            "attempt_number": int(pending.get("attempt_number", 1)),
-            "updated_at": pending.get("updated_at"),
-            "order_type": pending.get("paper_payload", {}).get("order_type"),
-            "position_side": pending.get("paper_payload", {}).get("position_side"),
-            "entry_price": pending.get("paper_payload", {}).get("entry_price"),
+            "order_id": order.get("order_id"),
+            "symbol": order.get("symbol"),
+            "attempt_number": int(order.get("retry_attempt", 0)),
+            "updated_at": order.get("updated_at"),
+            "order_type": order.get("order_type"),
+            "position_side": order.get("position_side"),
+            "entry_price": order.get("requested_price"),
+            "originating_cycle_id": order.get("originating_cycle_id"),
+            "selected_strategy": context.get("selected_strategy"),
         })
 
-    items.sort(key=lambda x: x["symbol"])
+    items.sort(key=lambda x: x["symbol"] or "")
 
     return {
         "pending_entries_count": len(items),
-        "pending_entry_loop_interval_seconds": PENDING_ENTRY_LOOP_INTERVAL_SECONDS,
+        "pending_entry_loop_interval_seconds": (
+            PENDING_ENTRY_LOOP_INTERVAL_SECONDS
+        ),
         "pending_entry_max_attempts": ENTRY_RETRY_MAX_ATTEMPTS,
         "pending_entries": items,
     }
@@ -96,40 +104,6 @@ def build_paper_execution_payload(account_id: int, strategy_result: dict, risk_r
 
     return payload
 
-
-def get_pending_entry_symbols():
-    return set(PENDING_ENTRY_ORDERS.keys())
-
-
-def store_pending_entry(symbol: str, paper_payload: dict, paper_result: dict):
-    current_attempt_number = int(
-        paper_result.get("attempt_number", paper_payload.get("attempt_number", 1))
-    )
-
-    stored_payload = dict(paper_payload)
-    if paper_result.get("order_id") is not None:
-        stored_payload["order_id"] = int(paper_result["order_id"])
-
-    PENDING_ENTRY_ORDERS[symbol] = {
-        "paper_payload": stored_payload,
-        "attempt_number": current_attempt_number,
-        "updated_at": iso_now(),
-    }
-
-
-def clear_pending_entry(symbol: str):
-    PENDING_ENTRY_ORDERS.pop(symbol, None)
-
-
-def build_retry_payload(symbol: str):
-    pending = PENDING_ENTRY_ORDERS.get(symbol)
-    if not pending:
-        return None
-
-    payload = dict(pending["paper_payload"])
-    payload["attempt_number"] = int(pending.get("attempt_number", 1))
-    payload["max_attempts"] = ENTRY_RETRY_MAX_ATTEMPTS
-    return payload
 
 
 def extract_candidate_symbols(candidate_payload: dict):

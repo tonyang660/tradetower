@@ -5,6 +5,7 @@ from api_clients import (
     check_entry_gate,
     check_entry_gate_for_symbol,
     fetch_open_positions,
+    fetch_pending_entry_orders,
     fetch_trade_guardian_status,
     ingest_cycle_summary_to_evaluator,
     ingest_equity_snapshot_to_evaluator,
@@ -21,14 +22,10 @@ from config import (
 from cycle_utils import (
     build_paper_execution_payload,
     build_risk_payload_from_strategy,
-    clear_pending_entry,
     extract_candidate_symbols,
-    get_pending_entry_symbols,
-    store_pending_entry,
 )
 from execution_router import execute_entry
 from market_data import refresh_symbol_candles
-from state import PENDING_ENTRY_ORDERS
 from symbol_universe import load_symbol_universe
 from time_utils import iso_now
 
@@ -102,7 +99,16 @@ def run_one_cycle():
         enabled_symbols = load_symbol_universe()
         summary["enabled_symbols"] = enabled_symbols
 
-        summary["pending_entries_before_cycle"] = len(PENDING_ENTRY_ORDERS)
+        pending_entries, pending_entries_error = fetch_pending_entry_orders(
+            ACCOUNT_ID
+        )
+        if pending_entries_error:
+            summary["ok"] = False
+            summary["errors"].append(pending_entries_error)
+            summary["completed_at"] = iso_now()
+            return summary
+
+        summary["pending_entries_before_cycle"] = len(pending_entries)
 
         # Phase 1: refresh market data for full enabled universe
         for symbol in enabled_symbols:
@@ -138,8 +144,11 @@ def run_one_cycle():
         else:
             summary["entry_gate"] = entry_gate
 
-        # Phase 4: build entry-eligible universe from latest state
-        pending_symbols = get_pending_entry_symbols()
+        # Phase 4: build entry-eligible universe from persistent order state
+        pending_symbols = {
+            str(order["symbol"]).upper()
+            for order in pending_entries
+        }
 
         entry_eligible_symbols = [
             s for s in enabled_symbols
@@ -262,6 +271,14 @@ def run_one_cycle():
                 strategy_result,
                 risk_result,
             )
+
+            if execution_mode == "paper":
+                execution_payload["attempt_number"] = 1
+                execution_payload["max_attempts"] = (
+                    ENTRY_RETRY_MAX_ATTEMPTS
+                )
+                execution_payload["originating_cycle_id"] = cycle_id
+
             execution_result, execution_error = execute_entry(
                 execution_mode,
                 execution_payload,
@@ -280,16 +297,6 @@ def run_one_cycle():
             summary["paper_execution"]["submitted"] += 1
 
             action = str(execution_result.get("action", "")).upper()
-
-            if execution_mode == "paper" and action == "ENTRY_PENDING":
-                store_pending_entry(symbol, {
-                    **execution_payload,
-                    "attempt_number": 1,
-                    "max_attempts": ENTRY_RETRY_MAX_ATTEMPTS,
-                    "originating_cycle_id": cycle_id,
-                }, execution_result)
-            else:
-                clear_pending_entry(symbol)
 
             if action == "ENTRY_FILLED":
                 summary["paper_execution"]["fills"] += 1
@@ -343,6 +350,14 @@ def run_one_cycle():
         else:
             summary["evaluator_equity_ingest"] = equity_ingest_result
 
-    summary["pending_entries_after_cycle"] = len(PENDING_ENTRY_ORDERS)
+    pending_entries_after, pending_entries_after_error = (
+        fetch_pending_entry_orders(ACCOUNT_ID)
+    )
+    if pending_entries_after_error:
+        summary["errors"].append(pending_entries_after_error)
+    else:
+        summary["pending_entries_after_cycle"] = len(
+            pending_entries_after
+        )
 
     return summary

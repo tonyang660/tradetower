@@ -3,7 +3,9 @@ from threading import Thread
 import json
 
 import state
+from api_clients import fetch_pending_entry_orders
 from config import (
+    ACCOUNT_ID,
     AUTO_LOOP_DEFAULT,
     LOOP_INTERVAL_SECONDS,
     MAINTENANCE_LOOP_INTERVAL_SECONDS,
@@ -34,7 +36,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/health"):
-            pending_status = build_pending_entry_status()
+            pending_entries, pending_entries_error = (
+                fetch_pending_entry_orders(ACCOUNT_ID)
+            )
+
+            if pending_entries_error:
+                self._send_json({
+                    "ok": False,
+                    "service": SERVICE_NAME,
+                    "error": pending_entries_error,
+                    "timestamp": iso_now(),
+                }, status=502)
+                return
+
+            pending_status = build_pending_entry_status(
+                pending_entries
+            )
 
             self._send_json({
                 "ok": True,

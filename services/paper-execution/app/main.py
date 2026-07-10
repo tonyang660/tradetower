@@ -196,6 +196,10 @@ def ensure_entry_order(payload: dict, order_type: str):
                 "requested_price": float(payload["entry_price"]),
                 "requested_size": float(payload["size"]),
                 "order_id": payload.get("order_id"),
+                "execution_context": payload,
+                "retry_attempt": int(payload.get("attempt_number", 0)),
+                "max_retry_attempts": int(payload.get("max_attempts", 15)),
+                "originating_cycle_id": payload.get("originating_cycle_id"),
             },
             timeout=15,
         )

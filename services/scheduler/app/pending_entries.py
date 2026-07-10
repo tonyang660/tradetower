@@ -1,44 +1,55 @@
 from api_clients import (
+    cancel_pending_entry_order,
     check_entry_gate_for_symbol,
     fetch_latest_price,
     fetch_open_positions,
+    fetch_pending_entry_orders,
     fetch_trade_guardian_status,
     ingest_pending_loop_event_to_evaluator,
     run_risk_engine,
 )
 from config import ACCOUNT_ID, ENTRY_RETRY_MAX_ATTEMPTS
-from execution_router import execute_entry
 from cycle_utils import (
     build_repriced_paper_payload,
     build_repriced_risk_payload,
-    clear_pending_entry,
-    get_pending_entry_symbols,
-    store_pending_entry,
 )
-from state import LAST_PENDING_ENTRY_LOOP_RESULT, PENDING_ENTRY_ORDERS
+from execution_router import execute_entry
+from state import LAST_PENDING_ENTRY_LOOP_RESULT
 from time_utils import iso_now
 
 
+def _loop_failure(error: str):
+    result = {
+        "ok": False,
+        "processed": 0,
+        "fills": 0,
+        "pending": 0,
+        "cancelled": 0,
+        "blocked": 0,
+        "errors": 1,
+        "results": [{"error": error}],
+        "timestamp": iso_now(),
+    }
+    LAST_PENDING_ENTRY_LOOP_RESULT.update(result)
+    return result
+
+
+def _cancel_entry(order_id: int):
+    return cancel_pending_entry_order(
+        account_id=ACCOUNT_ID,
+        order_id=order_id,
+    )
+
+
 def process_pending_entries_once():
-    guardian_status, guardian_status_error = fetch_trade_guardian_status(ACCOUNT_ID)
+    guardian_status, guardian_status_error = fetch_trade_guardian_status(
+        ACCOUNT_ID
+    )
     if guardian_status_error:
-        result = {
-            "ok": False,
-            "processed": 0,
-            "fills": 0,
-            "pending": 0,
-            "cancelled": 0,
-            "blocked": 0,
-            "errors": 1,
-            "results": [{"error": guardian_status_error}],
-            "timestamp": iso_now(),
-        }
-        LAST_PENDING_ENTRY_LOOP_RESULT.update(result)
-        return result
+        return _loop_failure(guardian_status_error)
 
     execution_mode = guardian_status["execution_mode"]
 
-    # Pending-entry retries currently exist only for paper execution.
     if execution_mode != "paper":
         result = {
             "ok": True,
@@ -55,6 +66,18 @@ def process_pending_entries_once():
         LAST_PENDING_ENTRY_LOOP_RESULT.update(result)
         return result
 
+    pending_orders, pending_orders_error = fetch_pending_entry_orders(
+        ACCOUNT_ID
+    )
+    if pending_orders_error:
+        return _loop_failure(pending_orders_error)
+
+    open_positions, positions_error = fetch_open_positions(ACCOUNT_ID)
+    if positions_error:
+        return _loop_failure(positions_error)
+
+    current_open_symbols = {p["symbol"] for p in open_positions}
+
     results = []
     fills = 0
     pending_count = 0
@@ -62,31 +85,62 @@ def process_pending_entries_once():
     blocked = 0
     errors_count = 0
 
-    for symbol in list(get_pending_entry_symbols()):
-        pending = PENDING_ENTRY_ORDERS.get(symbol)
-        if not pending:
-            continue
+    for order in pending_orders:
+        order_id = int(order["order_id"])
+        symbol = str(order["symbol"]).upper()
+        pending_payload = dict(order.get("execution_context") or {})
+        attempt_number = int(order.get("retry_attempt", 0))
+        max_attempts = int(
+            order.get("max_retry_attempts")
+            or pending_payload.get("max_attempts")
+            or ENTRY_RETRY_MAX_ATTEMPTS
+        )
+        originating_cycle_id = (
+            order.get("originating_cycle_id")
+            or pending_payload.get("originating_cycle_id")
+        )
 
-        pending_payload = dict(pending["paper_payload"])
-        attempt_number = int(pending.get("attempt_number", 1))
-        originating_cycle_id = pending_payload.get("originating_cycle_id")
-
-        open_positions, positions_error = fetch_open_positions(ACCOUNT_ID)
-        if positions_error:
+        required_context = {
+            "symbol",
+            "position_side",
+            "stop_loss",
+        }
+        missing_context = sorted(
+            key
+            for key in required_context
+            if pending_payload.get(key) is None
+        )
+        if missing_context:
             errors_count += 1
             results.append({
+                "order_id": order_id,
                 "symbol": symbol,
                 "ok": False,
-                "stage": "positions_check",
-                "error": positions_error,
+                "stage": "pending_context",
+                "error": "pending_entry_context_incomplete",
+                "missing_fields": missing_context,
             })
             continue
 
-        current_open_symbols = {p["symbol"] for p in open_positions}
-        if symbol in current_open_symbols:
-            clear_pending_entry(symbol)
+        pending_payload["order_id"] = order_id
+        pending_payload["attempt_number"] = attempt_number
+        pending_payload["max_attempts"] = max_attempts
+        pending_payload["originating_cycle_id"] = originating_cycle_id
 
-            event_payload = {
+        if symbol in current_open_symbols:
+            cancel_result, cancel_error = _cancel_entry(order_id)
+            if cancel_error:
+                errors_count += 1
+                results.append({
+                    "order_id": order_id,
+                    "symbol": symbol,
+                    "ok": False,
+                    "stage": "cancel_already_open",
+                    "error": cancel_error,
+                })
+                continue
+
+            ingest_pending_loop_event_to_evaluator({
                 "account_id": ACCOUNT_ID,
                 "cycle_id": originating_cycle_id,
                 "symbol": symbol,
@@ -94,17 +148,19 @@ def process_pending_entries_once():
                 "attempt_number": attempt_number,
                 "source": "pending_entry_loop",
                 "details": {
-                    "action": "CLEARED_ALREADY_OPEN",
+                    "order_id": order_id,
+                    "action": "CANCELLED_STALE_ENTRY_ALREADY_OPEN",
                 },
-            }
-            ingest_pending_loop_event_to_evaluator(event_payload)
+            })
 
             fills += 1
             results.append({
+                "order_id": order_id,
                 "symbol": symbol,
                 "ok": True,
-                "action": "CLEARED_ALREADY_OPEN",
+                "action": "CANCELLED_STALE_ENTRY_ALREADY_OPEN",
                 "attempt_number": attempt_number,
+                "cancel_result": cancel_result,
             })
             continue
 
@@ -116,6 +172,7 @@ def process_pending_entries_once():
         if retry_gate_error:
             errors_count += 1
             results.append({
+                "order_id": order_id,
                 "symbol": symbol,
                 "ok": False,
                 "stage": "entry_gate",
@@ -126,13 +183,21 @@ def process_pending_entries_once():
         if not retry_gate.get("trade_allowed", False):
             reason_codes = retry_gate.get("reason_codes", [])
 
-            # If capacity is full, stop retrying this pending entry.
-            # A fresh candidate can be generated later once capacity opens again.
             if "MAX_CONCURRENT_POSITIONS_REACHED" in reason_codes:
-                clear_pending_entry(symbol)
-                cancelled += 1
+                cancel_result, cancel_error = _cancel_entry(order_id)
+                if cancel_error:
+                    errors_count += 1
+                    results.append({
+                        "order_id": order_id,
+                        "symbol": symbol,
+                        "ok": False,
+                        "stage": "cancel_capacity_blocked",
+                        "error": cancel_error,
+                    })
+                    continue
 
-                event_payload = {
+                cancelled += 1
+                ingest_pending_loop_event_to_evaluator({
                     "account_id": ACCOUNT_ID,
                     "cycle_id": originating_cycle_id,
                     "symbol": symbol,
@@ -140,23 +205,24 @@ def process_pending_entries_once():
                     "attempt_number": attempt_number,
                     "source": "pending_entry_loop",
                     "details": {
+                        "order_id": order_id,
                         "reason": "MAX_CONCURRENT_POSITIONS_REACHED",
                         "reason_codes": reason_codes,
                     },
-                }
-                ingest_pending_loop_event_to_evaluator(event_payload)
+                })
 
                 results.append({
+                    "order_id": order_id,
                     "symbol": symbol,
                     "ok": True,
                     "action": "CANCELLED_CAPACITY_BLOCKED",
                     "reason_codes": reason_codes,
+                    "cancel_result": cancel_result,
                 })
                 continue
 
             blocked += 1
-
-            event_payload = {
+            ingest_pending_loop_event_to_evaluator({
                 "account_id": ACCOUNT_ID,
                 "cycle_id": originating_cycle_id,
                 "symbol": symbol,
@@ -164,12 +230,13 @@ def process_pending_entries_once():
                 "attempt_number": attempt_number,
                 "source": "pending_entry_loop",
                 "details": {
+                    "order_id": order_id,
                     "reason_codes": reason_codes,
                 },
-            }
-            ingest_pending_loop_event_to_evaluator(event_payload)
+            })
 
             results.append({
+                "order_id": order_id,
                 "symbol": symbol,
                 "ok": True,
                 "action": "BLOCKED",
@@ -181,6 +248,7 @@ def process_pending_entries_once():
         if latest_price_error:
             errors_count += 1
             results.append({
+                "order_id": order_id,
                 "symbol": symbol,
                 "ok": False,
                 "stage": "latest_price",
@@ -198,6 +266,7 @@ def process_pending_entries_once():
         if risk_error:
             errors_count += 1
             results.append({
+                "order_id": order_id,
                 "symbol": symbol,
                 "ok": False,
                 "stage": "risk_engine",
@@ -206,10 +275,20 @@ def process_pending_entries_once():
             continue
 
         if not risk_result.get("approved", False):
-            clear_pending_entry(symbol)
-            cancelled += 1
+            cancel_result, cancel_error = _cancel_entry(order_id)
+            if cancel_error:
+                errors_count += 1
+                results.append({
+                    "order_id": order_id,
+                    "symbol": symbol,
+                    "ok": False,
+                    "stage": "cancel_risk_rejected",
+                    "error": cancel_error,
+                })
+                continue
 
-            event_payload = {
+            cancelled += 1
+            ingest_pending_loop_event_to_evaluator({
                 "account_id": ACCOUNT_ID,
                 "cycle_id": originating_cycle_id,
                 "symbol": symbol,
@@ -217,17 +296,19 @@ def process_pending_entries_once():
                 "attempt_number": attempt_number,
                 "source": "pending_entry_loop",
                 "details": {
+                    "order_id": order_id,
                     "reason": "RISK_REJECTED",
                     "risk_result": risk_result,
                 },
-            }
-            ingest_pending_loop_event_to_evaluator(event_payload)
+            })
 
             results.append({
+                "order_id": order_id,
                 "symbol": symbol,
                 "ok": True,
                 "action": "CANCELLED_RISK_REJECTED",
                 "risk_result": risk_result,
+                "cancel_result": cancel_result,
             })
             continue
 
@@ -239,14 +320,19 @@ def process_pending_entries_once():
             risk_result,
             latest_price,
         )
+        paper_payload["order_id"] = order_id
         paper_payload["attempt_number"] = new_attempt_number
-        paper_payload["max_attempts"] = ENTRY_RETRY_MAX_ATTEMPTS
+        paper_payload["max_attempts"] = max_attempts
         paper_payload["originating_cycle_id"] = originating_cycle_id
 
-        paper_result, paper_error = execute_entry(execution_mode, paper_payload)
+        paper_result, paper_error = execute_entry(
+            execution_mode,
+            paper_payload,
+        )
         if paper_error:
             errors_count += 1
             results.append({
+                "order_id": order_id,
                 "symbol": symbol,
                 "ok": False,
                 "stage": "paper_execution",
@@ -257,19 +343,16 @@ def process_pending_entries_once():
         action = str(paper_result.get("action", "")).upper()
 
         if action == "ENTRY_PENDING":
-            store_pending_entry(symbol, paper_payload, {
-                "attempt_number": new_attempt_number,
-            })
             pending_count += 1
-        else:
-            clear_pending_entry(symbol)
-
-        if action == "ENTRY_FILLED":
+        elif action == "ENTRY_FILLED":
             fills += 1
-        elif action.startswith("ENTRY_CANCELLED") or action.startswith("CANCELLED"):
+        elif (
+            action.startswith("ENTRY_CANCELLED")
+            or action.startswith("CANCELLED")
+        ):
             cancelled += 1
 
-        event_payload = {
+        ingest_pending_loop_event_to_evaluator({
             "account_id": ACCOUNT_ID,
             "cycle_id": originating_cycle_id,
             "symbol": symbol,
@@ -277,12 +360,13 @@ def process_pending_entries_once():
             "attempt_number": new_attempt_number,
             "source": "pending_entry_loop",
             "details": {
+                "order_id": order_id,
                 "paper_result": paper_result,
             },
-        }
-        ingest_pending_loop_event_to_evaluator(event_payload)
+        })
 
         results.append({
+            "order_id": order_id,
             "symbol": symbol,
             "ok": True,
             "action": action,
@@ -304,5 +388,4 @@ def process_pending_entries_once():
     }
 
     LAST_PENDING_ENTRY_LOOP_RESULT.update(result)
-
     return result

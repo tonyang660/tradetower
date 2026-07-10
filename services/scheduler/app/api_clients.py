@@ -105,6 +105,43 @@ def ingest_candles_to_data_hub(payload: dict):
         return {"ok": False, "error": f"data_hub_ingest_failed: {str(e)}"}
 
 
+def fetch_pending_entry_orders(account_id: int):
+    try:
+        r = requests.get(
+            f"{TRADE_GUARDIAN_BASE_URL}/orders/pending-entries",
+            params={"account_id": account_id},
+            timeout=10,
+        )
+        payload = r.json()
+    except Exception as e:
+        return None, f"trade_guardian_pending_entries_failed: {str(e)}"
+
+    if not payload.get("ok", False):
+        return None, payload.get("error", "pending_entries_fetch_failed")
+
+    return payload.get("items", []), None
+
+
+def cancel_pending_entry_order(account_id: int, order_id: int):
+    try:
+        r = requests.post(
+            f"{TRADE_GUARDIAN_BASE_URL}/orders/entry/cancel",
+            json={
+                "account_id": account_id,
+                "order_id": order_id,
+            },
+            timeout=10,
+        )
+        payload = r.json()
+    except Exception as e:
+        return None, f"trade_guardian_pending_entry_cancel_failed: {str(e)}"
+
+    if not payload.get("ok", False):
+        return None, payload.get("error", "pending_entry_cancel_failed")
+
+    return payload, None
+
+
 def fetch_open_positions(account_id: int):
     try:
         r = requests.get(

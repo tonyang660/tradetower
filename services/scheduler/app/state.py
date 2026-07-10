@@ -2,7 +2,6 @@ from config import AUTO_LOOP_DEFAULT
 
 AUTO_LOOP_ENABLED_STATE = AUTO_LOOP_DEFAULT
 
-PENDING_ENTRY_ORDERS = {}
 LAST_PENDING_ENTRY_LOOP_RESULT = {
     "timestamp": None,
     "processed": 0,

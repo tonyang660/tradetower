@@ -13,7 +13,7 @@ from guardian_state import (
 from guards import compute_entry_guard_check, compute_maintenance_guard_check
 from loops import mark_to_market_loop
 from market_data import refresh_mark_to_market
-from orders import fetch_all_open_orders, reprice_protective_order, ensure_entry_order, mark_order_open
+from orders import fetch_all_open_orders, reprice_protective_order, fetch_pending_entry_orders, ensure_entry_order, mark_order_open, cancel_entry_order
 from positions import fetch_all_open_positions, fetch_open_position_for_api
 from time_utils import iso_now
 
@@ -126,6 +126,29 @@ class Handler(BaseHTTPRequestHandler):
                     "error": "internal_error",
                     "details": str(e),
                 }, status=500)
+                return
+
+        if self.path.startswith("/orders/pending-entries"):
+            query = parse_qs(urlparse(self.path).query)
+
+            try:
+                account_id = int(query.get("account_id", ["1"])[0])
+                items = fetch_pending_entry_orders(account_id)
+
+                self._send_json({
+                    "ok": True,
+                    "account_id": account_id,
+                    "count": len(items),
+                    "items": items,
+                })
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "pending_entry_orders_fetch_failed",
+                    "details": str(e),
+                }, status=400)
                 return
 
         if self.path.startswith("/orders/open"):
@@ -286,6 +309,14 @@ class Handler(BaseHTTPRequestHandler):
                         if payload.get("order_id") is not None
                         else None
                     ),
+                    execution_context=payload.get("execution_context"),
+                    retry_attempt=int(payload.get("retry_attempt", 0)),
+                    max_retry_attempts=(
+                        int(payload["max_retry_attempts"])
+                        if payload.get("max_retry_attempts") is not None
+                        else None
+                    ),
+                    originating_cycle_id=payload.get("originating_cycle_id"),
                 )
 
                 self._send_json({
@@ -322,6 +353,38 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({
                     "ok": False,
                     "error": "order_mark_open_failed",
+                    "details": str(e),
+                }, status=400)
+                return
+
+        if self.path == "/orders/entry/cancel":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+
+                result = cancel_entry_order(
+                    account_id=int(payload["account_id"]),
+                    order_id=int(payload["order_id"]),
+                )
+
+                if result is None:
+                    self._send_json({
+                        "ok": False,
+                        "error": "active_entry_order_not_found",
+                    }, status=404)
+                    return
+
+                self._send_json({
+                    "ok": True,
+                    **result,
+                })
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "entry_order_cancel_failed",
                     "details": str(e),
                 }, status=400)
                 return
