@@ -12,7 +12,6 @@ from api_clients import (
     run_mark_to_market_refresh,
     run_risk_engine,
     run_strategy_engine,
-    submit_entry_to_paper_execution,
 )
 from config import (
     ACCOUNT_ID,
@@ -27,6 +26,7 @@ from cycle_utils import (
     get_pending_entry_symbols,
     store_pending_entry,
 )
+from execution_router import execute_entry
 from market_data import refresh_symbol_candles
 from state import PENDING_ENTRY_ORDERS
 from symbol_universe import load_symbol_universe
@@ -87,6 +87,17 @@ def run_one_cycle():
     }
 
     try:
+        # Resolve account execution mode once for this cycle.
+        guardian_status, guardian_status_error = fetch_trade_guardian_status(ACCOUNT_ID)
+        if guardian_status_error:
+            summary["ok"] = False
+            summary["errors"].append(guardian_status_error)
+            summary["completed_at"] = iso_now()
+            return summary
+
+        execution_mode = guardian_status["execution_mode"]
+        summary["execution_mode"] = execution_mode
+
         # Phase 0: load enabled symbol universe
         enabled_symbols = load_symbol_universe()
         summary["enabled_symbols"] = enabled_symbols
@@ -245,30 +256,38 @@ def run_one_cycle():
                 summary["final_entry_gate"]["blocked"] += 1
                 continue
 
-            # Phase 9: submit approved plan to paper-execution
-            paper_payload = build_paper_execution_payload(ACCOUNT_ID, strategy_result, risk_result)
-            paper_result, paper_error = submit_entry_to_paper_execution(paper_payload)
-            if paper_error:
+            # Phase 9: route approved plan by the account execution mode.
+            execution_payload = build_paper_execution_payload(
+                ACCOUNT_ID,
+                strategy_result,
+                risk_result,
+            )
+            execution_result, execution_error = execute_entry(
+                execution_mode,
+                execution_payload,
+            )
+            if execution_error:
                 summary["paper_execution"]["results"].append({
                     "symbol": symbol,
                     "decision": strategy_result.get("decision"),
                     "selected_strategy": strategy_result.get("selected_strategy"),
+                    "execution_mode": execution_mode,
                     "ok": False,
-                    "error": paper_error,
+                    "error": execution_error,
                 })
                 continue
 
             summary["paper_execution"]["submitted"] += 1
 
-            action = str(paper_result.get("action", "")).upper()
+            action = str(execution_result.get("action", "")).upper()
 
-            if action == "ENTRY_PENDING":
+            if execution_mode == "paper" and action == "ENTRY_PENDING":
                 store_pending_entry(symbol, {
-                    **paper_payload,
+                    **execution_payload,
                     "attempt_number": 1,
                     "max_attempts": ENTRY_RETRY_MAX_ATTEMPTS,
                     "originating_cycle_id": cycle_id,
-                }, paper_result)
+                }, execution_result)
             else:
                 clear_pending_entry(symbol)
 
@@ -278,7 +297,8 @@ def run_one_cycle():
             summary["paper_execution"]["results"].append({
                 "symbol": symbol,
                 "retry": False,
-                **paper_result,
+                "execution_mode": execution_mode,
+                **execution_result,
             })
 
     except Exception as e:

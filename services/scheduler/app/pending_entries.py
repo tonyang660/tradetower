@@ -2,11 +2,12 @@ from api_clients import (
     check_entry_gate_for_symbol,
     fetch_latest_price,
     fetch_open_positions,
+    fetch_trade_guardian_status,
     ingest_pending_loop_event_to_evaluator,
     run_risk_engine,
-    submit_entry_to_paper_execution,
 )
 from config import ACCOUNT_ID, ENTRY_RETRY_MAX_ATTEMPTS
+from execution_router import execute_entry
 from cycle_utils import (
     build_repriced_paper_payload,
     build_repriced_risk_payload,
@@ -19,6 +20,41 @@ from time_utils import iso_now
 
 
 def process_pending_entries_once():
+    guardian_status, guardian_status_error = fetch_trade_guardian_status(ACCOUNT_ID)
+    if guardian_status_error:
+        result = {
+            "ok": False,
+            "processed": 0,
+            "fills": 0,
+            "pending": 0,
+            "cancelled": 0,
+            "blocked": 0,
+            "errors": 1,
+            "results": [{"error": guardian_status_error}],
+            "timestamp": iso_now(),
+        }
+        LAST_PENDING_ENTRY_LOOP_RESULT.update(result)
+        return result
+
+    execution_mode = guardian_status["execution_mode"]
+
+    # Pending-entry retries currently exist only for paper execution.
+    if execution_mode != "paper":
+        result = {
+            "ok": True,
+            "processed": 0,
+            "fills": 0,
+            "pending": 0,
+            "cancelled": 0,
+            "blocked": 0,
+            "errors": 0,
+            "execution_mode": execution_mode,
+            "results": [],
+            "timestamp": iso_now(),
+        }
+        LAST_PENDING_ENTRY_LOOP_RESULT.update(result)
+        return result
+
     results = []
     fills = 0
     pending_count = 0
@@ -207,7 +243,7 @@ def process_pending_entries_once():
         paper_payload["max_attempts"] = ENTRY_RETRY_MAX_ATTEMPTS
         paper_payload["originating_cycle_id"] = originating_cycle_id
 
-        paper_result, paper_error = submit_entry_to_paper_execution(paper_payload)
+        paper_result, paper_error = execute_entry(execution_mode, paper_payload)
         if paper_error:
             errors_count += 1
             results.append({
@@ -263,6 +299,7 @@ def process_pending_entries_once():
         "blocked": blocked,
         "errors": errors_count,
         "results": results,
+        "execution_mode": execution_mode,
         "timestamp": iso_now(),
     }
 
