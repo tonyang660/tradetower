@@ -10,6 +10,7 @@ from config import (
     PAPER_EXECUTION_BASE_URL,
     PAPER_EXECUTION_ENTRY_PATH,
     EVALUATOR_BASE_URL,
+    MARKET_DATA_PROVIDER,
 )
 from time_utils import iso_now
 
@@ -43,8 +44,11 @@ def ingest_pending_loop_event_to_evaluator(payload: dict):
 def fetch_latest_price(symbol: str):
     try:
         r = requests.get(
-            f"{API_GATEWAY_BASE_URL}/providers/bitget/ticker",
-            params={"symbol": symbol},
+            f"{API_GATEWAY_BASE_URL}/market/ticker",
+            params={
+                "symbol": symbol,
+                "provider": MARKET_DATA_PROVIDER,
+            },
             timeout=10,
         )
         payload = r.json()
@@ -84,8 +88,13 @@ def fetch_trade_guardian_status(account_id: int):
 def fetch_candles_from_api_gateway(symbol: str, timeframe: str, limit: int):
     try:
         r = requests.get(
-            f"{API_GATEWAY_BASE_URL}/providers/bitget/candles",
-            params={"symbol": symbol, "timeframe": timeframe, "limit": limit},
+            f"{API_GATEWAY_BASE_URL}/market/candles",
+            params={
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "limit": limit,
+                "provider": MARKET_DATA_PROVIDER,
+            },
             timeout=20,
         )
         return r.json()

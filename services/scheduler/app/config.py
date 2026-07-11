@@ -12,6 +12,8 @@ RISK_ENGINE_BASE_URL = os.getenv("RISK_ENGINE_BASE_URL", "http://risk-engine:808
 PAPER_EXECUTION_BASE_URL = os.getenv("PAPER_EXECUTION_BASE_URL", "http://paper-execution:8080")
 EVALUATOR_BASE_URL = os.getenv("EVALUATOR_BASE_URL", "http://evaluator:8080")
 
+MARKET_DATA_PROVIDER = os.getenv("MARKET_DATA_PROVIDER", "blofin").lower()
+
 PAPER_EXECUTION_ENTRY_PATH = os.getenv("PAPER_EXECUTION_ENTRY_PATH", "/entry/simulate")
 
 AUTO_LOOP_DEFAULT = os.getenv("AUTO_LOOP_ENABLED", "false").lower() == "true"
