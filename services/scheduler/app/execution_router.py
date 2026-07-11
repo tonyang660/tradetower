@@ -8,7 +8,6 @@ SUPPORTED_EXECUTION_MODES = {
     "paper",
     "shadow",
     "live",
-    "close_only",
 }
 
 
@@ -20,9 +19,6 @@ def execute_entry(execution_mode: str, payload: dict):
 
     if mode == "paper":
         return submit_entry_to_paper_execution(payload)
-
-    if mode == "close_only":
-        return None, "entry_blocked_execution_mode_close_only"
 
     # Shadow and live routing are intentionally fail-closed until their
     # execution services are implemented.
@@ -53,10 +49,10 @@ def execute_maintenance(
             force_market_stop_loss=force_market_stop_loss,
         )
 
-    # Future live/close-only maintenance is event-driven from BloFin private
+    # Future live-account maintenance is event-driven from BloFin private
     # WebSocket plus REST reconciliation. The scheduler must not silently use
     # the paper simulator for a live account.
-    if mode in ("shadow", "live", "close_only"):
+    if mode in ("shadow", "live"):
         return {
             "ok": True,
             "action": "NO_SCHEDULER_MAINTENANCE",

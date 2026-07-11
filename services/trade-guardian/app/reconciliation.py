@@ -208,16 +208,6 @@ def evaluate_reconciliation_gate(
             "reason_codes": [],
         }
 
-    # close_only is already entry-blocked by execution mode. Reconciliation may
-    # be degraded, but maintenance/reduction must remain available.
-    if mode == "close_only":
-        return {
-            "required": True,
-            "healthy": False,
-            "stale": False,
-            "reason_codes": [],
-        }
-
     if mode not in ("shadow", "live"):
         return {
             "required": True,

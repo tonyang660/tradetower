@@ -6,7 +6,7 @@
 --   paper | live
 --
 -- execution_mode describes how TradeTower is currently allowed to execute:
---   paper | shadow | live | close_only
+--   paper | shadow | live
 --
 -- This migration does not implement shadow or live execution. It only makes
 -- execution mode persistent and enforces valid account/mode combinations.
@@ -35,7 +35,7 @@ BEGIN
     ) THEN
         ALTER TABLE accounts
         ADD CONSTRAINT accounts_execution_mode_check
-        CHECK (execution_mode IN ('paper', 'shadow', 'live', 'close_only'));
+        CHECK (execution_mode IN ('paper', 'shadow', 'live'));
     END IF;
 END
 $$;
@@ -55,7 +55,7 @@ BEGIN
             OR
             (
                 account_type = 'live'
-                AND execution_mode IN ('shadow', 'live', 'close_only')
+                AND execution_mode IN ('shadow', 'live')
             )
         );
     END IF;

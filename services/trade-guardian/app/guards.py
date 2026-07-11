@@ -9,7 +9,7 @@ def _validate_execution_mode(status: dict) -> list[str]:
     if account_type == "paper" and execution_mode != "paper":
         return ["INVALID_ACCOUNT_EXECUTION_MODE"]
 
-    if account_type == "live" and execution_mode not in ("shadow", "live", "close_only"):
+    if account_type == "live" and execution_mode not in ("shadow", "live"):
         return ["INVALID_ACCOUNT_EXECUTION_MODE"]
 
     return []
@@ -23,9 +23,6 @@ def compute_entry_guard_check(
     reason_codes = []
 
     reason_codes.extend(_validate_execution_mode(status))
-
-    if status.get("execution_mode") == "close_only":
-        reason_codes.append("EXECUTION_MODE_CLOSE_ONLY")
 
     reconciliation_gate = status.get("reconciliation_gate") or {}
     reason_codes.extend(
@@ -89,10 +86,6 @@ def compute_maintenance_guard_check(status: dict, symbol: str | None = None):
     # - trading is disabled
     # - manual halt is active
     # - a daily/weekly kill switch is active
-    # - execution_mode is close_only
-    #
-    # close_only explicitly exists to preserve position-reducing and
-    # position-management actions while blocking new exposure.
 
     if symbol:
         existing_position = get_open_position(status["account_id"], symbol.upper())
