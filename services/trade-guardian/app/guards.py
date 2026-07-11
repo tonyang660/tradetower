@@ -42,6 +42,9 @@ def compute_entry_guard_check(
     if status["weekly_kill_switch"]:
         reason_codes.append("WEEKLY_KILL_SWITCH")
 
+    if status.get("consecutive_loss_cooldown_until") is not None:
+        reason_codes.append("CONSECUTIVE_LOSS_COOLDOWN")
+
     if status["open_positions_count"] >= status["max_concurrent_positions"]:
         reason_codes.append("MAX_CONCURRENT_POSITIONS_REACHED")
 

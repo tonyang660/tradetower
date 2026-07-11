@@ -113,6 +113,10 @@ def fetch_guardian_status(account_id: int):
         gs.daily_basis_date,
         gs.weekly_basis_start,
         gs.weekly_kill_switch_expires_at,
+        gs.consecutive_losses,
+        gs.consecutive_loss_cooldown_until,
+        gs.max_consecutive_losses,
+        gs.consecutive_loss_cooldown_hours,
         (
             SELECT COUNT(*)
             FROM positions p
@@ -156,7 +160,196 @@ def fetch_guardian_status(account_id: int):
         "daily_basis_date": str(row[19]),
         "weekly_basis_start": str(row[20]),
         "weekly_kill_switch_expires_at": row[21].isoformat().replace("+00:00", "Z") if row[21] else None,
-        "open_positions_count": int(row[22]),
+        "consecutive_losses": int(row[22]),
+        "consecutive_loss_cooldown_until": row[23].isoformat().replace("+00:00", "Z") if row[23] else None,
+        "max_consecutive_losses": int(row[24]),
+        "consecutive_loss_cooldown_hours": int(row[25]),
+        "open_positions_count": int(row[26]),
+    }
+
+
+def apply_completed_trade_result_tx(
+    cur,
+    account_id: int,
+    trade_id: int,
+    realized_pnl: float,
+):
+    cur.execute(
+        """
+        SELECT
+            consecutive_losses,
+            consecutive_loss_cooldown_until,
+            max_consecutive_losses,
+            consecutive_loss_cooldown_hours
+        FROM guardian_state
+        WHERE account_id = %s
+        FOR UPDATE
+        """,
+        (account_id,),
+    )
+    row = cur.fetchone()
+
+    if not row:
+        raise ValueError("guardian_state_not_found")
+
+    current_streak = int(row[0] or 0)
+    max_losses = int(row[2])
+    cooldown_hours = int(row[3])
+
+    if realized_pnl < 0:
+        new_streak = current_streak + 1
+        cooldown_until = None
+
+        if new_streak >= max_losses:
+            cur.execute(
+                """
+                UPDATE guardian_state
+                SET consecutive_losses = %s,
+                    consecutive_loss_cooldown_until = NOW() + (%s * INTERVAL '1 hour'),
+                    updated_at = NOW()
+                WHERE account_id = %s
+                RETURNING consecutive_loss_cooldown_until
+                """,
+                (
+                    new_streak,
+                    cooldown_hours,
+                    account_id,
+                ),
+            )
+            cooldown_until = cur.fetchone()[0]
+
+            cur.execute(
+                """
+                INSERT INTO guardian_events (
+                    account_id,
+                    event_type,
+                    reason_code,
+                    details_json,
+                    created_at
+                )
+                VALUES (
+                    %s,
+                    'CONSECUTIVE_LOSS_COOLDOWN_TRIGGERED',
+                    'MAX_CONSECUTIVE_LOSSES_REACHED',
+                    %s::jsonb,
+                    NOW()
+                )
+                """,
+                (
+                    account_id,
+                    json.dumps({
+                        "trade_id": trade_id,
+                        "realized_pnl": realized_pnl,
+                        "consecutive_losses": new_streak,
+                        "max_consecutive_losses": max_losses,
+                        "cooldown_hours": cooldown_hours,
+                        "cooldown_until": (
+                            cooldown_until.isoformat().replace("+00:00", "Z")
+                            if cooldown_until
+                            else None
+                        ),
+                    }),
+                ),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE guardian_state
+                SET consecutive_losses = %s,
+                    updated_at = NOW()
+                WHERE account_id = %s
+                """,
+                (
+                    new_streak,
+                    account_id,
+                ),
+            )
+
+            cur.execute(
+                """
+                INSERT INTO guardian_events (
+                    account_id,
+                    event_type,
+                    reason_code,
+                    details_json,
+                    created_at
+                )
+                VALUES (
+                    %s,
+                    'CONSECUTIVE_LOSS_STREAK_UPDATED',
+                    'LOSING_TRADE_CLOSED',
+                    %s::jsonb,
+                    NOW()
+                )
+                """,
+                (
+                    account_id,
+                    json.dumps({
+                        "trade_id": trade_id,
+                        "realized_pnl": realized_pnl,
+                        "consecutive_losses": new_streak,
+                        "max_consecutive_losses": max_losses,
+                    }),
+                ),
+            )
+
+        return {
+            "action": "LOSS_RECORDED",
+            "consecutive_losses": new_streak,
+            "cooldown_until": (
+                cooldown_until.isoformat().replace("+00:00", "Z")
+                if cooldown_until
+                else None
+            ),
+        }
+
+    # A completed non-losing trade breaks a consecutive loss streak.
+    previous_streak = current_streak
+
+    cur.execute(
+        """
+        UPDATE guardian_state
+        SET consecutive_losses = 0,
+            consecutive_loss_cooldown_until = NULL,
+            updated_at = NOW()
+        WHERE account_id = %s
+        """,
+        (account_id,),
+    )
+
+    if previous_streak > 0:
+        cur.execute(
+            """
+            INSERT INTO guardian_events (
+                account_id,
+                event_type,
+                reason_code,
+                details_json,
+                created_at
+            )
+            VALUES (
+                %s,
+                'CONSECUTIVE_LOSS_STREAK_RESET',
+                'NON_LOSING_TRADE_CLOSED',
+                %s::jsonb,
+                NOW()
+            )
+            """,
+            (
+                account_id,
+                json.dumps({
+                    "trade_id": trade_id,
+                    "realized_pnl": realized_pnl,
+                    "previous_consecutive_losses": previous_streak,
+                    "consecutive_losses": 0,
+                }),
+            ),
+        )
+
+    return {
+        "action": "STREAK_RESET",
+        "consecutive_losses": 0,
+        "cooldown_until": None,
     }
 
 
@@ -214,6 +407,28 @@ def evaluate_and_refresh_guardian_state(status: dict):
                 "WEEKLY_KILL_SWITCH_CLEARED",
                 "WEEKLY_KILL_SWITCH_EXPIRED",
                 {"expired_at": expires_at},
+            )
+
+    # --- Consecutive-loss cooldown expiry check ---
+    consecutive_cooldown_until = status[
+        "consecutive_loss_cooldown_until"
+    ]
+    if consecutive_cooldown_until is not None:
+        expiry_dt = datetime.fromisoformat(
+            consecutive_cooldown_until.replace("Z", "+00:00")
+        )
+
+        if now >= expiry_dt:
+            updates["consecutive_losses"] = 0
+            updates["consecutive_loss_cooldown_until"] = None
+
+            insert_guardian_event(
+                account_id,
+                "CONSECUTIVE_LOSS_COOLDOWN_CLEARED",
+                "CONSECUTIVE_LOSS_COOLDOWN_EXPIRED",
+                {
+                    "expired_at": consecutive_cooldown_until,
+                },
             )
 
     # Apply reset/expiry updates first
