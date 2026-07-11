@@ -13,7 +13,8 @@ from guardian_state import (
 from guards import compute_entry_guard_check, compute_maintenance_guard_check
 from loops import mark_to_market_loop
 from market_data import refresh_mark_to_market
-from orders import fetch_all_open_orders, reprice_protective_order, fetch_pending_entry_orders, ensure_entry_order, mark_order_open, cancel_entry_order
+from orders import fetch_all_open_orders, reprice_protective_order, ensure_entry_order, cancel_entry_order, mark_order_open, fetch_pending_entry_orders
+from position_events import fetch_position_events
 from positions import fetch_all_open_positions, fetch_open_position_for_api
 from time_utils import iso_now
 
@@ -104,6 +105,40 @@ class Handler(BaseHTTPRequestHandler):
                     "error": "internal_error",
                     "details": str(e),
                 }, status=500)
+                return
+
+        if self.path.startswith("/positions/events"):
+            query = parse_qs(urlparse(self.path).query)
+
+            try:
+                account_id = int(query.get("account_id", ["1"])[0])
+                position_id_raw = query.get("position_id", [None])[0]
+                position_id = (
+                    int(position_id_raw)
+                    if position_id_raw is not None
+                    else None
+                )
+
+                items = fetch_position_events(
+                    account_id=account_id,
+                    position_id=position_id,
+                )
+
+                self._send_json({
+                    "ok": True,
+                    "account_id": account_id,
+                    "position_id": position_id,
+                    "count": len(items),
+                    "items": items,
+                })
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "position_events_fetch_failed",
+                    "details": str(e),
+                }, status=400)
                 return
 
         if self.path.startswith("/positions/open"):

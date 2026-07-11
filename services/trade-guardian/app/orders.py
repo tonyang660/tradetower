@@ -2,6 +2,7 @@ import json
 from uuid import uuid4
 
 from db import get_conn
+from position_events import record_position_event_tx
 
 
 ACTIVE_ORDER_STATUSES = (
@@ -790,46 +791,109 @@ def create_protective_orders_for_position_tx(
     }
 
 
-def reprice_protective_order(account_id: int, order_id: int, new_price: float):
-    query = f"""
-    UPDATE orders
-    SET requested_price = %s,
-        tp1 = CASE WHEN role = 'tp1' THEN %s ELSE tp1 END,
-        tp2 = CASE WHEN role = 'tp2' THEN %s ELSE tp2 END,
-        tp3 = CASE WHEN role = 'tp3' THEN %s ELSE tp3 END,
-        updated_at = NOW()
+def reprice_protective_order(
+    account_id: int,
+    order_id: int,
+    new_price: float,
+):
+    select_query = f"""
+    SELECT
+        order_id,
+        linked_position_id,
+        role,
+        requested_price
+    FROM orders
     WHERE account_id = %s
       AND order_id = %s
       AND status IN ({_active_status_sql()})
       AND role IN ('stop_loss', 'tp1', 'tp2', 'tp3')
-    RETURNING order_id, role, requested_price, stop_loss
+    FOR UPDATE
+    """
+
+    update_query = """
+    UPDATE orders
+    SET requested_price = %s,
+        stop_loss = CASE
+            WHEN role = 'stop_loss' THEN %s
+            ELSE stop_loss
+        END,
+        tp1 = CASE WHEN role = 'tp1' THEN %s ELSE tp1 END,
+        tp2 = CASE WHEN role = 'tp2' THEN %s ELSE tp2 END,
+        tp3 = CASE WHEN role = 'tp3' THEN %s ELSE tp3 END,
+        updated_at = NOW()
+    WHERE order_id = %s
+    RETURNING order_id, linked_position_id, role, requested_price
     """
 
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                query,
+                select_query,
                 (
-                    new_price,
-                    new_price,
-                    new_price,
-                    new_price,
                     account_id,
                     order_id,
                     *ACTIVE_ORDER_STATUSES,
                 ),
             )
-            row = cur.fetchone()
-        conn.commit()
+            existing = cur.fetchone()
 
-    if not row:
-        return None
+            if not existing:
+                return None
+
+            old_price = (
+                float(existing[3])
+                if existing[3] is not None
+                else None
+            )
+
+            cur.execute(
+                update_query,
+                (
+                    new_price,
+                    new_price,
+                    new_price,
+                    new_price,
+                    new_price,
+                    order_id,
+                ),
+            )
+            row = cur.fetchone()
+
+            position_id = int(row[1]) if row[1] is not None else None
+            role = row[2]
+
+            if position_id is not None:
+                event_type = {
+                    "stop_loss": "STOP_REPRICED",
+                    "tp1": "TP1_REPRICED",
+                    "tp2": "TP2_REPRICED",
+                    "tp3": "TP3_REPRICED",
+                }[role]
+
+                record_position_event_tx(
+                    cur=cur,
+                    position_id=position_id,
+                    account_id=account_id,
+                    event_type=event_type,
+                    order_id=order_id,
+                    price=new_price,
+                    details={
+                        "old_price": old_price,
+                        "new_price": new_price,
+                        "role": role,
+                    },
+                )
+
+        conn.commit()
 
     return {
         "order_id": int(row[0]),
-        "role": row[1],
-        "requested_price": float(row[2]),
-        "stop_loss": float(row[3]) if row[3] is not None else None,
+        "linked_position_id": (
+            int(row[1]) if row[1] is not None else None
+        ),
+        "role": row[2],
+        "old_price": old_price,
+        "requested_price": float(row[3]),
     }
 
 

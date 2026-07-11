@@ -7,6 +7,10 @@ from orders import (
     apply_order_fill_tx,
     create_protective_orders_for_position_tx,
 )
+from position_events import (
+    record_position_event,
+    record_position_event_tx,
+)
 from positions import (
     calculate_realized_pnl,
     close_position,
@@ -120,6 +124,35 @@ def apply_execution_report(payload: dict):
                         fee_paid=fee_paid,
                     )
 
+                    record_position_event_tx(
+                        cur=cur,
+                        position_id=position_id,
+                        account_id=account_id,
+                        event_type="POSITION_OPENED",
+                        order_id=(
+                            int(order_id)
+                            if order_id is not None
+                            else None
+                        ),
+                        execution_id=execution_id,
+                        price=fill_price,
+                        size_before=0,
+                        size_delta=filled_size,
+                        size_after=filled_size,
+                        details={
+                            "symbol": symbol,
+                            "position_side": position_side,
+                            "fee_paid": fee_paid,
+                            "risk_amount": risk_amount,
+                            "leverage": leverage,
+                            "stop_loss": stop_loss,
+                            "tp1_price": tp1_price,
+                            "tp2_price": tp2_price,
+                            "tp3_price": tp3_price,
+                            "protective_orders": protective_orders,
+                        },
+                    )
+
                     insert_guardian_event_tx(
                         cur=cur,
                         account_id=account_id,
@@ -214,6 +247,27 @@ def apply_execution_report(payload: dict):
                 fill_price=fill_price,
             )
 
+        record_position_event(
+            position_id=open_position["position_id"],
+            account_id=account_id,
+            event_type="TP1_FILLED",
+            order_id=(
+                int(order_id)
+                if order_id is not None
+                else None
+            ),
+            execution_id=execution_id,
+            price=fill_price,
+            size_before=remaining_size,
+            size_delta=-close_size,
+            size_after=new_remaining,
+            details={
+                "symbol": symbol,
+                "fee_paid": fee_paid,
+                "realized_pnl": realized_pnl,
+            },
+        )
+
         insert_guardian_event(
             account_id,
             "TP1_HIT",
@@ -282,6 +336,27 @@ def apply_execution_report(payload: dict):
                 fill_price=fill_price,
             )
 
+        record_position_event(
+            position_id=open_position["position_id"],
+            account_id=account_id,
+            event_type="TP2_FILLED",
+            order_id=(
+                int(order_id)
+                if order_id is not None
+                else None
+            ),
+            execution_id=execution_id,
+            price=fill_price,
+            size_before=remaining_size,
+            size_delta=-close_size,
+            size_after=new_remaining,
+            details={
+                "symbol": symbol,
+                "fee_paid": fee_paid,
+                "realized_pnl": realized_pnl,
+            },
+        )
+
         insert_guardian_event(
             account_id,
             "TP2_HIT",
@@ -346,6 +421,49 @@ def apply_execution_report(payload: dict):
             exclude_order_id=int(order_id) if order_id is not None else None,
         )
 
+        record_position_event(
+            position_id=open_position["position_id"],
+            account_id=account_id,
+            event_type="TP3_FILLED",
+            order_id=(
+                int(order_id)
+                if order_id is not None
+                else None
+            ),
+            execution_id=execution_id,
+            price=fill_price,
+            size_before=remaining_size,
+            size_delta=-close_size,
+            size_after=0,
+            details={
+                "symbol": symbol,
+                "fee_paid": fee_paid,
+                "realized_pnl": realized_pnl,
+            },
+        )
+
+        record_position_event(
+            position_id=open_position["position_id"],
+            account_id=account_id,
+            event_type="POSITION_CLOSED",
+            order_id=(
+                int(order_id)
+                if order_id is not None
+                else None
+            ),
+            execution_id=execution_id,
+            price=fill_price,
+            size_before=remaining_size,
+            size_delta=-close_size,
+            size_after=0,
+            details={
+                "symbol": symbol,
+                "close_reason": "TP3",
+                "fee_paid": fee_paid,
+                "realized_pnl": realized_pnl,
+            },
+        )
+
         insert_guardian_event(
             account_id,
             "TP3_HIT",
@@ -407,6 +525,49 @@ def apply_execution_report(payload: dict):
         cancel_open_protective_orders_for_position(
             open_position["position_id"],
             exclude_order_id=int(order_id) if order_id is not None else None,
+        )
+
+        record_position_event(
+            position_id=open_position["position_id"],
+            account_id=account_id,
+            event_type="STOP_FILLED",
+            order_id=(
+                int(order_id)
+                if order_id is not None
+                else None
+            ),
+            execution_id=execution_id,
+            price=fill_price,
+            size_before=remaining_size,
+            size_delta=-close_size,
+            size_after=0,
+            details={
+                "symbol": symbol,
+                "fee_paid": fee_paid,
+                "realized_pnl": realized_pnl,
+            },
+        )
+
+        record_position_event(
+            position_id=open_position["position_id"],
+            account_id=account_id,
+            event_type="POSITION_CLOSED",
+            order_id=(
+                int(order_id)
+                if order_id is not None
+                else None
+            ),
+            execution_id=execution_id,
+            price=fill_price,
+            size_before=remaining_size,
+            size_delta=-close_size,
+            size_after=0,
+            details={
+                "symbol": symbol,
+                "close_reason": "STOP_LOSS",
+                "fee_paid": fee_paid,
+                "realized_pnl": realized_pnl,
+            },
         )
 
         insert_guardian_event(
