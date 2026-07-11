@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 import json
 import os
 import urllib.parse
-import urllib.request
 
 import requests
 
@@ -79,11 +78,26 @@ def ms_to_iso8601_utc(ms_str: str) -> str:
 
 
 def _json_get(url: str, params: dict | None = None, timeout: int = 10):
-    query = urllib.parse.urlencode(params or {})
-    request_url = f"{url}?{query}" if query else url
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0 Safari/537.36"
+        ),
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "close",
+    }
 
-    with urllib.request.urlopen(request_url, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    response = requests.get(
+        url,
+        params=params or {},
+        headers=headers,
+        timeout=timeout,
+    )
+
+    response.raise_for_status()
+    return response.json()
 
 
 def normalize_internal_symbol(symbol: str) -> str:
