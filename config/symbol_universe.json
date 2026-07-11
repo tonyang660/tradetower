@@ -1,4 +1,13 @@
 {
+  "schema_version": "symbol_universe_v2",
+  "provider_neutral": true,
+  "market": "usdt_perp",
+  "quote_currency": "USDT",
+  "notes": [
+    "Symbols are TradeTower internal symbols, e.g. BTCUSDT.",
+    "Provider-specific symbols such as BTC-USDT are resolved by api-gateway.",
+    "Scheduler validates enabled symbols against /market/instruments before refresh."
+  ],
   "symbols": [
     {
       "symbol": "ETHUSDT",

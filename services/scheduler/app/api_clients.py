@@ -11,6 +11,7 @@ from config import (
     PAPER_EXECUTION_ENTRY_PATH,
     EVALUATOR_BASE_URL,
     MARKET_DATA_PROVIDER,
+    MARKET_DATA_MARKET,
 )
 from time_utils import iso_now
 
@@ -66,6 +67,55 @@ def fetch_latest_price(symbol: str):
         return None, "latest_price_missing"
 
     return float(price), None
+
+
+def fetch_market_instrument(symbol: str):
+    try:
+        r = requests.get(
+            f"{API_GATEWAY_BASE_URL}/market/instruments",
+            params={
+                "symbol": symbol,
+                "provider": MARKET_DATA_PROVIDER,
+            },
+            timeout=10,
+        )
+        payload = r.json()
+    except Exception as e:
+        return None, f"api_gateway_instrument_failed: {str(e)}"
+
+    if not payload.get("ok", False):
+        return None, payload.get("error", "instrument_fetch_failed")
+
+    items = payload.get("instruments", [])
+    if not items:
+        return None, "instrument_not_found"
+
+    live_items = [
+        item for item in items
+        if str(item.get("state", "")).lower() == "live"
+    ]
+
+    if not live_items:
+        return None, "instrument_not_live"
+
+    item = live_items[0]
+    return {
+        "symbol": item.get("symbol", symbol),
+        "provider_symbol": item.get("provider_symbol"),
+        "provider": payload.get("provider", MARKET_DATA_PROVIDER),
+        "market": payload.get("market", MARKET_DATA_MARKET),
+        "state": item.get("state"),
+        "base_currency": item.get("base_currency"),
+        "quote_currency": item.get("quote_currency"),
+        "settle_currency": item.get("settle_currency"),
+        "contract_value": item.get("contract_value"),
+        "min_size": item.get("min_size"),
+        "lot_size": item.get("lot_size"),
+        "tick_size": item.get("tick_size"),
+        "max_leverage": item.get("max_leverage"),
+        "instrument_type": item.get("instrument_type"),
+        "contract_type": item.get("contract_type"),
+    }, None
 
 
 def fetch_trade_guardian_status(account_id: int):

@@ -12,8 +12,6 @@ RISK_ENGINE_BASE_URL = os.getenv("RISK_ENGINE_BASE_URL", "http://risk-engine:808
 PAPER_EXECUTION_BASE_URL = os.getenv("PAPER_EXECUTION_BASE_URL", "http://paper-execution:8080")
 EVALUATOR_BASE_URL = os.getenv("EVALUATOR_BASE_URL", "http://evaluator:8080")
 
-MARKET_DATA_PROVIDER = os.getenv("MARKET_DATA_PROVIDER", "blofin").lower()
-
 PAPER_EXECUTION_ENTRY_PATH = os.getenv("PAPER_EXECUTION_ENTRY_PATH", "/entry/simulate")
 
 AUTO_LOOP_DEFAULT = os.getenv("AUTO_LOOP_ENABLED", "false").lower() == "true"
@@ -21,6 +19,12 @@ AUTO_LOOP_DEFAULT = os.getenv("AUTO_LOOP_ENABLED", "false").lower() == "true"
 LOOP_INTERVAL_SECONDS = int(os.getenv("LOOP_INTERVAL_SECONDS", "300"))
 ACCOUNT_ID = int(os.getenv("ACCOUNT_ID", "1"))
 SYMBOL_UNIVERSE_PATH = os.getenv("SYMBOL_UNIVERSE_PATH", "/app/config/symbol_universe.json")
+
+MARKET_DATA_PROVIDER = os.getenv("MARKET_DATA_PROVIDER", "blofin").lower()
+MARKET_DATA_MARKET = os.getenv("MARKET_DATA_MARKET", "usdt_perp").lower()
+MARKET_SYMBOL_VALIDATION_ENABLED = (
+    os.getenv("MARKET_SYMBOL_VALIDATION_ENABLED", "true").lower() == "true"
+)
 
 TIMEFRAMES = ["5m", "15m", "1h", "4h"]
 REFRESH_LIMIT = 72

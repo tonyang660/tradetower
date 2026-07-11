@@ -26,7 +26,7 @@ from cycle_utils import (
 )
 from execution_router import execute_entry
 from market_data import refresh_symbol_candles
-from symbol_universe import load_symbol_universe
+from symbol_universe import load_symbol_universe_report
 from time_utils import iso_now
 
 
@@ -39,6 +39,7 @@ def run_one_cycle():
         "cycle_id": cycle_id,
         "started_at": started_at,
         "completed_at": None,
+        "symbol_universe": None,
         "enabled_symbols": [],
         "refreshed_symbols_count": 0,
         "refresh_results": [],
@@ -84,7 +85,6 @@ def run_one_cycle():
     }
 
     try:
-        # Resolve account execution mode once for this cycle.
         guardian_status, guardian_status_error = fetch_trade_guardian_status(ACCOUNT_ID)
         if guardian_status_error:
             summary["ok"] = False
@@ -95,9 +95,16 @@ def run_one_cycle():
         execution_mode = guardian_status["execution_mode"]
         summary["execution_mode"] = execution_mode
 
-        # Phase 0: load enabled symbol universe
-        enabled_symbols = load_symbol_universe()
+        universe_report = load_symbol_universe_report()
+        enabled_symbols = universe_report["enabled_symbols"]
+        summary["symbol_universe"] = universe_report
         summary["enabled_symbols"] = enabled_symbols
+
+        if not enabled_symbols:
+            summary["ok"] = False
+            summary["errors"].append("no_enabled_symbols_after_validation")
+            summary["completed_at"] = iso_now()
+            return summary
 
         pending_entries, pending_entries_error = fetch_pending_entry_orders(
             ACCOUNT_ID
@@ -110,7 +117,6 @@ def run_one_cycle():
 
         summary["pending_entries_before_cycle"] = len(pending_entries)
 
-        # Phase 1: refresh market data for full enabled universe
         for symbol in enabled_symbols:
             refresh_results = refresh_symbol_candles(symbol)
             summary["refresh_results"].extend(refresh_results)
@@ -121,7 +127,6 @@ def run_one_cycle():
                 refreshed_ok_symbols.add(item["symbol"])
         summary["refreshed_symbols_count"] = len(refreshed_ok_symbols)
 
-        # Phase 2: fetch current open positions snapshot only
         open_positions, positions_error = fetch_open_positions(ACCOUNT_ID)
         if positions_error:
             summary["errors"].append(positions_error)
@@ -131,65 +136,57 @@ def run_one_cycle():
         summary["open_positions_count"] = len(open_positions)
 
         current_open_symbols = [p["symbol"] for p in open_positions]
-        maintenance_touched_symbols = set()
 
-        # Phase 3: account-level entry gate
         entry_gate, entry_error = check_entry_gate(ACCOUNT_ID)
         if entry_error:
             summary["errors"].append(entry_error)
             summary["entry_gate"] = {
                 "trade_allowed": False,
-                "reason_codes": ["ENTRY_GATE_UNAVAILABLE"],
+                "reason_codes": [entry_error],
             }
         else:
             summary["entry_gate"] = entry_gate
 
-        # Phase 4: build entry-eligible universe from persistent order state
-        pending_symbols = {
-            str(order["symbol"]).upper()
-            for order in pending_entries
-        }
+        entry_allowed = bool(summary["entry_gate"].get("trade_allowed", False))
 
-        entry_eligible_symbols = [
-            s for s in enabled_symbols
-            if s not in current_open_symbols
-            and s not in maintenance_touched_symbols
-            and s not in pending_symbols
-        ]
-        summary["entry_eligible_symbols"] = entry_eligible_symbols
-
-        # Phase 5: candidate filter only if account-level entry allowed
-        if summary["entry_gate"] and summary["entry_gate"].get("trade_allowed", False):
-            candidate_payload, candidate_error = run_candidate_filter(ACCOUNT_ID, entry_eligible_symbols)
-            if candidate_error:
-                summary["errors"].append(candidate_error)
-                summary["candidate_filter"] = {
-                    "ok": False,
-                    "error": candidate_error,
-                }
-            else:
-                summary["candidate_filter"] = candidate_payload
-        else:
-            summary["candidate_filter"] = {
-                "ok": True,
-                "skipped": True,
-                "reason": "ENTRY_GATE_BLOCKED",
+        entry_eligible_symbols = []
+        if entry_allowed:
+            pending_symbols = {
+                str(order.get("symbol", "")).upper()
+                for order in pending_entries
+                if order.get("symbol")
             }
 
-        # Phase 6: deterministic downstream path
-        if not summary["candidate_filter"] or not summary["candidate_filter"].get("ok", False):
-            summary["errors"].append("candidate_filter_unavailable")
-            candidate_symbols = []
-        elif summary["candidate_filter"].get("skipped", False):
-            candidate_symbols = []
-        else:
-            candidate_symbols = extract_candidate_symbols(summary["candidate_filter"])
+            for symbol in refreshed_ok_symbols:
+                if symbol in current_open_symbols:
+                    continue
+                if symbol in pending_symbols:
+                    continue
+                entry_eligible_symbols.append(symbol)
+
+        summary["entry_eligible_symbols"] = sorted(entry_eligible_symbols)
+
+        candidate_filter_payload, candidate_error = run_candidate_filter(
+            ACCOUNT_ID,
+            summary["entry_eligible_symbols"],
+        )
+        if candidate_error:
+            summary["errors"].append(candidate_error)
+            candidate_filter_payload = {
+                "ok": False,
+                "error": candidate_error,
+                "candidates": [],
+                "rejected": [],
+            }
+
+        summary["candidate_filter"] = candidate_filter_payload
+
+        candidate_symbols = extract_candidate_symbols(candidate_filter_payload)
 
         for symbol in candidate_symbols:
-            summary["strategy_engine"]["analyzed"] += 1
-
-            strategy_result, strategy_error = run_strategy_engine(symbol)
+            strategy_payload, strategy_error = run_strategy_engine(symbol)
             if strategy_error:
+                summary["errors"].append(strategy_error)
                 summary["strategy_engine"]["results"].append({
                     "symbol": symbol,
                     "ok": False,
@@ -197,167 +194,154 @@ def run_one_cycle():
                 })
                 continue
 
-            summary["strategy_engine"]["results"].append(strategy_result)
+            summary["strategy_engine"]["analyzed"] += 1
+            summary["strategy_engine"]["results"].append(strategy_payload)
 
-            if not strategy_result.get("ok", False):
-                continue
-
-            decision = str(strategy_result.get("decision", "no_trade")).lower()
-
-            if decision == "no_trade":
-                summary["strategy_engine"]["no_trade"] += 1
-                continue
-
-            if decision == "observe":
+            decision = strategy_payload.get("decision")
+            if decision == "trade":
+                summary["strategy_engine"]["trade_candidates"] += 1
+            elif decision == "observe":
                 summary["strategy_engine"]["observe_candidates"] += 1
-                continue
+            else:
+                summary["strategy_engine"]["no_trade"] += 1
 
-            if decision not in ("long", "short"):
-                summary["errors"].append(
-                    f"unexpected_strategy_decision_for_{symbol}: {decision}"
-                )
-                continue
+        trade_candidates = [
+            item for item in summary["strategy_engine"]["results"]
+            if item.get("ok") and item.get("decision") == "trade"
+        ]
 
-            summary["strategy_engine"]["trade_candidates"] += 1
-            summary["strategy_engine"]["accepted"] += 1
-
-            # Phase 7: risk-engine
-            risk_payload = build_risk_payload_from_strategy(ACCOUNT_ID, strategy_result)
-
-            summary["risk_engine"]["checked"] += 1
+        for strategy_payload in trade_candidates:
+            risk_payload = build_risk_payload_from_strategy(
+                ACCOUNT_ID,
+                strategy_payload,
+            )
             risk_result, risk_error = run_risk_engine(risk_payload)
             if risk_error:
+                summary["errors"].append(risk_error)
                 summary["risk_engine"]["results"].append({
-                    "symbol": symbol,
+                    "symbol": strategy_payload.get("symbol"),
                     "ok": False,
-                    "error": risk_error,
+                    "approved": False,
+                    "reason_codes": [risk_error],
                 })
                 continue
 
-            summary["risk_engine"]["results"].append({
-                "symbol": symbol,
-                **risk_result,
-            })
+            summary["risk_engine"]["checked"] += 1
+            summary["risk_engine"]["results"].append(risk_result)
 
-            if not risk_result.get("approved", False):
-                continue
+            if risk_result.get("approved"):
+                summary["risk_engine"]["approved"] += 1
 
-            summary["risk_engine"]["approved"] += 1
+        approved_risk_results = [
+            item for item in summary["risk_engine"]["results"]
+            if item.get("ok") and item.get("approved")
+        ]
 
-            # Phase 8: final symbol-level entry gate
-            summary["final_entry_gate"]["checked"] += 1
-            final_gate, final_gate_error = check_entry_gate_for_symbol(ACCOUNT_ID, symbol)
-            if final_gate_error:
-                summary["final_entry_gate"]["blocked"] += 1
-                summary["final_entry_gate"]["results"].append({
-                    "symbol": symbol,
-                    "ok": False,
-                    "error": final_gate_error,
-                })
-                continue
+        for risk_result in approved_risk_results:
+            symbol = risk_result["symbol"]
 
-            summary["final_entry_gate"]["results"].append({
-                "symbol": symbol,
-                **final_gate,
-            })
-
-            if not final_gate.get("trade_allowed", False):
-                summary["final_entry_gate"]["blocked"] += 1
-                continue
-
-            # Phase 9: route approved plan by the account execution mode.
-            execution_payload = build_paper_execution_payload(
+            final_gate, final_gate_error = check_entry_gate_for_symbol(
                 ACCOUNT_ID,
-                strategy_result,
-                risk_result,
+                symbol,
+            )
+            if final_gate_error:
+                summary["errors"].append(final_gate_error)
+                final_gate = {
+                    "trade_allowed": False,
+                    "reason_codes": [final_gate_error],
+                    "symbol": symbol,
+                }
+
+            final_gate["symbol"] = symbol
+            summary["final_entry_gate"]["checked"] += 1
+            summary["final_entry_gate"]["results"].append(final_gate)
+
+            if not final_gate.get("trade_allowed"):
+                summary["final_entry_gate"]["blocked"] += 1
+                continue
+
+            strategy_payload = next(
+                (
+                    item for item in trade_candidates
+                    if item.get("symbol") == symbol
+                ),
+                None,
             )
 
-            if execution_mode == "paper":
-                execution_payload["attempt_number"] = 1
-                execution_payload["max_attempts"] = (
-                    ENTRY_RETRY_MAX_ATTEMPTS
-                )
-                execution_payload["originating_cycle_id"] = cycle_id
+            if strategy_payload is None:
+                summary["errors"].append(f"missing_strategy_payload_for_{symbol}")
+                continue
+
+            execution_payload = build_paper_execution_payload(
+                cycle_id=cycle_id,
+                strategy_payload=strategy_payload,
+                risk_result=risk_result,
+                attempt_number=1,
+                max_attempts=ENTRY_RETRY_MAX_ATTEMPTS,
+            )
 
             execution_result, execution_error = execute_entry(
                 execution_mode,
                 execution_payload,
             )
             if execution_error:
+                summary["errors"].append(execution_error)
                 summary["paper_execution"]["results"].append({
                     "symbol": symbol,
-                    "decision": strategy_result.get("decision"),
-                    "selected_strategy": strategy_result.get("selected_strategy"),
-                    "execution_mode": execution_mode,
                     "ok": False,
                     "error": execution_error,
                 })
                 continue
 
             summary["paper_execution"]["submitted"] += 1
+            summary["paper_execution"]["results"].append(execution_result)
 
-            action = str(execution_result.get("action", "")).upper()
-
+            action = execution_result.get("action")
             if action == "ENTRY_FILLED":
                 summary["paper_execution"]["fills"] += 1
+            elif action == "ENTRY_PENDING":
+                summary["paper_execution"]["pending_retries"] += 1
 
-            summary["paper_execution"]["results"].append({
-                "symbol": symbol,
-                "retry": False,
-                "execution_mode": execution_mode,
-                **execution_result,
-            })
-
-    except Exception as e:
-        summary["ok"] = False
-        summary["errors"].append(f"unhandled_cycle_exception: {str(e)}")
-        summary["errors"].append(traceback.format_exc())
-
-    summary["completed_at"] = iso_now()
-
-    evaluator_result, evaluator_error = ingest_cycle_summary_to_evaluator(summary)
-    if evaluator_error:
-        summary["errors"].append(evaluator_error)
-    else:
-        summary["evaluator_ingest"] = evaluator_result
-
-    # fetch live Trade Guardian account status and ingest equity snapshot
-    tg_status = None
-
-    if MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST:
-        mtm_result, mtm_error = run_mark_to_market_refresh(ACCOUNT_ID)
-        if mtm_error:
-            summary["errors"].append(mtm_error)
-        else:
-            tg_status = mtm_result.get("account_status")
-            summary["mark_to_market_refresh"] = {
-                "ok": True,
-                "positions_checked": mtm_result.get("positions_checked", 0),
-                "positions_priced": mtm_result.get("positions_priced", 0),
-                "pricing_errors": mtm_result.get("pricing_errors", []),
-                "total_unrealized_pnl": mtm_result.get("total_unrealized_pnl", 0.0),
-            }
-
-    if tg_status is None:
-        tg_status, tg_status_error = fetch_trade_guardian_status(ACCOUNT_ID)
-        if tg_status_error:
-            summary["errors"].append(tg_status_error)
-
-    if tg_status is not None:
-        equity_ingest_result, equity_ingest_error = ingest_equity_snapshot_to_evaluator(tg_status)
-        if equity_ingest_error:
-            summary["errors"].append(equity_ingest_error)
-        else:
-            summary["evaluator_equity_ingest"] = equity_ingest_result
-
-    pending_entries_after, pending_entries_after_error = (
-        fetch_pending_entry_orders(ACCOUNT_ID)
-    )
-    if pending_entries_after_error:
-        summary["errors"].append(pending_entries_after_error)
-    else:
-        summary["pending_entries_after_cycle"] = len(
-            pending_entries_after
+        pending_entries_after, pending_entries_after_error = (
+            fetch_pending_entry_orders(ACCOUNT_ID)
         )
+        if pending_entries_after_error:
+            summary["errors"].append(pending_entries_after_error)
+        else:
+            summary["pending_entries_after_cycle"] = len(
+                pending_entries_after
+            )
 
-    return summary
+        if MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST:
+            _, mtm_error = run_mark_to_market_refresh(ACCOUNT_ID)
+            if mtm_error:
+                summary["errors"].append(mtm_error)
+
+        latest_status, latest_status_error = fetch_trade_guardian_status(ACCOUNT_ID)
+        if latest_status_error:
+            summary["errors"].append(latest_status_error)
+        else:
+            _, evaluator_equity_error = ingest_equity_snapshot_to_evaluator(
+                latest_status
+            )
+            if evaluator_equity_error:
+                summary["errors"].append(evaluator_equity_error)
+
+        summary["completed_at"] = iso_now()
+
+        evaluator_payload, evaluator_error = ingest_cycle_summary_to_evaluator(
+            summary
+        )
+        if evaluator_error:
+            summary["errors"].append(evaluator_error)
+        else:
+            summary["evaluator_ingest"] = evaluator_payload
+
+        return summary
+
+    except Exception as exc:
+        summary["ok"] = False
+        summary["completed_at"] = iso_now()
+        summary["errors"].append(str(exc))
+        summary["traceback"] = traceback.format_exc()
+        return summary
