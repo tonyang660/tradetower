@@ -38,7 +38,7 @@ export default function SymbolUniverseManager({
     <GlassCard>
       <SectionTitle
         title="Symbol Universe"
-        subtitle="Define the active tradable universe and validate symbols against Bitget"
+        subtitle="Define the active tradable universe and validate symbols through the provider-neutral market gateway"
       />
 
       <div className="mt-5 flex flex-col gap-4 xl:flex-row xl:items-start">

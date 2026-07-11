@@ -14,7 +14,7 @@ DB_CONFIG = {
 }
 
 API_GATEWAY_BASE_URL = os.getenv("API_GATEWAY_BASE_URL", "http://api-gateway:8080")
-API_GATEWAY_LATEST_PRICE_PATH = os.getenv("API_GATEWAY_LATEST_PRICE_PATH", "/providers/bitget/ticker")
+API_GATEWAY_LATEST_PRICE_PATH = os.getenv("API_GATEWAY_LATEST_PRICE_PATH", "/market/ticker")
 
 MTM_AUTO_REFRESH_ENABLED = os.getenv("MTM_AUTO_REFRESH_ENABLED", "false").lower() == "true"
 MTM_REFRESH_INTERVAL_SECONDS = int(os.getenv("MTM_REFRESH_INTERVAL_SECONDS", "30"))

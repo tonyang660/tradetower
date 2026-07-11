@@ -13,7 +13,7 @@ PORT = int(os.getenv("PORT", "8080"))
 DATA_HUB_BASE_URL = os.getenv("DATA_HUB_BASE_URL", "http://data-hub:8080")
 TRADE_GUARDIAN_BASE_URL = os.getenv("TRADE_GUARDIAN_BASE_URL", "http://trade-guardian:8080")
 API_GATEWAY_BASE_URL = os.getenv("API_GATEWAY_BASE_URL", "http://api-gateway:8080")
-API_GATEWAY_LATEST_PRICE_PATH = os.getenv("API_GATEWAY_LATEST_PRICE_PATH", "/providers/bitget/ticker")
+API_GATEWAY_LATEST_PRICE_PATH = os.getenv("API_GATEWAY_LATEST_PRICE_PATH", "/market/ticker")
 
 LIMIT_FEE_PCT = float(os.getenv("LIMIT_FEE_PCT", "0.02"))
 MARKET_FEE_PCT = float(os.getenv("MARKET_FEE_PCT", "0.06"))

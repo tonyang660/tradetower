@@ -15,6 +15,7 @@ DATA_HUB_BASE_URL = os.getenv("DATA_HUB_BASE_URL", "http://data-hub:8080")
 
 APP_ENV = os.getenv("APP_ENV", "staging")
 SYMBOL_UNIVERSE_PATH = os.getenv("SYMBOL_UNIVERSE_PATH", "/config/symbol_universe.json")
+MARKET_DATA_PROVIDER = os.getenv("MARKET_DATA_PROVIDER", "blofin").lower()
 
 STRICT_SCORE_THRESHOLD = float(os.getenv("STRICT_SCORE_THRESHOLD", "68"))
 MAX_RISK_PCT = float(os.getenv("MAX_RISK_PCT", "1.0"))

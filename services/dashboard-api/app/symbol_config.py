@@ -1,8 +1,12 @@
 from pathlib import Path
 import json
 
-from config import API_GATEWAY_BASE_URL, SYMBOL_UNIVERSE_PATH
+from config import API_GATEWAY_BASE_URL, MARKET_DATA_PROVIDER, SYMBOL_UNIVERSE_PATH
 from http_client import get_json
+
+
+def normalize_symbol(symbol: str) -> str:
+    return str(symbol).upper().strip().replace("/", "").replace("-", "")
 
 
 def load_symbol_universe_config():
@@ -28,7 +32,7 @@ def load_symbol_universe_config():
 
     enabled_symbols = []
     for item in payload.get("symbols", []):
-        symbol = str(item.get("symbol", "")).upper().strip()
+        symbol = normalize_symbol(item.get("symbol", ""))
         if symbol and bool(item.get("enabled", False)):
             enabled_symbols.append(symbol)
 
@@ -47,7 +51,7 @@ def save_symbol_universe_config(symbols: list[str]):
     seen = set()
 
     for symbol in symbols:
-        value = str(symbol).upper().strip()
+        value = normalize_symbol(symbol)
         if not value or value in seen:
             continue
         seen.add(value)
@@ -60,6 +64,10 @@ def save_symbol_universe_config(symbols: list[str]):
         }
 
     payload = {
+        "schema_version": "symbol_universe_v2",
+        "provider_neutral": True,
+        "market": "usdt_perp",
+        "quote_currency": "USDT",
         "symbols": [
             {
                 "symbol": symbol,
@@ -67,7 +75,7 @@ def save_symbol_universe_config(symbols: list[str]):
                 "priority": 1,
             }
             for symbol in normalized
-        ]
+        ],
     }
 
     try:
@@ -93,7 +101,7 @@ def save_symbol_universe_config(symbols: list[str]):
 
 
 def validate_symbol_via_api_gateway(symbol: str):
-    normalized = str(symbol).upper().strip()
+    normalized = normalize_symbol(symbol)
 
     if not normalized:
         return {
@@ -104,8 +112,11 @@ def validate_symbol_via_api_gateway(symbol: str):
         }, 400
 
     payload, status_code, error = get_json(
-        f"{API_GATEWAY_BASE_URL}/providers/bitget/ticker",
-        params={"symbol": normalized},
+        f"{API_GATEWAY_BASE_URL}/market/instruments",
+        params={
+            "symbol": normalized,
+            "provider": MARKET_DATA_PROVIDER,
+        },
         timeout=10,
     )
 
@@ -114,7 +125,7 @@ def validate_symbol_via_api_gateway(symbol: str):
             "ok": False,
             "valid": False,
             "symbol": normalized,
-            "provider": "bitget",
+            "provider": MARKET_DATA_PROVIDER,
             "error": error,
         }, 500
 
@@ -123,15 +134,35 @@ def validate_symbol_via_api_gateway(symbol: str):
             "ok": False,
             "valid": False,
             "symbol": normalized,
-            "provider": "bitget",
-            "error": payload.get("error", "symbol_not_found") if isinstance(payload, dict) else "symbol_not_found",
+            "provider": MARKET_DATA_PROVIDER,
+            "error": (
+                payload.get("error", "symbol_not_found")
+                if isinstance(payload, dict)
+                else "symbol_not_found"
+            ),
+        }, 400
+
+    instruments = payload.get("instruments", [])
+    live_instruments = [
+        item for item in instruments
+        if str(item.get("state", "")).lower() == "live"
+    ]
+
+    if not live_instruments:
+        return {
+            "ok": False,
+            "valid": False,
+            "symbol": normalized,
+            "provider": MARKET_DATA_PROVIDER,
+            "error": "instrument_not_found_or_not_live",
+            "instruments": instruments,
         }, 400
 
     return {
         "ok": True,
         "valid": True,
         "symbol": normalized,
-        "provider": "bitget",
+        "provider": MARKET_DATA_PROVIDER,
         "message": "Symbol validated successfully.",
-        "ticker": payload,
+        "instrument": live_instruments[0],
     }, 200
