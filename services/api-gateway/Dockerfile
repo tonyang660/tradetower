@@ -9,5 +9,7 @@ COPY app /app/app
 
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8080
+ENV DEFAULT_MARKET_PROVIDER=blofin
+ENV BLOFIN_REST_BASE_URL=https://open-api.blofin.com
 
 CMD ["python", "/app/app/main.py"]
