@@ -27,6 +27,11 @@ def compute_entry_guard_check(
     if status.get("execution_mode") == "close_only":
         reason_codes.append("EXECUTION_MODE_CLOSE_ONLY")
 
+    reconciliation_gate = status.get("reconciliation_gate") or {}
+    reason_codes.extend(
+        reconciliation_gate.get("reason_codes", [])
+    )
+
     if not status["is_active"]:
         reason_codes.append("ACCOUNT_INACTIVE")
 

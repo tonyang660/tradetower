@@ -2,6 +2,10 @@ import json
 from datetime import datetime, timedelta
 
 from db import get_conn
+from reconciliation import (
+    evaluate_reconciliation_gate,
+    fetch_reconciliation_state,
+)
 from time_utils import iso_now, start_of_week_utc, sunday_end_utc, utc_now
 
 
@@ -137,7 +141,7 @@ def fetch_guardian_status(account_id: int):
     if not row:
         return None
 
-    return {
+    status = {
         "account_id": int(row[0]),
         "account_name": row[1],
         "account_type": row[2],
@@ -166,6 +170,19 @@ def fetch_guardian_status(account_id: int):
         "consecutive_loss_cooldown_hours": int(row[25]),
         "open_positions_count": int(row[26]),
     }
+
+    reconciliation_state = fetch_reconciliation_state(
+        status["account_id"]
+    )
+    reconciliation_gate = evaluate_reconciliation_gate(
+        status["execution_mode"],
+        reconciliation_state,
+    )
+
+    status["reconciliation"] = reconciliation_state
+    status["reconciliation_gate"] = reconciliation_gate
+
+    return status
 
 
 def apply_completed_trade_result_tx(

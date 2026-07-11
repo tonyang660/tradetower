@@ -13,8 +13,13 @@ from guardian_state import (
 from guards import compute_entry_guard_check, compute_maintenance_guard_check
 from loops import mark_to_market_loop
 from market_data import refresh_mark_to_market
-from orders import fetch_all_open_orders, reprice_protective_order, ensure_entry_order, cancel_entry_order, mark_order_open, fetch_pending_entry_orders
+from orders import fetch_all_open_orders, reprice_protective_order, mark_order_open, ensure_entry_order, cancel_entry_order, fetch_pending_entry_orders
 from position_events import fetch_position_events
+from reconciliation import (
+    ensure_reconciliation_state,
+    fetch_reconciliation_state,
+    update_reconciliation_state,
+)
 from positions import fetch_all_open_positions, fetch_open_position_for_api
 from time_utils import iso_now
 
@@ -105,6 +110,28 @@ class Handler(BaseHTTPRequestHandler):
                     "error": "internal_error",
                     "details": str(e),
                 }, status=500)
+                return
+
+        if self.path.startswith("/reconciliation/status"):
+            query = parse_qs(urlparse(self.path).query)
+
+            try:
+                account_id = int(query.get("account_id", ["1"])[0])
+                state = fetch_reconciliation_state(account_id)
+
+                self._send_json({
+                    "ok": True,
+                    "account_id": account_id,
+                    "state": state,
+                })
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "reconciliation_status_fetch_failed",
+                    "details": str(e),
+                }, status=400)
                 return
 
         if self.path.startswith("/positions/events"):
@@ -388,6 +415,37 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({
                     "ok": False,
                     "error": "order_mark_open_failed",
+                    "details": str(e),
+                }, status=400)
+                return
+
+        if self.path == "/reconciliation/update":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+
+                state = update_reconciliation_state(
+                    account_id=int(payload["account_id"]),
+                    status=str(payload["status"]).lower(),
+                    provider=str(payload.get("provider", "blofin")).lower(),
+                    account_match=payload.get("account_match"),
+                    positions_match=payload.get("positions_match"),
+                    orders_match=payload.get("orders_match"),
+                    mismatch_count=int(payload.get("mismatch_count", 0)),
+                    details=payload.get("details"),
+                )
+
+                self._send_json({
+                    "ok": True,
+                    "state": state,
+                })
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "reconciliation_update_failed",
                     "details": str(e),
                 }, status=400)
                 return
