@@ -20,6 +20,7 @@ from config import (
     MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST,
 )
 from cycle_utils import (
+    build_candidate_filter_cycle_summary,
     build_paper_execution_payload,
     build_risk_payload_from_strategy,
     extract_candidate_symbols,
@@ -57,8 +58,10 @@ def run_one_cycle():
         "entry_gate": None,
         "entry_eligible_symbols": [],
         "candidate_filter": None,
+        "candidate_filter_summary": None,
         "strategy_engine": {
             "analyzed": 0,
+            "candidate_symbols": [],
             "trade_candidates": 0,
             "observe_candidates": 0,
             "no_trade": 0,
@@ -175,13 +178,23 @@ def run_one_cycle():
             candidate_filter_payload = {
                 "ok": False,
                 "error": candidate_error,
+                "schema_version": "candidate_filter_v2",
+                "candidate_filter_mode": "lenient_screener",
+                "input_symbols_count": len(summary["entry_eligible_symbols"]),
                 "candidates": [],
                 "rejected": [],
+                "unavailable": [],
             }
 
+        # Store the full payload for diagnostics/evaluator analysis, but route
+        # only the compact candidate list to Strategy Engine.
         summary["candidate_filter"] = candidate_filter_payload
+        summary["candidate_filter_summary"] = build_candidate_filter_cycle_summary(
+            candidate_filter_payload
+        )
 
         candidate_symbols = extract_candidate_symbols(candidate_filter_payload)
+        summary["strategy_engine"]["candidate_symbols"] = candidate_symbols
 
         for symbol in candidate_symbols:
             strategy_payload, strategy_error = run_strategy_engine(symbol)
@@ -273,8 +286,9 @@ def run_one_cycle():
                 continue
 
             execution_payload = build_paper_execution_payload(
+                account_id=ACCOUNT_ID,
                 cycle_id=cycle_id,
-                strategy_payload=strategy_payload,
+                strategy_result=strategy_payload,
                 risk_result=risk_result,
                 attempt_number=1,
                 max_attempts=ENTRY_RETRY_MAX_ATTEMPTS,
