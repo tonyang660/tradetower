@@ -43,7 +43,9 @@ REQUIRED_TIMEFRAMES = [
     for tf in os.getenv("CANDIDATE_FILTER_REQUIRED_TIMEFRAMES", "5m,15m,1h,4h").split(",")
     if tf.strip()
 ]
-CANDIDATE_FILTER_RUNTIME_VERSION = "phase3_5_step3_lenient_v2_scoring"
+CANDIDATE_FILTER_RUNTIME_VERSION = "phase3_5_step4_preserve_strategy_paths"
+PATH_PRESERVATION_SCORE_FLOOR = float(os.getenv("PATH_PRESERVATION_SCORE_FLOOR", "30"))
+PATH_PRESERVATION_MIN_SCORE_BOOST = float(os.getenv("PATH_PRESERVATION_MIN_SCORE_BOOST", "35"))
 
 
 def iso_now() -> str:
@@ -115,7 +117,9 @@ def build_versions_payload() -> dict:
         "runtime_version": CANDIDATE_FILTER_RUNTIME_VERSION,
         "candidate_filter_mode": CANDIDATE_FILTER_MODE,
         "required_timeframes": REQUIRED_TIMEFRAMES,
-        "scoring_model": "market_snapshot_v2_lenient_step3",
+        "scoring_model": "market_snapshot_v2_lenient_step4_path_preservation",
+        "path_preservation_score_floor": PATH_PRESERVATION_SCORE_FLOOR,
+        "path_preservation_min_score_boost": PATH_PRESERVATION_MIN_SCORE_BOOST,
         "score_buckets": {
             "mtf_context": 20,
             "regime_usability": 20,
@@ -570,31 +574,115 @@ def infer_strategy_path_hints(snapshot: dict, bias: str) -> dict:
     alignment = mtf.get("alignment", {}) or {}
     primary = safe_get_tf(snapshot, "15m")
     primary_regime = (primary.get("regime_inputs", {}) or {}).get("v1_regime")
+    primary_strategy = (primary.get("regime_inputs", {}) or {}).get("v1_regime_strategy")
+
     s15 = safe_get_structure(snapshot, "15m")
+    s4 = safe_get_structure(snapshot, "4h")
     pa15 = safe_get_price_action(snapshot, "15m")
+    i15 = safe_get_indicators(snapshot, "15m")
+    v15 = safe_get_volatility(snapshot, "15m")
 
-    trend_following_possible = (
-        bias in ("long", "short")
-        or alignment.get("consensus") in ("long", "short")
-        or primary_regime in ("Uptrend", "Downtrend")
-    )
+    trend_reasons = []
+    mean_reversion_reasons = []
 
-    mean_reversion_possible = (
-        primary_regime == "Sideways"
-        or (s15.get("mean_reversion_range", {}) or {}).get("valid") is True
-        or s15.get("market_type") in ("range", "transition")
-        or pa15.get("recent_bos_failed", False)
-    )
+    if bias in ("long", "short"):
+        trend_reasons.append("BIAS_DIRECTION_AVAILABLE")
+    if alignment.get("consensus") in ("long", "short"):
+        trend_reasons.append("MTF_CONSENSUS_DIRECTION")
+    if alignment.get("entry_primary_aligned") or alignment.get("primary_htf_aligned"):
+        trend_reasons.append("TIMEFRAME_ALIGNMENT_PRESENT")
+    if primary_regime in ("Uptrend", "Downtrend"):
+        trend_reasons.append("PRIMARY_TREND_REGIME")
+    if s15.get("v1_trend_direction") in ("bullish", "bearish") or s4.get("v1_trend_direction") in ("bullish", "bearish"):
+        trend_reasons.append("V1_STRUCTURE_TREND_PRESENT")
+    if pa15.get("recent_bos_direction") in ("bullish", "bearish") and not pa15.get("recent_bos_failed", False):
+        trend_reasons.append("RECENT_BOS_SUPPORTS_TREND")
+    if primary_strategy == "Trend-Following":
+        trend_reasons.append("PRIMARY_STRATEGY_TREND_FOLLOWING")
 
-    # Lenient rule: if both are false but the symbol has usable data, allow
-    # Strategy Engine only when score later proves it is still reviewable.
+    range_info = s15.get("mean_reversion_range", {}) or {}
+    if primary_regime == "Sideways":
+        mean_reversion_reasons.append("PRIMARY_SIDEWAYS_REGIME")
+    if primary_strategy == "Mean-Reversion":
+        mean_reversion_reasons.append("PRIMARY_STRATEGY_MEAN_REVERSION")
+    if range_info.get("valid") is True:
+        mean_reversion_reasons.append("VALID_MEAN_REVERSION_RANGE")
+    if s15.get("market_type") in ("range", "transition"):
+        mean_reversion_reasons.append("RANGE_OR_TRANSITION_MARKET_TYPE")
+    if pa15.get("recent_bos_failed", False):
+        mean_reversion_reasons.append("FAILED_BOS_CAN_SUPPORT_REVERSION")
+
+    range_position = safe_float(range_info.get("position"), 0.5)
+    rsi = safe_float(i15.get("rsi"), 50.0)
+    if range_info.get("valid") is True and (range_position <= 0.35 or range_position >= 0.65):
+        mean_reversion_reasons.append("PRICE_NEAR_RANGE_EDGE")
+    if rsi <= 42 or rsi >= 58:
+        mean_reversion_reasons.append("RSI_STRETCHED_ENOUGH_FOR_REVERSION_REVIEW")
+
+    atr_ratio = safe_float(v15.get("atr_ratio"), 1.0)
+    if atr_ratio <= 1.2 and range_info.get("valid") is True:
+        mean_reversion_reasons.append("LOW_OR_STABLE_VOLATILITY_RANGE")
+
+    trend_following_possible = len(trend_reasons) > 0
+    mean_reversion_possible = len(mean_reversion_reasons) > 0
+
+    dominant_path = "none"
+    if trend_following_possible and mean_reversion_possible:
+        dominant_path = "both"
+    elif trend_following_possible:
+        dominant_path = "trend_following"
+    elif mean_reversion_possible:
+        dominant_path = "mean_reversion"
+
     return {
         "trend_following_possible": bool(trend_following_possible),
         "mean_reversion_possible": bool(mean_reversion_possible),
+        "dominant_path": dominant_path,
+        "preserve_for_strategy_engine": bool(trend_following_possible or mean_reversion_possible),
+        "path_reason_tags": sorted(set(trend_reasons + mean_reversion_reasons)),
+        "trend_following_reasons": sorted(set(trend_reasons)),
+        "mean_reversion_reasons": sorted(set(mean_reversion_reasons)),
         "source": "market_snapshot_v2",
         "primary_regime": primary_regime,
+        "primary_strategy": primary_strategy,
         "alignment_consensus": alignment.get("consensus"),
     }
+
+
+def apply_path_preservation_policy(score: float, reasons: list[str], path_hints: dict) -> tuple[float, list[str], bool]:
+    """
+    Keep Candidate Filter lenient when at least one plausible strategy path exists.
+
+    This does not force a trade. It only prevents a symbol from being rejected
+    before Strategy Engine can evaluate the plausible v1 path.
+    """
+    preserved = False
+    adjusted_score = score
+    output_reasons = list(reasons)
+
+    if not path_hints.get("preserve_for_strategy_engine"):
+        output_reasons.append("NO_STRATEGY_PATH_HINT")
+        return adjusted_score, output_reasons, preserved
+
+    output_reasons.append("PRESERVE_FOR_STRATEGY_ENGINE_REVIEW")
+
+    if path_hints.get("trend_following_possible") and not path_hints.get("mean_reversion_possible"):
+        output_reasons.append("PRESERVED_TREND_PATH")
+    elif path_hints.get("mean_reversion_possible") and not path_hints.get("trend_following_possible"):
+        output_reasons.append("PRESERVED_MEAN_REVERSION_PATH")
+    elif path_hints.get("trend_following_possible") and path_hints.get("mean_reversion_possible"):
+        output_reasons.append("PRESERVED_BOTH_STRATEGY_PATHS")
+
+    # When score is marginal but at least one path is plausible, keep it as a
+    # weak candidate if it meets the preservation floor. This prevents the filter
+    # from rejecting viable range setups because trend buckets are weak, or viable
+    # early trends because range buckets are weak.
+    if PATH_PRESERVATION_SCORE_FLOOR <= adjusted_score < MIN_SCORE:
+        adjusted_score = max(adjusted_score, PATH_PRESERVATION_MIN_SCORE_BOOST)
+        preserved = True
+        output_reasons.append("LOW_SCORE_BUT_PATH_PRESERVED")
+
+    return round(adjusted_score, 2), sorted(set(output_reasons)), preserved
 
 
 def score_snapshot(snapshot: dict):
@@ -636,11 +724,17 @@ def score_snapshot(snapshot: dict):
         reasons.append("MEAN_REVERSION_PATH_POSSIBLE")
 
     total_score = round(sum(sub_scores.values()), 2)
+    total_score, reasons, path_preserved = apply_path_preservation_policy(
+        total_score,
+        reasons,
+        path_hints,
+    )
 
-    # Preserve leniency: a valid mean-reversion path or clear MTF direction should
-    # keep marginal setups reviewable unless the score is truly low.
     if total_score < MIN_SCORE:
         reasons.append("LOW_CONVICTION")
+
+    if path_preserved:
+        reasons.append("PATH_PRESERVATION_SCORE_ADJUSTED")
 
     return total_score, bias, sorted(set(reasons)), sub_scores, path_hints
 
@@ -672,7 +766,9 @@ def build_candidate_item(
             "snapshot_timestamp": snapshot.get("snapshot_timestamp"),
             "data_quality_healthy": (snapshot.get("data_quality", {}) or {}).get("healthy"),
             "required_timeframes": REQUIRED_TIMEFRAMES,
-            "candidate_scoring_model": "market_snapshot_v2_lenient_step3",
+            "candidate_scoring_model": "market_snapshot_v2_lenient_step4_path_preservation",
+            "path_preservation_floor": PATH_PRESERVATION_SCORE_FLOOR,
+            "path_preservation_min_score_boost": PATH_PRESERVATION_MIN_SCORE_BOOST,
         },
     }
 
