@@ -229,6 +229,7 @@ def build_market_data_status(
         "last_age_seconds": None,
         "is_stale": True,
         "gap_count": None,
+        "gap_check_window_rows": None,
         "gaps": [],
         "healthy": False,
         "reason_codes": [],
@@ -286,9 +287,23 @@ def build_market_data_status(
         base_status["reason_codes"].append("STALE_LAST_CANDLE")
 
     if check_gaps:
-        gap_status = detect_candle_gaps(df, timeframe)
+        # For runtime readiness, check the latest requested window rather than the
+        # entire historical parquet file. Historical gaps can exist during staged
+        # backfills, but strategy execution only needs the latest min_rows window
+        # to be contiguous and fresh.
+        gap_window_rows = max(int(min_rows or 1), 2)
+
+        gap_df = (
+            df
+            .sort_values("timestamp")
+            .tail(gap_window_rows)
+            .reset_index(drop=True)
+        )
+
+        gap_status = detect_candle_gaps(gap_df, timeframe)
         base_status["gap_count"] = gap_status.get("gap_count")
         base_status["gaps"] = gap_status.get("gaps", [])
+        base_status["gap_check_window_rows"] = len(gap_df)
 
         if base_status["gap_count"]:
             base_status["reason_codes"].append("GAPS_DETECTED")
