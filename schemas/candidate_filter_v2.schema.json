@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tradetower.local/schemas/candidate_filter_v2.schema.json",
+  "title": "TradeTower Candidate Filter v2 Response",
+  "type": "object",
+  "required": [
+    "ok",
+    "schema_version",
+    "candidate_filter_version",
+    "candidate_filter_mode",
+    "generated_at",
+    "account_id",
+    "input_symbols_count",
+    "max_candidates",
+    "min_score",
+    "candidates",
+    "rejected",
+    "unavailable",
+    "summary"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "candidate_filter_v2"
+    },
+    "candidate_filter_version": {
+      "type": "string"
+    },
+    "candidate_filter_mode": {
+      "const": "lenient_screener"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "account_id": {
+      "type": "integer"
+    },
+    "input_symbols_count": {
+      "type": "integer"
+    },
+    "max_candidates": {
+      "type": "integer"
+    },
+    "min_score": {
+      "type": "number"
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/candidate_item"
+      }
+    },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/candidate_item"
+      }
+    },
+    "unavailable": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/candidate_item"
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "candidate_item": {
+      "type": "object",
+      "required": [
+        "symbol",
+        "candidate_score",
+        "candidate_tier",
+        "candidate_bias",
+        "candidate_status",
+        "sub_scores",
+        "reason_tags",
+        "strategy_path_hints"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "symbol": {
+          "type": "string"
+        },
+        "candidate_score": {
+          "type": "number"
+        },
+        "candidate_tier": {
+          "enum": [
+            "strong_candidate",
+            "candidate",
+            "weak_candidate",
+            "rejected",
+            "unavailable"
+          ]
+        },
+        "candidate_bias": {
+          "enum": [
+            "long",
+            "short",
+            "neutral",
+            "mixed"
+          ]
+        },
+        "candidate_status": {
+          "enum": [
+            "passed",
+            "rejected",
+            "unavailable"
+          ]
+        },
+        "reject_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sub_scores": {
+          "type": "object"
+        },
+        "reason_tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "strategy_path_hints": {
+          "type": "object",
+          "required": [
+            "trend_following_possible",
+            "mean_reversion_possible"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "trend_following_possible": {
+              "type": "boolean"
+            },
+            "mean_reversion_possible": {
+              "type": "boolean"
+            }
+          }
+        },
+        "snapshot_refs": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}
