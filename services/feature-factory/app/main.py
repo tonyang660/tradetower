@@ -49,6 +49,7 @@ EMIT_WINDOWS = {
 FEATURE_FACTORY_VERSION = "v2"
 SNAPSHOT_SCHEMA_VERSION = MARKET_SNAPSHOT_SCHEMA_VERSION
 INDICATOR_CONTRACT_VERSION = "v1_indicator_parity_step3"
+STRUCTURE_CONTRACT_VERSION = "v1_structure_parity_step4"
 
 # V1 crypto-signal-bot indicator parameters.
 # Keep these explicit here so Feature Factory's output contract is readable.
@@ -422,8 +423,206 @@ def compute_indicators(df: pd.DataFrame) -> dict:
     }
 
 
+
+def get_trend_direction_v1(df: pd.DataFrame) -> str:
+    """
+    V1-compatible trend direction based on EMA 21/50/200 alignment and
+    momentum/strong-price-action fallbacks.
+
+    Returns: bullish, bearish, or neutral.
+    """
+    try:
+        last_price = finite_float(df["close"].iloc[-1])
+        ema_fast = finite_float(df["ema_fast"].iloc[-1])
+        ema_medium = finite_float(df["ema_medium"].iloc[-1])
+        ema_slow = finite_float(df["ema_slow"].iloc[-1])
+
+        if last_price > ema_fast and ema_fast > ema_medium and ema_medium > ema_slow:
+            return "bullish"
+
+        if last_price > ema_fast and last_price > ema_medium and ema_fast > ema_medium:
+            ema_fast_above_medium = (ema_fast - ema_medium) / ema_medium if ema_medium else 0.0
+            if ema_fast_above_medium > 0.005:
+                return "bullish"
+
+        if last_price > ema_fast and last_price > ema_medium and last_price > ema_slow:
+            price_above_slow = (last_price - ema_slow) / ema_slow if ema_slow else 0.0
+            if price_above_slow > 0.02:
+                return "bullish"
+
+        if last_price < ema_fast and ema_fast < ema_medium and ema_medium < ema_slow:
+            return "bearish"
+
+        if last_price < ema_fast and last_price < ema_medium and ema_fast < ema_medium:
+            ema_fast_below_medium = (ema_medium - ema_fast) / ema_medium if ema_medium else 0.0
+            if ema_fast_below_medium > 0.005:
+                return "bearish"
+
+        if last_price < ema_fast and last_price < ema_medium and last_price < ema_slow:
+            price_below_slow = (ema_slow - last_price) / ema_slow if ema_slow else 0.0
+            if price_below_slow > 0.02:
+                return "bearish"
+
+        return "neutral"
+    except Exception:
+        return "neutral"
+
+
+def find_swing_low(df: pd.DataFrame, lookback: int = 20) -> float | None:
+    if len(df) < 1:
+        return None
+    return finite_float(df.tail(lookback)["low"].min())
+
+
+def find_swing_high(df: pd.DataFrame, lookback: int = 20) -> float | None:
+    if len(df) < 1:
+        return None
+    return finite_float(df.tail(lookback)["high"].max())
+
+
+def detect_break_of_structure(
+    df: pd.DataFrame,
+    direction: str,
+    lookback: int = 20,
+    confirmation_bars: int = 20,
+) -> tuple[bool, int, float]:
+    """
+    V1-compatible BOS detection.
+
+    For long: recent high breaks above prior swing high.
+    For short: recent low breaks below prior swing low.
+    """
+    if len(df) < lookback + confirmation_bars:
+        return False, 0, 0.0
+
+    historical_df = df.iloc[:-confirmation_bars] if confirmation_bars > 0 else df
+    if len(historical_df) < lookback:
+        return False, 0, 0.0
+
+    recent_df = df.tail(confirmation_bars)
+
+    if direction == "long":
+        structure_level = finite_float(historical_df.tail(lookback)["high"].max())
+        for i in range(len(recent_df) - 1, -1, -1):
+            if finite_float(recent_df.iloc[i]["high"]) > structure_level:
+                bars_ago = len(recent_df) - 1 - i
+                return True, int(bars_ago), structure_level
+        return False, 0, structure_level
+
+    if direction == "short":
+        structure_level = finite_float(historical_df.tail(lookback)["low"].min())
+        for i in range(len(recent_df) - 1, -1, -1):
+            if finite_float(recent_df.iloc[i]["low"]) < structure_level:
+                bars_ago = len(recent_df) - 1 - i
+                return True, int(bars_ago), structure_level
+        return False, 0, structure_level
+
+    return False, 0, 0.0
+
+
+def get_bos_quality_score(bos_detected: bool, bars_ago: int, max_points: int = 15) -> tuple[int, str]:
+    if not bos_detected:
+        return 0, "No break of structure detected"
+
+    if bars_ago <= 3:
+        return int(max_points), f"Fresh BOS within {bars_ago} bars"
+    if bars_ago <= 7:
+        return int(round(max_points * 0.77)), f"Recent BOS {bars_ago} bars ago"
+    if bars_ago <= 12:
+        return int(round(max_points * 0.46)), f"Older BOS {bars_ago} bars ago"
+
+    return int(round(max_points * 0.2)), f"Stale BOS {bars_ago} bars ago"
+
+
+def analyze_mean_reversion_range(df: pd.DataFrame, lookback: int = 24) -> dict:
+    """V1-compatible local sideways range analysis for mean reversion inputs."""
+    if len(df) < lookback:
+        return {
+            "valid": False,
+            "reason": f"Need at least {lookback} bars for local range analysis",
+        }
+
+    recent = df.tail(lookback)
+    current_price = finite_float(df["close"].iloc[-1])
+    support = finite_float(recent["low"].min())
+    resistance = finite_float(recent["high"].max())
+    range_width = resistance - support
+
+    if range_width <= 0:
+        return {"valid": False, "reason": "Invalid local range width"}
+
+    atr = finite_float(df["atr"].iloc[-1]) if "atr" in df.columns else 0.0
+    atr_sma = finite_float(df["atr_sma"].iloc[-1]) if "atr_sma" in df.columns else atr
+    atr_ratio = finite_float(atr / atr_sma, 1.0) if atr_sma else 1.0
+    range_width_atr = finite_float(range_width / atr, 0.0) if atr else 0.0
+    range_position = finite_float((current_price - support) / range_width, 0.5)
+    range_position = clamp(range_position, 0.0, 1.0)
+
+    buffer = 0.15 * atr if atr else 0.0
+    recent_closes = recent["close"].tail(8)
+    closes_above = int((recent_closes > resistance + buffer).sum())
+    closes_below = int((recent_closes < support - buffer).sum())
+    last_close = finite_float(recent["close"].iloc[-1])
+    previous_close = finite_float(recent["close"].iloc[-2]) if len(recent) > 1 else last_close
+    upper_pressure = range_position >= 0.85 and last_close > previous_close
+    lower_pressure = range_position <= 0.15 and last_close < previous_close
+
+    adx = finite_float(df["adx"].iloc[-1]) if "adx" in df.columns else 0.0
+    ema_fast = finite_float(df["ema_fast"].iloc[-1]) if "ema_fast" in df.columns else current_price
+    ema_slow = finite_float(df["ema_slow"].iloc[-1]) if "ema_slow" in df.columns else current_price
+    ema_spread_pct = abs(ema_fast - ema_slow) / current_price if current_price else 0.0
+
+    breakout_risk_reasons = []
+    if closes_above or closes_below:
+        breakout_risk_reasons.append("recent close outside range")
+    if atr_ratio > 1.0:
+        breakout_risk_reasons.append(f"ATR expanding ({atr_ratio:.2f}x avg)")
+    if adx > 16:
+        breakout_risk_reasons.append(f"ADX too high ({adx:.1f})")
+    if ema_spread_pct > 0.01:
+        breakout_risk_reasons.append(f"EMA spread too wide ({ema_spread_pct * 100:.2f}%)")
+    if range_width_atr < 1.5:
+        breakout_risk_reasons.append(f"range too tight ({range_width_atr:.1f} ATR)")
+    if range_width_atr > 5.0:
+        breakout_risk_reasons.append(f"range too wide ({range_width_atr:.1f} ATR)")
+    if upper_pressure:
+        breakout_risk_reasons.append("price pressing upper boundary")
+    if lower_pressure:
+        breakout_risk_reasons.append("price pressing lower boundary")
+
+    return {
+        "valid": len(breakout_risk_reasons) == 0,
+        "support": support,
+        "resistance": resistance,
+        "width": finite_float(range_width),
+        "position": range_position,
+        "atr": atr,
+        "atr_ratio": atr_ratio,
+        "range_width_atr": range_width_atr,
+        "buffer": finite_float(buffer),
+        "adx": adx,
+        "ema_spread_pct": finite_float(ema_spread_pct),
+        "closes_above": closes_above,
+        "closes_below": closes_below,
+        "upper_pressure": bool(upper_pressure),
+        "lower_pressure": bool(lower_pressure),
+        "breakout_risk_reasons": breakout_risk_reasons,
+        "reason": "; ".join(breakout_risk_reasons) if breakout_risk_reasons else "Contained local range",
+    }
+
 def compute_structure(df: pd.DataFrame, indicators: dict) -> dict:
-    recent = df.tail(20).copy()
+    work = df.copy().reset_index(drop=True)
+
+    # Attach v1 canonical indicator columns so the structure helpers operate on
+    # the same names as crypto-signal-bot.
+    work["ema_fast"] = compute_ema(work["close"], EMA_FAST_PERIOD)
+    work["ema_medium"] = compute_ema(work["close"], EMA_MEDIUM_PERIOD)
+    work["ema_slow"] = compute_ema(work["close"], EMA_SLOW_PERIOD)
+    work["atr"] = compute_atr(work, ATR_PERIOD)
+    work["atr_sma"] = work["atr"].rolling(window=ATR_SMA_PERIOD, min_periods=1).mean()
+    work["adx"] = compute_adx(work, ADX_PERIOD)
+
+    recent = work.tail(20).copy()
     highs = recent["high"].tolist()
     lows = recent["low"].tolist()
 
@@ -432,37 +631,18 @@ def compute_structure(df: pd.DataFrame, indicators: dict) -> dict:
     lower_highs = highs[-1] < highs[-5] if len(highs) >= 5 else False
     lower_lows = lows[-1] < lows[-5] if len(lows) >= 5 else False
 
-    ema_fast = indicators["ema_fast"]
-    ema_medium = indicators["ema_medium"]
-    ema_slow = indicators["ema_slow"]
-    macd = indicators["macd"]
-    macd_signal = indicators["macd_signal"]
-    price_vs_ema_slow_pct = indicators["price_vs_ema_slow_pct"]
-    atr_pct = indicators["atr_percent"]
-
-    if ema_fast > ema_medium and ema_medium > ema_slow:
-        trend_direction = "up"
-    elif ema_fast < ema_medium and ema_medium < ema_slow:
-        trend_direction = "down"
-    elif ema_fast > ema_slow:
-        trend_direction = "up"
-    elif ema_fast < ema_slow:
-        trend_direction = "down"
-    else:
-        trend_direction = "neutral"
-
-    if (higher_highs and higher_lows) or (lower_highs and lower_lows):
-        market_type = "trend"
-    elif atr_pct < 0.35:
-        market_type = "range"
-    else:
-        market_type = "transition"
+    trend_direction_v1 = get_trend_direction_v1(work)
+    trend_direction = {
+        "bullish": "up",
+        "bearish": "down",
+        "neutral": "neutral",
+    }.get(trend_direction_v1, "neutral")
 
     range_high = finite_float(recent["high"].max())
     range_low = finite_float(recent["low"].min())
-    current_close = finite_float(df["close"].iloc[-1])
-
+    current_close = finite_float(work["close"].iloc[-1])
     range_span = range_high - range_low
+
     if range_span <= 0:
         dist_high = 0.0
         dist_low = 0.0
@@ -470,8 +650,19 @@ def compute_structure(df: pd.DataFrame, indicators: dict) -> dict:
         dist_high = finite_float(((range_high - current_close) / range_span) * 100)
         dist_low = finite_float(((current_close - range_low) / range_span) * 100)
 
+    atr_pct = finite_float(indicators.get("atr_percent"))
+    if (higher_highs and higher_lows) or (lower_highs and lower_lows):
+        market_type = "trend"
+    elif atr_pct < 0.35:
+        market_type = "range"
+    else:
+        market_type = "transition"
+
     if higher_highs and higher_lows and not lower_highs and not lower_lows:
         swing_bias = "bullish"
+        structure_state = "clean_trend"
+    elif lower_highs and lower_lows and not higher_highs and not lower_lows:
+        swing_bias = "bearish"
         structure_state = "clean_trend"
     elif lower_highs and lower_lows and not higher_highs and not higher_lows:
         swing_bias = "bearish"
@@ -503,6 +694,13 @@ def compute_structure(df: pd.DataFrame, indicators: dict) -> dict:
         structure_quality_score -= 20
     structure_quality_score = clamp(structure_quality_score, 0.0, 100.0)
 
+    ema_fast = indicators["ema_fast"]
+    ema_medium = indicators["ema_medium"]
+    ema_slow = indicators["ema_slow"]
+    macd = indicators["macd"]
+    macd_signal = indicators["macd_signal"]
+    price_vs_ema_slow_pct = indicators["price_vs_ema_slow_pct"]
+
     trend_consistency_score = 0.0
     if (ema_fast > ema_medium and ema_medium > ema_slow and higher_highs and higher_lows) or (ema_fast < ema_medium and ema_medium < ema_slow and lower_highs and lower_lows):
         trend_consistency_score += 50
@@ -514,13 +712,27 @@ def compute_structure(df: pd.DataFrame, indicators: dict) -> dict:
         trend_consistency_score -= 20
     trend_consistency_score = clamp(trend_consistency_score, 0.0, 100.0)
 
+    swing_high = find_swing_high(work, lookback=20)
+    swing_low = find_swing_low(work, lookback=20)
+
+    bullish_bos, bullish_bars_ago, bullish_level = detect_break_of_structure(work, "long", lookback=20, confirmation_bars=20)
+    bearish_bos, bearish_bars_ago, bearish_level = detect_break_of_structure(work, "short", lookback=20, confirmation_bars=20)
+    bullish_bos_points, bullish_bos_details = get_bos_quality_score(bullish_bos, bullish_bars_ago, max_points=15)
+    bearish_bos_points, bearish_bos_details = get_bos_quality_score(bearish_bos, bearish_bars_ago, max_points=15)
+
+    mean_reversion_range = analyze_mean_reversion_range(work, lookback=24)
+
     return {
+        "structure_contract_version": STRUCTURE_CONTRACT_VERSION,
+        "v1_parity_status": "structure_names_and_core_algorithms_aligned",
+
+        # Backward-compatible TradeTower fields.
         "trend_direction": trend_direction,
         "market_type": market_type,
-        "higher_highs": higher_highs,
-        "higher_lows": higher_lows,
-        "lower_highs": lower_highs,
-        "lower_lows": lower_lows,
+        "higher_highs": bool(higher_highs),
+        "higher_lows": bool(higher_lows),
+        "lower_highs": bool(lower_highs),
+        "lower_lows": bool(lower_lows),
         "range_high": range_high,
         "range_low": range_low,
         "distance_to_range_high_pct": dist_high,
@@ -529,8 +741,29 @@ def compute_structure(df: pd.DataFrame, indicators: dict) -> dict:
         "structure_quality_score": structure_quality_score,
         "swing_bias": swing_bias,
         "trend_consistency_score": trend_consistency_score,
-    }
 
+        # V1 canonical structure outputs.
+        "v1_trend_direction": trend_direction_v1,
+        "swing_high": swing_high,
+        "swing_low": swing_low,
+        "break_of_structure": {
+            "bullish": {
+                "detected": bool(bullish_bos),
+                "bars_ago": int(bullish_bars_ago),
+                "structure_level": finite_float(bullish_level),
+                "quality_points": int(bullish_bos_points),
+                "quality_details": bullish_bos_details,
+            },
+            "bearish": {
+                "detected": bool(bearish_bos),
+                "bars_ago": int(bearish_bars_ago),
+                "structure_level": finite_float(bearish_level),
+                "quality_points": int(bearish_bos_points),
+                "quality_details": bearish_bos_details,
+            },
+        },
+        "mean_reversion_range": mean_reversion_range,
+    }
 
 def compute_volatility(df: pd.DataFrame, indicators: dict) -> dict:
     last_close = finite_float(df["close"].iloc[-1])
@@ -849,6 +1082,7 @@ def build_market_snapshot(symbol: str):
             "symbol": symbol,
             "contract_version": MARKET_SNAPSHOT_CONTRACT_VERSION,
             "indicator_contract_version": INDICATOR_CONTRACT_VERSION,
+                "structure_contract_version": STRUCTURE_CONTRACT_VERSION,
         },
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "symbol": symbol,
@@ -881,6 +1115,7 @@ class Handler(BaseHTTPRequestHandler):
                 "schema_version": SNAPSHOT_SCHEMA_VERSION,
                 "contract_version": MARKET_SNAPSHOT_CONTRACT_VERSION,
                 "indicator_contract_version": INDICATOR_CONTRACT_VERSION,
+                "structure_contract_version": STRUCTURE_CONTRACT_VERSION,
                 "v1_indicator_periods": {
                     "ema_fast": EMA_FAST_PERIOD,
                     "ema_medium": EMA_MEDIUM_PERIOD,
