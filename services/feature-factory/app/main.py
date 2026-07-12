@@ -51,6 +51,7 @@ SNAPSHOT_SCHEMA_VERSION = MARKET_SNAPSHOT_SCHEMA_VERSION
 INDICATOR_CONTRACT_VERSION = "v1_indicator_parity_step3"
 STRUCTURE_CONTRACT_VERSION = "v1_structure_parity_step4"
 REGIME_INPUTS_CONTRACT_VERSION = "v1_volatility_regime_inputs_step5"
+MULTI_TIMEFRAME_CONTEXT_CONTRACT_VERSION = "v1_multi_timeframe_context_step6"
 
 # V1 crypto-signal-bot indicator parameters.
 # Keep these explicit here so Feature Factory's output contract is readable.
@@ -1331,39 +1332,216 @@ def build_timeframe_block(symbol: str, timeframe: str):
     }, None
 
 
+def normalize_v1_trend_for_direction(trend: str | None) -> str:
+    if trend in ("bullish", "up"):
+        return "long"
+    if trend in ("bearish", "down"):
+        return "short"
+    return "neutral"
+
+
+def compute_alignment_score(entry_direction: str, primary_direction: str, htf_direction: str) -> int:
+    score = 0
+
+    if entry_direction != "neutral":
+        score += 20
+    if primary_direction != "neutral":
+        score += 30
+    if htf_direction != "neutral":
+        score += 30
+
+    if entry_direction == primary_direction and entry_direction != "neutral":
+        score += 10
+    if primary_direction == htf_direction and primary_direction != "neutral":
+        score += 10
+
+    return int(max(0, min(100, score)))
+
+
+def extract_timeframe_context_block(block: dict, role: str) -> dict:
+    structure = block.get("structure", {})
+    regime_inputs = block.get("regime_inputs", {})
+    volatility = block.get("volatility", {})
+    indicators = block.get("indicators", {})
+    data_quality = block.get("data_quality", {})
+
+    v1_trend = (
+        structure.get("v1_trend_direction")
+        or regime_inputs.get("trend_direction")
+        or structure.get("trend_direction")
+    )
+
+    direction_bias = normalize_v1_trend_for_direction(v1_trend)
+
+    return {
+        "role": role,
+        "timeframe": block.get("timeframe"),
+        "data_quality_healthy": data_quality.get("healthy"),
+        "last_timestamp": data_quality.get("last_timestamp"),
+        "v1_trend_direction": v1_trend,
+        "direction_bias": direction_bias,
+        "v1_regime": regime_inputs.get("v1_regime"),
+        "v1_regime_strategy": regime_inputs.get("v1_regime_strategy"),
+        "volatility_state": volatility.get("volatility_state"),
+        "atr_ratio": volatility.get("atr_ratio") or regime_inputs.get("atr_ratio"),
+        "adx": regime_inputs.get("adx") or indicators.get("adx"),
+        "rsi": indicators.get("rsi"),
+        "ema_slope_pct": regime_inputs.get("ema_slope_pct"),
+        "range_pct": regime_inputs.get("range_pct"),
+        "ema_spread_pct": regime_inputs.get("ema_spread_pct"),
+        "fast_rally_long": regime_inputs.get("fast_rally_long", {}),
+        "fast_rally_short": regime_inputs.get("fast_rally_short", {}),
+    }
+
+
+def determine_direction_consensus(entry_ctx: dict, primary_ctx: dict, htf_ctx: dict) -> dict:
+    directions = {
+        "entry": entry_ctx.get("direction_bias"),
+        "primary": primary_ctx.get("direction_bias"),
+        "higher_timeframe": htf_ctx.get("direction_bias"),
+    }
+
+    long_votes = sum(1 for value in directions.values() if value == "long")
+    short_votes = sum(1 for value in directions.values() if value == "short")
+    neutral_votes = sum(1 for value in directions.values() if value == "neutral")
+
+    if long_votes >= 2 and short_votes == 0:
+        consensus = "long"
+    elif short_votes >= 2 and long_votes == 0:
+        consensus = "short"
+    elif long_votes == 3:
+        consensus = "long"
+    elif short_votes == 3:
+        consensus = "short"
+    else:
+        consensus = "mixed"
+
+    return {
+        "directions": directions,
+        "long_votes": long_votes,
+        "short_votes": short_votes,
+        "neutral_votes": neutral_votes,
+        "consensus": consensus,
+        "fully_aligned": (
+            directions["entry"] == directions["primary"] == directions["higher_timeframe"]
+            and directions["entry"] != "neutral"
+        ),
+        "entry_primary_aligned": (
+            directions["entry"] == directions["primary"]
+            and directions["entry"] != "neutral"
+        ),
+        "primary_htf_aligned": (
+            directions["primary"] == directions["higher_timeframe"]
+            and directions["primary"] != "neutral"
+        ),
+        "entry_conflicts_with_htf": (
+            directions["entry"] in ("long", "short")
+            and directions["higher_timeframe"] in ("long", "short")
+            and directions["entry"] != directions["higher_timeframe"]
+        ),
+    }
+
+
+def build_conflict_flags(entry_ctx: dict, primary_ctx: dict, htf_ctx: dict, consensus: dict) -> list[str]:
+    flags = []
+
+    if consensus.get("entry_conflicts_with_htf"):
+        flags.append("ENTRY_CONFLICTS_WITH_HTF")
+
+    if primary_ctx.get("v1_regime") == "Sideways" and htf_ctx.get("v1_regime") in ("Uptrend", "Downtrend"):
+        flags.append("PRIMARY_SIDEWAYS_HTF_TRENDING")
+
+    if primary_ctx.get("v1_regime") in ("Uptrend", "Downtrend") and htf_ctx.get("v1_regime") == "Sideways":
+        flags.append("PRIMARY_TRENDING_HTF_SIDEWAYS")
+
+    for ctx in (entry_ctx, primary_ctx, htf_ctx):
+        if ctx.get("data_quality_healthy") is False:
+            flags.append(f"{ctx.get('role', 'UNKNOWN').upper()}_DATA_QUALITY_UNHEALTHY")
+        if ctx.get("volatility_state") == "extreme":
+            flags.append(f"{ctx.get('role', 'UNKNOWN').upper()}_EXTREME_VOLATILITY")
+
+    return sorted(set(flags))
+
+
+def build_v1_btc_macro_policy_note(primary_ctx: dict) -> dict:
+    btc_macro = primary_ctx.get("btc_macro_regime_inputs") or {}
+
+    return {
+        "status": "placeholder_until_cross_symbol_context",
+        "meaning": (
+            "The v1 BTC macro fields should adjust only new candidate evaluation. "
+            "position_size_mult multiplies the risk budget for a new entry. "
+            "max_signals_adj affects admission of future new signals only, not currently open positions."
+        ),
+        "risk_budget_example": {
+            "base_equity": 2000,
+            "base_risk_pct": 0.01,
+            "base_risk_amount": 20,
+            "position_size_mult_1_1": 22,
+            "position_size_mult_0_9": 18,
+            "position_size_mult_0_7": 14,
+        },
+        "current_symbol_block": btc_macro,
+    }
+
+
 def build_multi_timeframe_context(timeframes: dict) -> dict:
     entry_tf = "5m"
     primary_tf = "15m"
     htf = "4h"
 
-    def trend(tf: str) -> str | None:
-        block = timeframes.get(tf, {})
-        return block.get("structure", {}).get("trend_direction")
+    entry_block = timeframes.get(entry_tf, {})
+    primary_block = timeframes.get(primary_tf, {})
+    htf_block = timeframes.get(htf, {})
 
-    entry_trend = trend(entry_tf)
-    primary_trend = trend(primary_tf)
-    htf_trend = trend(htf)
+    entry_ctx = extract_timeframe_context_block(entry_block, "entry")
+    primary_ctx = extract_timeframe_context_block(primary_block, "primary")
+    htf_ctx = extract_timeframe_context_block(htf_block, "higher_timeframe")
 
-    aligned = (
-        entry_trend is not None
-        and primary_trend is not None
-        and htf_trend is not None
-        and entry_trend == primary_trend == htf_trend
-        and entry_trend != "neutral"
+    consensus = determine_direction_consensus(entry_ctx, primary_ctx, htf_ctx)
+    alignment_score = compute_alignment_score(
+        entry_ctx.get("direction_bias"),
+        primary_ctx.get("direction_bias"),
+        htf_ctx.get("direction_bias"),
     )
 
+    conflict_flags = build_conflict_flags(entry_ctx, primary_ctx, htf_ctx, consensus)
+
     return {
+        "context_contract_version": MULTI_TIMEFRAME_CONTEXT_CONTRACT_VERSION,
         "entry_timeframe": entry_tf,
         "primary_timeframe": primary_tf,
         "higher_timeframe": htf,
-        "alignment": {
-            "entry_trend": entry_trend,
-            "primary_trend": primary_trend,
-            "higher_timeframe_trend": htf_trend,
-            "fully_aligned": aligned,
+        "v1_timeframe_roles": {
+            "entry": entry_tf,
+            "primary": primary_tf,
+            "higher_timeframe": htf,
         },
+        "role_context": {
+            "entry": entry_ctx,
+            "primary": primary_ctx,
+            "higher_timeframe": htf_ctx,
+        },
+        "alignment": {
+            **consensus,
+            "alignment_score": alignment_score,
+            "conflict_flags": conflict_flags,
+        },
+        "regime_context": {
+            "entry_regime": entry_ctx.get("v1_regime"),
+            "primary_regime": primary_ctx.get("v1_regime"),
+            "higher_timeframe_regime": htf_ctx.get("v1_regime"),
+            "primary_strategy": primary_ctx.get("v1_regime_strategy"),
+            "higher_timeframe_strategy": htf_ctx.get("v1_regime_strategy"),
+        },
+        "btc_macro_policy": build_v1_btc_macro_policy_note(primary_ctx),
+        "strategy_engine_notes": [
+            "Feature Factory exposes multi-timeframe context only.",
+            "Strategy Engine Phase 4 owns final long/short scoring and entry decisions.",
+            "Risk Engine owns final risk budget and must treat BTC macro multipliers as new-entry risk-budget modifiers only.",
+            "Max-signal adjustments affect future new entries only and must not force-close or resize existing positions.",
+        ],
     }
-
 
 def build_market_snapshot(symbol: str):
     symbol = normalize_symbol(symbol)
@@ -1406,6 +1584,7 @@ def build_market_snapshot(symbol: str):
             "indicator_contract_version": INDICATOR_CONTRACT_VERSION,
                 "structure_contract_version": STRUCTURE_CONTRACT_VERSION,
                 "regime_inputs_contract_version": REGIME_INPUTS_CONTRACT_VERSION,
+                "multi_timeframe_context_contract_version": MULTI_TIMEFRAME_CONTEXT_CONTRACT_VERSION,
         },
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "symbol": symbol,
@@ -1440,6 +1619,7 @@ class Handler(BaseHTTPRequestHandler):
                 "indicator_contract_version": INDICATOR_CONTRACT_VERSION,
                 "structure_contract_version": STRUCTURE_CONTRACT_VERSION,
                 "regime_inputs_contract_version": REGIME_INPUTS_CONTRACT_VERSION,
+                "multi_timeframe_context_contract_version": MULTI_TIMEFRAME_CONTEXT_CONTRACT_VERSION,
                 "v1_indicator_periods": {
                     "ema_fast": EMA_FAST_PERIOD,
                     "ema_medium": EMA_MEDIUM_PERIOD,
