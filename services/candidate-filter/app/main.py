@@ -43,7 +43,7 @@ REQUIRED_TIMEFRAMES = [
     for tf in os.getenv("CANDIDATE_FILTER_REQUIRED_TIMEFRAMES", "5m,15m,1h,4h").split(",")
     if tf.strip()
 ]
-CANDIDATE_FILTER_RUNTIME_VERSION = "phase3_5_step2_data_quality"
+CANDIDATE_FILTER_RUNTIME_VERSION = "phase3_5_step3_lenient_v2_scoring"
 
 
 def iso_now() -> str:
@@ -115,6 +115,14 @@ def build_versions_payload() -> dict:
         "runtime_version": CANDIDATE_FILTER_RUNTIME_VERSION,
         "candidate_filter_mode": CANDIDATE_FILTER_MODE,
         "required_timeframes": REQUIRED_TIMEFRAMES,
+        "scoring_model": "market_snapshot_v2_lenient_step3",
+        "score_buckets": {
+            "mtf_context": 20,
+            "regime_usability": 20,
+            "momentum_activity": 20,
+            "setup_location": 20,
+            "volatility_usability": 20,
+        },
         "contract": build_candidate_filter_contract(),
     }
 
@@ -283,260 +291,289 @@ def has_open_position(account_id: int, symbol: str):
     return False, payload.get("error", "trade_guardian_error")
 
 
-def determine_bias(snapshot: dict) -> str:
-    s4 = safe_get_structure(snapshot, "4h")
-    s1 = safe_get_structure(snapshot, "1h")
-    s15 = safe_get_structure(snapshot, "15m")
+def safe_get_regime_inputs(snapshot: dict, tf: str):
+    return safe_get_tf(snapshot, tf).get("regime_inputs", {})
 
-    pa1 = safe_get_price_action(snapshot, "1h")
-    pa15 = safe_get_price_action(snapshot, "15m")
-    i15 = safe_get_indicators(snapshot, "15m")
 
-    bull = 0.0
-    bear = 0.0
+def safe_get_mtf_context(snapshot: dict):
+    return snapshot.get("multi_timeframe_context", {}) or {}
 
-    if s4.get("swing_bias") == "bullish" or s4.get("v1_trend_direction") == "bullish":
-        bull += 12
-    elif s4.get("swing_bias") == "bearish" or s4.get("v1_trend_direction") == "bearish":
-        bear += 12
 
-    if s1.get("swing_bias") == "bullish" or s1.get("v1_trend_direction") == "bullish":
-        bull += 10
-    elif s1.get("swing_bias") == "bearish" or s1.get("v1_trend_direction") == "bearish":
-        bear += 10
+def safe_get_latest(snapshot: dict, tf: str):
+    return safe_get_tf(snapshot, tf).get("latest", {})
 
-    if s4.get("swing_bias") == "bullish":
-        bull += score_linear(safe_float(s4.get("trend_consistency_score", 0.0)), 20, 70, 4)
-    elif s4.get("swing_bias") == "bearish":
-        bear += score_linear(safe_float(s4.get("trend_consistency_score", 0.0)), 20, 70, 4)
 
-    if s1.get("swing_bias") == "bullish":
-        bull += score_linear(safe_float(s1.get("trend_consistency_score", 0.0)), 15, 60, 4)
-    elif s1.get("swing_bias") == "bearish":
-        bear += score_linear(safe_float(s1.get("trend_consistency_score", 0.0)), 15, 60, 4)
-
-    if pa1.get("recent_bos_direction") == "bullish" and not pa1.get("recent_bos_failed", False):
-        bull += 3
-    elif pa1.get("recent_bos_direction") == "bearish" and not pa1.get("recent_bos_failed", False):
-        bear += 3
-
-    if pa15.get("recent_bos_direction") == "bullish" and not pa15.get("recent_bos_failed", False):
-        bull += 2
-    elif pa15.get("recent_bos_direction") == "bearish" and not pa15.get("recent_bos_failed", False):
-        bear += 2
-
-    if abs(bull - bear) < 5:
-        dist_high = safe_float(s15.get("distance_to_range_high_pct", 50.0), 50.0)
-        dist_low = safe_float(s15.get("distance_to_range_low_pct", 50.0), 50.0)
-        rsi = safe_float(i15.get("rsi", 50.0), 50.0)
-        market_type_1h = s1.get("market_type")
-        market_type_15m = s15.get("market_type")
-        mean_reversion_range = s15.get("mean_reversion_range", {}) or {}
-
-        range_like = (
-            market_type_1h in ("range", "transition")
-            or market_type_15m in ("range", "transition")
-            or mean_reversion_range.get("valid") is True
-        )
-
-        if range_like:
-            if dist_low <= 25 and rsi <= 48:
-                bull += 6
-            elif dist_high <= 25 and rsi >= 52:
-                bear += 6
-
-    if bull >= bear + 5 and bull >= 12:
+def v1_trend_to_bias(value: str | None) -> str:
+    if value in ("bullish", "up", "long"):
         return "long"
-    if bear >= bull + 5 and bear >= 12:
+    if value in ("bearish", "down", "short"):
         return "short"
     return "neutral"
 
 
-def score_bias_alignment(snapshot: dict, bias: str):
-    s4 = safe_get_structure(snapshot, "4h")
-    s1 = safe_get_structure(snapshot, "1h")
-    s15 = safe_get_structure(snapshot, "15m")
+def determine_bias(snapshot: dict) -> str:
+    """
+    V2 lenient bias inference.
 
-    if bias == "neutral":
-        return 0.0, "HTF_BIAS_CONFLICT"
+    This is not final long/short decision logic. It simply gives Strategy Engine
+    a candidate-side hint when the snapshot has enough contextual evidence.
+    """
+    mtf = safe_get_mtf_context(snapshot)
+    alignment = mtf.get("alignment", {}) or {}
+    consensus = alignment.get("consensus")
+    if consensus in ("long", "short"):
+        return consensus
 
-    points = 0.0
-    if bias == "long":
-        if s4.get("swing_bias") == "bullish" or s4.get("v1_trend_direction") == "bullish":
-            points += 12
-        if s1.get("swing_bias") == "bullish" or s1.get("v1_trend_direction") == "bullish":
-            points += 9
-        if s15.get("swing_bias") == "bullish" or s15.get("v1_trend_direction") == "bullish":
-            points += 4
-    else:
-        if s4.get("swing_bias") == "bearish" or s4.get("v1_trend_direction") == "bearish":
-            points += 12
-        if s1.get("swing_bias") == "bearish" or s1.get("v1_trend_direction") == "bearish":
-            points += 9
-        if s15.get("swing_bias") == "bearish" or s15.get("v1_trend_direction") == "bearish":
-            points += 4
+    role_context = mtf.get("role_context", {}) or {}
+    primary_role = role_context.get("primary", {}) or {}
+    htf_role = role_context.get("higher_timeframe", {}) or {}
 
-    return clamp(points, 0.0, 25.0), "HTF_BIAS_ALIGN" if points >= 12 else "HTF_BIAS_PARTIAL"
+    primary_bias = primary_role.get("direction_bias")
+    htf_bias = htf_role.get("direction_bias")
+    if primary_bias in ("long", "short") and primary_bias == htf_bias:
+        return primary_bias
 
-
-def score_momentum(snapshot: dict, bias: str):
-    i1 = safe_get_indicators(snapshot, "1h")
-    i15 = safe_get_indicators(snapshot, "15m")
-    pa15 = safe_get_price_action(snapshot, "15m")
-
-    if bias == "neutral":
-        return 0.0, "MOMENTUM_WEAK"
-
-    points = 0.0
-    if bias == "long":
-        if safe_float(i1.get("macd_histogram", i1.get("macd_hist", 0.0))) > 0:
-            points += 8
-        if safe_float(i15.get("macd_histogram", i15.get("macd_hist", 0.0))) > 0:
-            points += 6
-        if safe_float(i1.get("macd_histogram_slope", 0.0)) > 0:
-            points += 4
-        if safe_float(i15.get("macd_histogram_slope", 0.0)) > 0:
-            points += 3
-        if pa15.get("recent_bos_direction") == "bullish" and not pa15.get("recent_bos_failed", False):
-            points += 4
-    else:
-        if safe_float(i1.get("macd_histogram", i1.get("macd_hist", 0.0))) < 0:
-            points += 8
-        if safe_float(i15.get("macd_histogram", i15.get("macd_hist", 0.0))) < 0:
-            points += 6
-        if safe_float(i1.get("macd_histogram_slope", 0.0)) < 0:
-            points += 4
-        if safe_float(i15.get("macd_histogram_slope", 0.0)) < 0:
-            points += 3
-        if pa15.get("recent_bos_direction") == "bearish" and not pa15.get("recent_bos_failed", False):
-            points += 4
-
-    points = clamp(points, 0.0, 25.0)
-    return points, "MOMENTUM_SUPPORT" if points >= 12 else "MOMENTUM_WEAK"
-
-
-def score_setup(snapshot: dict, bias: str):
     s15 = safe_get_structure(snapshot, "15m")
     i15 = safe_get_indicators(snapshot, "15m")
+    regime15 = safe_get_regime_inputs(snapshot, "15m")
+
+    range_info = s15.get("mean_reversion_range", {}) or {}
+    if range_info.get("valid"):
+        position = safe_float(range_info.get("position"), 0.5)
+        rsi = safe_float(i15.get("rsi"), 50.0)
+
+        if position <= 0.30 and rsi <= 52:
+            return "long"
+        if position >= 0.70 and rsi >= 48:
+            return "short"
+
+    trend = (
+        s15.get("v1_trend_direction")
+        or regime15.get("trend_direction")
+        or s15.get("trend_direction")
+    )
+    return v1_trend_to_bias(trend)
+
+
+def score_mtf_context(snapshot: dict) -> tuple[float, str]:
+    mtf = safe_get_mtf_context(snapshot)
+    alignment = mtf.get("alignment", {}) or {}
+
+    score = 0.0
+    reasons = []
+
+    alignment_score = safe_float(alignment.get("alignment_score"), 0.0)
+    score += score_linear(alignment_score, 20, 90, 12)
+
+    consensus = alignment.get("consensus")
+    if consensus in ("long", "short"):
+        score += 4
+        reasons.append("MTF_CONSENSUS_DIRECTION")
+    elif consensus == "mixed":
+        score += 2
+        reasons.append("MTF_MIXED_BUT_REVIEWABLE")
+    else:
+        reasons.append("MTF_NEUTRAL")
+
+    if alignment.get("entry_primary_aligned"):
+        score += 2
+    if alignment.get("primary_htf_aligned"):
+        score += 2
+
+    conflict_flags = alignment.get("conflict_flags", []) or []
+    if "ENTRY_CONFLICTS_WITH_HTF" in conflict_flags:
+        score -= 3
+        reasons.append("ENTRY_CONFLICTS_WITH_HTF")
+
+    score = clamp(score, 0.0, 20.0)
+    return score, "MTF_CONTEXT_OK" if score >= 10 else reasons[0] if reasons else "MTF_CONTEXT_WEAK"
+
+
+def score_regime_usability(snapshot: dict) -> tuple[float, str]:
+    primary = safe_get_regime_inputs(snapshot, "15m")
+    htf = safe_get_regime_inputs(snapshot, "4h")
+    s15 = safe_get_structure(snapshot, "15m")
+
+    score = 0.0
+    regime = primary.get("v1_regime")
+    strategy = primary.get("v1_regime_strategy")
+
+    if regime in ("Uptrend", "Downtrend"):
+        score += 8
+    elif regime == "Sideways":
+        score += 7
+    else:
+        score += 4
+
+    if strategy in ("Trend-Following", "Mean-Reversion"):
+        score += 4
+
+    if htf.get("v1_regime") == regime and regime in ("Uptrend", "Downtrend"):
+        score += 3
+
+    range_info = s15.get("mean_reversion_range", {}) or {}
+    if range_info.get("valid"):
+        score += 5
+
+    # Candidate Filter is lenient: non-ideal regimes are lower score, not hard rejects.
+    score = clamp(score, 0.0, 20.0)
+    return score, "REGIME_USABLE" if score >= 10 else "REGIME_WEAK_BUT_REVIEWABLE"
+
+
+def score_momentum_activity(snapshot: dict, bias: str) -> tuple[float, str]:
+    i15 = safe_get_indicators(snapshot, "15m")
+    i5 = safe_get_indicators(snapshot, "5m")
     pa15 = safe_get_price_action(snapshot, "15m")
+    regime15 = safe_get_regime_inputs(snapshot, "15m")
 
-    if bias == "neutral":
-        return 0.0, "SETUP_QUALITY_WEAK"
+    score = 0.0
 
-    points = 0.0
+    macd15 = safe_float(i15.get("macd_histogram", i15.get("macd_hist", 0.0)))
+    macd15_slope = safe_float(i15.get("macd_histogram_slope", 0.0))
+    macd5 = safe_float(i5.get("macd_histogram", i5.get("macd_hist", 0.0)))
+    macd5_slope = safe_float(i5.get("macd_histogram_slope", 0.0))
+
+    if bias == "long":
+        if macd15 > 0:
+            score += 5
+        if macd15_slope > 0:
+            score += 4
+        if macd5 > 0:
+            score += 3
+        if macd5_slope > 0:
+            score += 3
+    elif bias == "short":
+        if macd15 < 0:
+            score += 5
+        if macd15_slope < 0:
+            score += 4
+        if macd5 < 0:
+            score += 3
+        if macd5_slope < 0:
+            score += 3
+    else:
+        # Neutral symbols can still be active enough for mean reversion review.
+        if abs(macd15_slope) > 0:
+            score += 3
+        if abs(macd5_slope) > 0:
+            score += 3
+
+    velocity = regime15.get("price_velocity", {}) or {}
+    if abs(safe_float(velocity.get("short_6_bars"), 0.0)) >= 0.004:
+        score += 2
+    if abs(safe_float(velocity.get("medium_12_bars"), 0.0)) >= 0.008:
+        score += 2
+
+    bos_direction = pa15.get("recent_bos_direction")
+    if bos_direction in ("bullish", "bearish") and not pa15.get("recent_bos_failed", False):
+        score += 2
+
+    score = clamp(score, 0.0, 20.0)
+    return score, "MOMENTUM_ACTIVITY_PRESENT" if score >= 9 else "MOMENTUM_ACTIVITY_LOW"
+
+
+def score_setup_location(snapshot: dict, bias: str) -> tuple[float, str]:
+    s15 = safe_get_structure(snapshot, "15m")
+    pa15 = safe_get_price_action(snapshot, "15m")
+    i15 = safe_get_indicators(snapshot, "15m")
+
+    score = 0.0
+    reason = "SETUP_LOCATION_WEAK"
+
     structure_state = s15.get("structure_state")
     if structure_state == "clean_trend":
-        points += 8
-    elif structure_state in ("weak_trend", "range", "transition"):
-        points += 4
+        score += 5
+    elif structure_state in ("range", "transition", "chop", "weak_trend"):
+        score += 3
 
-    points += score_linear(safe_float(pa15.get("pullback_quality_score", 0.0)), 20, 80, 8)
+    pullback_quality = safe_float(pa15.get("pullback_quality_score"), 0.0)
+    score += score_linear(pullback_quality, 20, 80, 5)
 
-    pullback_state = pa15.get("pullback_state")
-    if pullback_state in ("shallow_pullback", "active_pullback"):
-        points += 5
-    elif pullback_state == "no_pullback":
-        points += 2
-    elif pullback_state == "deep_pullback":
-        points += 1
+    if pa15.get("pullback_state") in ("shallow_pullback", "active_pullback"):
+        score += 3
+    elif pa15.get("pullback_state") == "no_pullback":
+        score += 1
 
-    mean_reversion_range = s15.get("mean_reversion_range", {}) or {}
-    if mean_reversion_range.get("valid"):
-        points += 4
+    range_info = s15.get("mean_reversion_range", {}) or {}
+    if range_info.get("valid"):
+        position = safe_float(range_info.get("position"), 0.5)
+        if bias == "long" and position <= 0.35:
+            score += 6
+            reason = "NEAR_RANGE_SUPPORT"
+        elif bias == "short" and position >= 0.65:
+            score += 6
+            reason = "NEAR_RANGE_RESISTANCE"
+        elif abs(position - 0.5) >= 0.25:
+            score += 4
+            reason = "NEAR_RANGE_EDGE"
+        else:
+            score += 2
+            reason = "VALID_RANGE_MID_BOX"
 
-    rsi_state = i15.get("rsi_state", "neutral")
-    if bias == "long":
-        if rsi_state in ("neutral", "bullish_but_not_overextended", "bearish_but_not_oversold"):
-            points += 4
-    else:
-        if rsi_state in ("neutral", "bearish_but_not_oversold", "bullish_but_not_overextended"):
-            points += 4
+    rsi = safe_float(i15.get("rsi"), 50.0)
+    if 35 <= rsi <= 65:
+        score += 2
+    elif bias == "long" and rsi < 45:
+        score += 2
+    elif bias == "short" and rsi > 55:
+        score += 2
 
     if pa15.get("recent_bos_failed", False):
-        points -= 3
+        score -= 2
 
-    points = clamp(points, 0.0, 25.0)
-    return points, "SETUP_QUALITY_OK" if points >= 12 else "SETUP_QUALITY_WEAK"
-
-
-def score_execution(snapshot: dict, bias: str):
-    s5 = safe_get_structure(snapshot, "5m")
-    i5 = safe_get_indicators(snapshot, "5m")
-    pa5 = safe_get_price_action(snapshot, "5m")
-    pa15 = safe_get_price_action(snapshot, "15m")
-
-    if bias == "neutral":
-        return 0.0, "EXECUTION_CONFLICT"
-
-    points = 0.0
-    if bias == "long":
-        if s5.get("swing_bias") == "bullish" or s5.get("v1_trend_direction") == "bullish":
-            points += 4
-        if safe_float(i5.get("price_vs_ema_fast_pct", 0.0)) >= -0.25:
-            points += 4
-        if pa5.get("wick_rejection_bias") == "bullish":
-            points += 3
-        if pa5.get("recent_bos_direction") == "bullish" and not pa5.get("recent_bos_failed", False):
-            points += 2
-        if int(pa15.get("pullback_bars_ago", 999)) <= 4:
-            points += 2
-    else:
-        if s5.get("swing_bias") == "bearish" or s5.get("v1_trend_direction") == "bearish":
-            points += 4
-        if safe_float(i5.get("price_vs_ema_fast_pct", 0.0)) <= 0.25:
-            points += 4
-        if pa5.get("wick_rejection_bias") == "bearish":
-            points += 3
-        if pa5.get("recent_bos_direction") == "bearish" and not pa5.get("recent_bos_failed", False):
-            points += 2
-        if int(pa15.get("pullback_bars_ago", 999)) <= 4:
-            points += 2
-
-    if pa5.get("recent_bos_failed", False):
-        points -= 2
-
-    points = clamp(points, 0.0, 15.0)
-    return points, "EXECUTION_ALIGN" if points >= 7 else "EXECUTION_CONFLICT"
+    score = clamp(score, 0.0, 20.0)
+    if score >= 10 and reason == "SETUP_LOCATION_WEAK":
+        reason = "SETUP_LOCATION_USABLE"
+    return score, reason
 
 
-def score_volatility(snapshot: dict):
+def score_volatility_usability(snapshot: dict) -> tuple[float, str]:
     v15 = safe_get_volatility(snapshot, "15m")
     pa15 = safe_get_price_action(snapshot, "15m")
+    regime15 = safe_get_regime_inputs(snapshot, "15m")
 
-    vol_state = v15.get("volatility_state", "medium")
-    expansion_state = pa15.get("expansion_state", "none")
+    score = 0.0
+    reason = "VOLATILITY_USABLE"
 
-    if vol_state == "medium" or vol_state == "normal":
-        points = 10.0
-        reason = "VOLATILITY_OK"
-    elif vol_state == "low":
-        points = 6.0
-        reason = "VOLATILITY_LOW_BUT_USABLE"
-    elif vol_state == "extreme":
-        points = 2.0
+    atr_ratio = safe_float(v15.get("atr_ratio", regime15.get("atr_ratio", 1.0)), 1.0)
+    vol_state = v15.get("volatility_state", regime15.get("volatility_state", "normal"))
+    expansion = pa15.get("expansion_state", "none")
+
+    if 0.8 <= atr_ratio <= 1.8:
+        score += 12
+    elif 0.6 <= atr_ratio < 0.8 or 1.8 < atr_ratio <= 2.3:
+        score += 8
+        reason = "VOLATILITY_ACCEPTABLE"
+    elif atr_ratio > 3.0 or vol_state == "extreme":
+        score += 2
         reason = "VOLATILITY_EXTREME"
     else:
-        points = 7.0
-        reason = "VOLATILITY_HIGH_BUT_USABLE"
+        score += 5
+        reason = "VOLATILITY_WEAK_BUT_REVIEWABLE"
 
-    if expansion_state == "overextended_expansion":
-        points -= 2.0
+    if expansion == "healthy_expansion":
+        score += 4
+    elif expansion == "overextended_expansion":
+        score -= 3
         reason = "VOLATILITY_OVEREXTENDED"
-    elif expansion_state == "healthy_expansion":
-        points += 0.5
 
-    return clamp(points, 0.0, 10.0), reason
+    # Low-volatility ranges can still be useful for mean-reversion.
+    if vol_state == "low":
+        score += 2
+
+    score = clamp(score, 0.0, 20.0)
+    return score, reason if score < 10 else "VOLATILITY_USABLE"
 
 
 def infer_strategy_path_hints(snapshot: dict, bias: str) -> dict:
-    mtf = snapshot.get("multi_timeframe_context", {}) or {}
+    mtf = safe_get_mtf_context(snapshot)
     alignment = mtf.get("alignment", {}) or {}
     primary = safe_get_tf(snapshot, "15m")
     primary_regime = (primary.get("regime_inputs", {}) or {}).get("v1_regime")
     s15 = safe_get_structure(snapshot, "15m")
     pa15 = safe_get_price_action(snapshot, "15m")
 
-    trend_possible = (
+    trend_following_possible = (
         bias in ("long", "short")
         or alignment.get("consensus") in ("long", "short")
         or primary_regime in ("Uptrend", "Downtrend")
@@ -546,15 +583,17 @@ def infer_strategy_path_hints(snapshot: dict, bias: str) -> dict:
         primary_regime == "Sideways"
         or (s15.get("mean_reversion_range", {}) or {}).get("valid") is True
         or s15.get("market_type") in ("range", "transition")
+        or pa15.get("recent_bos_failed", False)
     )
 
-    if pa15.get("recent_bos_failed", False) and mean_reversion_possible:
-        mean_reversion_possible = True
-
+    # Lenient rule: if both are false but the symbol has usable data, allow
+    # Strategy Engine only when score later proves it is still reviewable.
     return {
-        "trend_following_possible": bool(trend_possible),
+        "trend_following_possible": bool(trend_following_possible),
         "mean_reversion_possible": bool(mean_reversion_possible),
         "source": "market_snapshot_v2",
+        "primary_regime": primary_regime,
+        "alignment_consensus": alignment.get("consensus"),
     }
 
 
@@ -562,48 +601,59 @@ def score_snapshot(snapshot: dict):
     bias = determine_bias(snapshot)
 
     sub_scores = {
-        "bias_alignment": 0.0,
-        "momentum": 0.0,
-        "setup": 0.0,
-        "execution": 0.0,
-        "volatility": 0.0,
+        "mtf_context": 0.0,
+        "regime_usability": 0.0,
+        "momentum_activity": 0.0,
+        "setup_location": 0.0,
+        "volatility_usability": 0.0,
     }
     reasons = []
 
-    bias_points, bias_reason = score_bias_alignment(snapshot, bias)
-    sub_scores["bias_alignment"] = round(bias_points, 2)
-    reasons.append(bias_reason)
+    mtf_points, mtf_reason = score_mtf_context(snapshot)
+    sub_scores["mtf_context"] = round(mtf_points, 2)
+    reasons.append(mtf_reason)
 
-    momentum_points, momentum_reason = score_momentum(snapshot, bias)
-    sub_scores["momentum"] = round(momentum_points, 2)
+    regime_points, regime_reason = score_regime_usability(snapshot)
+    sub_scores["regime_usability"] = round(regime_points, 2)
+    reasons.append(regime_reason)
+
+    momentum_points, momentum_reason = score_momentum_activity(snapshot, bias)
+    sub_scores["momentum_activity"] = round(momentum_points, 2)
     reasons.append(momentum_reason)
 
-    setup_points, setup_reason = score_setup(snapshot, bias)
-    sub_scores["setup"] = round(setup_points, 2)
+    setup_points, setup_reason = score_setup_location(snapshot, bias)
+    sub_scores["setup_location"] = round(setup_points, 2)
     reasons.append(setup_reason)
 
-    execution_points, execution_reason = score_execution(snapshot, bias)
-    sub_scores["execution"] = round(execution_points, 2)
-    reasons.append(execution_reason)
-
-    volatility_points, volatility_reason = score_volatility(snapshot)
-    sub_scores["volatility"] = round(volatility_points, 2)
+    volatility_points, volatility_reason = score_volatility_usability(snapshot)
+    sub_scores["volatility_usability"] = round(volatility_points, 2)
     reasons.append(volatility_reason)
 
-    total_score = round(sum(sub_scores.values()), 2)
-    if total_score < MIN_SCORE:
-        reasons.append("LOW_CONVICTION")
-
-    return total_score, bias, reasons, sub_scores
-
-
-def build_candidate_item(symbol: str, score: float, bias: str, reasons: list[str], sub_scores: dict, snapshot: dict):
     path_hints = infer_strategy_path_hints(snapshot, bias)
     if path_hints.get("trend_following_possible"):
         reasons.append("TREND_PATH_POSSIBLE")
     if path_hints.get("mean_reversion_possible"):
         reasons.append("MEAN_REVERSION_PATH_POSSIBLE")
 
+    total_score = round(sum(sub_scores.values()), 2)
+
+    # Preserve leniency: a valid mean-reversion path or clear MTF direction should
+    # keep marginal setups reviewable unless the score is truly low.
+    if total_score < MIN_SCORE:
+        reasons.append("LOW_CONVICTION")
+
+    return total_score, bias, sorted(set(reasons)), sub_scores, path_hints
+
+
+def build_candidate_item(
+    symbol: str,
+    score: float,
+    bias: str,
+    reasons: list[str],
+    sub_scores: dict,
+    snapshot: dict,
+    path_hints: dict,
+):
     return {
         "symbol": symbol,
         "candidate_score": score,
@@ -622,6 +672,7 @@ def build_candidate_item(symbol: str, score: float, bias: str, reasons: list[str
             "snapshot_timestamp": snapshot.get("snapshot_timestamp"),
             "data_quality_healthy": (snapshot.get("data_quality", {}) or {}).get("healthy"),
             "required_timeframes": REQUIRED_TIMEFRAMES,
+            "candidate_scoring_model": "market_snapshot_v2_lenient_step3",
         },
     }
 
@@ -668,8 +719,8 @@ def rank_symbols(account_id: int, symbols: list[str]):
             ))
             continue
 
-        score, bias, reasons, sub_scores = score_snapshot(snapshot)
-        item = build_candidate_item(symbol, score, bias, reasons, sub_scores, snapshot)
+        score, bias, reasons, sub_scores, path_hints = score_snapshot(snapshot)
+        item = build_candidate_item(symbol, score, bias, reasons, sub_scores, snapshot, path_hints)
 
         if score >= MIN_SCORE:
             candidates.append(item)
