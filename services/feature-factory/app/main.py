@@ -50,6 +50,7 @@ FEATURE_FACTORY_VERSION = "v2"
 SNAPSHOT_SCHEMA_VERSION = MARKET_SNAPSHOT_SCHEMA_VERSION
 INDICATOR_CONTRACT_VERSION = "v1_indicator_parity_step3"
 STRUCTURE_CONTRACT_VERSION = "v1_structure_parity_step4"
+REGIME_INPUTS_CONTRACT_VERSION = "v1_volatility_regime_inputs_step5"
 
 # V1 crypto-signal-bot indicator parameters.
 # Keep these explicit here so Feature Factory's output contract is readable.
@@ -794,6 +795,325 @@ def compute_volatility(df: pd.DataFrame, indicators: dict) -> dict:
     }
 
 
+def compute_ema_slope_pct(df: pd.DataFrame, ema_col: str = "ema_medium", periods: int = 20) -> float:
+    if ema_col not in df.columns or len(df) < periods:
+        return 0.0
+
+    ema_values = df[ema_col].tail(periods)
+    start_ema = finite_float(ema_values.iloc[0])
+    end_ema = finite_float(ema_values.iloc[-1])
+
+    if start_ema == 0:
+        return 0.0
+
+    return safe_pct(end_ema - start_ema, start_ema)
+
+
+def detect_price_velocity(df: pd.DataFrame, lookback_bars: int = 16) -> float:
+    if len(df) < lookback_bars + 1:
+        return 0.0
+
+    price_current = finite_float(df["close"].iloc[-1])
+    price_past = finite_float(df["close"].iloc[-lookback_bars])
+
+    if price_past == 0:
+        return 0.0
+
+    return finite_float((price_current - price_past) / price_past)
+
+
+def detect_strong_primary_trend_inputs(df: pd.DataFrame, direction: str) -> dict:
+    trend_direction = get_trend_direction_v1(df)
+
+    if direction == "long" and trend_direction != "bullish":
+        return {
+            "detected": False,
+            "reason": f"Primary trend ({trend_direction}) opposes direction",
+        }
+
+    if direction == "short" and trend_direction != "bearish":
+        return {
+            "detected": False,
+            "reason": f"Primary trend ({trend_direction}) opposes direction",
+        }
+
+    if "macd_hist" not in df.columns or len(df) < 3:
+        return {
+            "detected": False,
+            "reason": "Insufficient MACD data",
+        }
+
+    macd_hist = [finite_float(v) for v in df["macd_hist"].tail(3).values]
+
+    if direction == "long":
+        accelerating = macd_hist[-1] > macd_hist[-2] > macd_hist[-3] and macd_hist[-1] > 0
+    else:
+        accelerating = macd_hist[-1] < macd_hist[-2] < macd_hist[-3] and macd_hist[-1] < 0
+
+    if not accelerating:
+        return {
+            "detected": False,
+            "reason": "MACD not accelerating in direction",
+            "macd_hist_tail": macd_hist,
+        }
+
+    return {
+        "detected": True,
+        "reason": "Accelerating MACD with aligned primary trend",
+        "macd_hist_tail": macd_hist,
+    }
+
+
+def detect_fast_rally_inputs(df: pd.DataFrame, direction: str) -> dict:
+    velocity_short = detect_price_velocity(df, 6)   # v1: 1.5h on 15m primary
+    velocity_medium = detect_price_velocity(df, 12) # v1: 3h on 15m primary
+    strong_primary = detect_strong_primary_trend_inputs(df, direction)
+
+    detected = False
+    strength = "none"
+
+    if strong_primary.get("detected"):
+        if direction == "long":
+            if velocity_short > 0.05:
+                detected = True
+                strength = "explosive"
+            elif velocity_short > 0.03 or velocity_medium > 0.045:
+                detected = True
+                strength = "strong"
+            elif velocity_short > 0.015:
+                detected = True
+                strength = "moderate"
+        else:
+            if velocity_short < -0.05:
+                detected = True
+                strength = "explosive"
+            elif velocity_short < -0.03 or velocity_medium < -0.045:
+                detected = True
+                strength = "strong"
+            elif velocity_short < -0.015:
+                detected = True
+                strength = "moderate"
+
+    return {
+        "detected": detected,
+        "strength": strength,
+        "velocity_short": velocity_short,
+        "velocity_medium": velocity_medium,
+        "strong_primary_trend": strong_primary,
+    }
+
+
+def detect_regime_v1(df: pd.DataFrame, period: int = 20) -> tuple[str, dict]:
+    required_columns = {
+        "close",
+        "high",
+        "low",
+        "ema_fast",
+        "ema_medium",
+        "ema_slow",
+        "atr",
+        "atr_sma",
+        "adx",
+    }
+
+    missing_columns = sorted(required_columns - set(df.columns))
+    if missing_columns:
+        return "Sideways", {
+            "reason": "missing_columns",
+            "missing_columns": missing_columns,
+        }
+
+    if len(df) < max(period, 50):
+        return "Sideways", {
+            "reason": "not_enough_data",
+            "required_rows": max(period, 50),
+            "actual_rows": len(df),
+        }
+
+    trend_direction = get_trend_direction_v1(df)
+    ema_slope_pct = compute_ema_slope_pct(df, "ema_medium", period)
+    adx = finite_float(df["adx"].iloc[-1])
+    current_atr = finite_float(df["atr"].iloc[-1])
+    avg_atr = finite_float(df["atr_sma"].iloc[-1])
+    atr_ratio = current_atr / avg_atr if avg_atr else 1.0
+
+    recent = df.tail(50)
+    current_close = finite_float(df["close"].iloc[-1])
+    range_pct = (
+        (finite_float(recent["high"].max()) - finite_float(recent["low"].min())) / current_close
+        if current_close else 0.0
+    )
+    ema_spread_pct = (
+        abs(finite_float(df["ema_fast"].iloc[-1]) - finite_float(df["ema_slow"].iloc[-1])) / current_close
+        if current_close else 0.0
+    )
+
+    thresholds = {
+        "uptrend_threshold": 0.25,
+        "downtrend_threshold": -0.25,
+        "min_trend_adx": 18,
+        "sideways_max_adx": 16,
+        "sideways_max_range_pct": 0.035,
+        "sideways_max_ema_spread_pct": 0.012,
+        "sideways_max_atr_ratio": 1.15,
+    }
+
+    if trend_direction == "bullish" and (ema_slope_pct > thresholds["uptrend_threshold"] or adx >= thresholds["min_trend_adx"]):
+        regime = "Uptrend"
+        reason = "bullish_structure_with_slope_or_adx"
+    elif trend_direction == "bearish" and (ema_slope_pct < thresholds["downtrend_threshold"] or adx >= thresholds["min_trend_adx"]):
+        regime = "Downtrend"
+        reason = "bearish_structure_with_slope_or_adx"
+    elif (
+        trend_direction == "neutral"
+        and abs(ema_slope_pct) < thresholds["uptrend_threshold"]
+        and adx <= thresholds["sideways_max_adx"]
+        and range_pct <= thresholds["sideways_max_range_pct"]
+        and ema_spread_pct <= thresholds["sideways_max_ema_spread_pct"]
+        and atr_ratio <= thresholds["sideways_max_atr_ratio"]
+    ):
+        regime = "Sideways"
+        reason = "neutral_compressed_low_trend_strength"
+    elif ema_slope_pct > thresholds["uptrend_threshold"]:
+        regime = "Uptrend"
+        reason = "positive_ema_medium_slope"
+    elif ema_slope_pct < thresholds["downtrend_threshold"]:
+        regime = "Downtrend"
+        reason = "negative_ema_medium_slope"
+    else:
+        regime = "Sideways"
+        reason = "default_sideways"
+
+    inputs = {
+        "trend_direction": trend_direction,
+        "ema_slope_pct": ema_slope_pct,
+        "adx": adx,
+        "atr_ratio": finite_float(atr_ratio, 1.0),
+        "range_pct": finite_float(range_pct),
+        "ema_spread_pct": finite_float(ema_spread_pct),
+        "thresholds": thresholds,
+        "reason": reason,
+    }
+
+    return regime, inputs
+
+
+def get_regime_strategy(regime: str) -> str:
+    if regime in ("Uptrend", "Downtrend"):
+        return "Trend-Following"
+    if regime == "Sideways":
+        return "Mean-Reversion"
+    return "Trend-Following"
+
+
+def check_btc_macro_regime_inputs(df: pd.DataFrame) -> dict:
+    btc_trend = get_trend_direction_v1(df)
+    btc_rsi = finite_float(df["rsi"].iloc[-1]) if "rsi" in df.columns else 50.0
+
+    adjustments = {
+        "score_threshold_adj": 0,
+        "position_size_mult": 1.0,
+        "max_signals_adj": 0,
+    }
+
+    if btc_trend == "bullish" and 30 < btc_rsi < 70:
+        adjustments.update({
+            "score_threshold_adj": -5,
+            "position_size_mult": 1.1,
+            "max_signals_adj": 1,
+        })
+        regime = "favorable_long"
+        reason = f"BTC is bullish (RSI: {btc_rsi:.1f})"
+    elif btc_trend == "bearish" and 30 < btc_rsi < 70:
+        adjustments.update({
+            "score_threshold_adj": -5,
+            "position_size_mult": 1.1,
+            "max_signals_adj": 1,
+        })
+        regime = "favorable_short"
+        reason = f"BTC is bearish (RSI: {btc_rsi:.1f})"
+    elif btc_rsi > 75:
+        adjustments.update({
+            "score_threshold_adj": 10,
+            "position_size_mult": 0.7,
+            "max_signals_adj": -1,
+        })
+        regime = "extended"
+        reason = f"BTC is overbought (RSI: {btc_rsi:.1f}), caution on new longs"
+    elif btc_rsi < 25:
+        adjustments.update({
+            "score_threshold_adj": 10,
+            "position_size_mult": 0.7,
+            "max_signals_adj": -1,
+        })
+        regime = "extended"
+        reason = f"BTC is oversold (RSI: {btc_rsi:.1f}), caution on new shorts"
+    else:
+        adjustments.update({
+            "score_threshold_adj": 5,
+            "position_size_mult": 0.9,
+            "max_signals_adj": 0,
+        })
+        regime = "neutral"
+        reason = f"BTC is in a neutral state (RSI: {btc_rsi:.1f})"
+
+    return {
+        "regime": regime,
+        "reason": reason,
+        "btc_trend": btc_trend,
+        "btc_rsi": btc_rsi,
+        **adjustments,
+    }
+
+
+def compute_regime_inputs(df: pd.DataFrame, indicators: dict, structure: dict, volatility: dict) -> dict:
+    work = df.copy().reset_index(drop=True)
+
+    work["ema_fast"] = compute_ema(work["close"], EMA_FAST_PERIOD)
+    work["ema_medium"] = compute_ema(work["close"], EMA_MEDIUM_PERIOD)
+    work["ema_slow"] = compute_ema(work["close"], EMA_SLOW_PERIOD)
+    macd, macd_signal, macd_hist = compute_macd(work["close"])
+    work["macd"] = macd
+    work["macd_signal"] = macd_signal
+    work["macd_hist"] = macd_hist
+    work["atr"] = compute_atr(work, ATR_PERIOD)
+    work["atr_sma"] = work["atr"].rolling(window=ATR_SMA_PERIOD, min_periods=1).mean()
+    work["rsi"] = compute_rsi(work["close"], RSI_PERIOD)
+    work["adx"] = compute_adx(work, ADX_PERIOD)
+
+    regime, regime_detection_inputs = detect_regime_v1(work)
+    strategy = get_regime_strategy(regime)
+
+    velocity = {
+        "short_6_bars": detect_price_velocity(work, 6),
+        "medium_12_bars": detect_price_velocity(work, 12),
+        "long_16_bars": detect_price_velocity(work, 16),
+    }
+
+    return {
+        "regime_contract_version": REGIME_INPUTS_CONTRACT_VERSION,
+        "v1_regime": regime,
+        "v1_regime_strategy": strategy,
+        "v1_regime_detection_inputs": regime_detection_inputs,
+        "trend_direction": regime_detection_inputs.get("trend_direction"),
+        "ema_slope_pct": regime_detection_inputs.get("ema_slope_pct"),
+        "adx": regime_detection_inputs.get("adx"),
+        "atr_ratio": regime_detection_inputs.get("atr_ratio"),
+        "range_pct": regime_detection_inputs.get("range_pct"),
+        "ema_spread_pct": regime_detection_inputs.get("ema_spread_pct"),
+        "volatility_state": volatility.get("volatility_state"),
+        "price_velocity": velocity,
+        "fast_rally_long": detect_fast_rally_inputs(work, "long"),
+        "fast_rally_short": detect_fast_rally_inputs(work, "short"),
+        "btc_macro_regime_inputs": check_btc_macro_regime_inputs(work),
+        "notes": [
+            "Feature Factory exposes v1-compatible regime inputs only.",
+            "Strategy Engine decides whether and how to use these inputs in Phase 4.",
+            "btc_macro_regime_inputs are meaningful when this block is built from BTCUSDT data.",
+        ],
+    }
+
+
 def compute_price_action(df: pd.DataFrame, indicators: dict, structure: dict) -> dict:
     candles = df.copy().reset_index(drop=True)
     last_close = finite_float(candles["close"].iloc[-1])
@@ -992,6 +1312,7 @@ def build_timeframe_block(symbol: str, timeframe: str):
     structure = compute_structure(df, indicators)
     price_action = compute_price_action(df, indicators, structure)
     volatility = compute_volatility(df, indicators)
+    regime_inputs = compute_regime_inputs(df, indicators, structure, volatility)
 
     emitted_candles = candles[-emit_limit:]
 
@@ -1006,6 +1327,7 @@ def build_timeframe_block(symbol: str, timeframe: str):
         "structure": structure,
         "price_action": price_action,
         "volatility": volatility,
+        "regime_inputs": regime_inputs,
     }, None
 
 
@@ -1083,6 +1405,7 @@ def build_market_snapshot(symbol: str):
             "contract_version": MARKET_SNAPSHOT_CONTRACT_VERSION,
             "indicator_contract_version": INDICATOR_CONTRACT_VERSION,
                 "structure_contract_version": STRUCTURE_CONTRACT_VERSION,
+                "regime_inputs_contract_version": REGIME_INPUTS_CONTRACT_VERSION,
         },
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "symbol": symbol,
@@ -1116,6 +1439,7 @@ class Handler(BaseHTTPRequestHandler):
                 "contract_version": MARKET_SNAPSHOT_CONTRACT_VERSION,
                 "indicator_contract_version": INDICATOR_CONTRACT_VERSION,
                 "structure_contract_version": STRUCTURE_CONTRACT_VERSION,
+                "regime_inputs_contract_version": REGIME_INPUTS_CONTRACT_VERSION,
                 "v1_indicator_periods": {
                     "ema_fast": EMA_FAST_PERIOD,
                     "ema_medium": EMA_MEDIUM_PERIOD,
