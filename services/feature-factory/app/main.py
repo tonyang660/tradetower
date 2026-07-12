@@ -52,6 +52,7 @@ INDICATOR_CONTRACT_VERSION = "v1_indicator_parity_step3"
 STRUCTURE_CONTRACT_VERSION = "v1_structure_parity_step4"
 REGIME_INPUTS_CONTRACT_VERSION = "v1_volatility_regime_inputs_step5"
 MULTI_TIMEFRAME_CONTEXT_CONTRACT_VERSION = "v1_multi_timeframe_context_step6"
+FEATURE_FACTORY_ENDPOINT_CONTRACT_VERSION = "feature_factory_endpoint_cleanup_step7"
 
 # V1 crypto-signal-bot indicator parameters.
 # Keep these explicit here so Feature Factory's output contract is readable.
@@ -1599,6 +1600,83 @@ def build_market_snapshot(symbol: str):
     return snapshot, None
 
 
+def build_versions_payload() -> dict:
+    return {
+        "schema_version": SNAPSHOT_SCHEMA_VERSION,
+        "feature_factory_version": FEATURE_FACTORY_VERSION,
+        "contract_version": MARKET_SNAPSHOT_CONTRACT_VERSION,
+        "indicator_contract_version": INDICATOR_CONTRACT_VERSION,
+        "structure_contract_version": STRUCTURE_CONTRACT_VERSION,
+        "regime_inputs_contract_version": REGIME_INPUTS_CONTRACT_VERSION,
+        "multi_timeframe_context_contract_version": MULTI_TIMEFRAME_CONTEXT_CONTRACT_VERSION,
+        "endpoint_contract_version": FEATURE_FACTORY_ENDPOINT_CONTRACT_VERSION,
+        "v1_parity": build_v1_parity_contract(),
+        "timeframes": TIMEFRAMES,
+        "fetch_windows": FETCH_WINDOWS,
+        "emit_windows": EMIT_WINDOWS,
+        "v1_timeframe_roles": {
+            "entry": "5m",
+            "primary": "15m",
+            "higher_timeframe": "4h",
+        },
+        "v1_indicator_periods": {
+            "ema_fast": EMA_FAST_PERIOD,
+            "ema_medium": EMA_MEDIUM_PERIOD,
+            "ema_slow": EMA_SLOW_PERIOD,
+            "macd_fast": MACD_FAST_PERIOD,
+            "macd_slow": MACD_SLOW_PERIOD,
+            "macd_signal": MACD_SIGNAL_PERIOD,
+            "atr": ATR_PERIOD,
+            "atr_sma": ATR_SMA_PERIOD,
+            "rsi": RSI_PERIOD,
+            "adx": ADX_PERIOD,
+            "volume_sma": VOLUME_SMA_PERIOD,
+        },
+    }
+
+
+def build_error_response(
+    error: str,
+    status_code: int = 400,
+    symbol: str | None = None,
+    details: list | dict | None = None,
+    reason_codes: list[str] | None = None,
+    data_quality: dict | None = None,
+) -> tuple[dict, int]:
+    payload = {
+        "ok": False,
+        "service": SERVICE_NAME,
+        "error": error,
+        "reason_codes": reason_codes or [error.upper()],
+        "versions": {
+            "schema_version": SNAPSHOT_SCHEMA_VERSION,
+            "feature_factory_version": FEATURE_FACTORY_VERSION,
+            "endpoint_contract_version": FEATURE_FACTORY_ENDPOINT_CONTRACT_VERSION,
+        },
+    }
+
+    if symbol:
+        payload["symbol"] = normalize_symbol(symbol)
+
+    if details is not None:
+        payload["details"] = details
+
+    if data_quality is not None:
+        payload["data_quality"] = data_quality
+
+    return payload, status_code
+
+
+def build_snapshot_success_response(snapshot: dict) -> dict:
+    # Keep the existing snapshot top-level shape for compatibility, but make the
+    # successful response explicit and versioned.
+    snapshot = dict(snapshot)
+    snapshot["ok"] = True
+    snapshot["endpoint_contract_version"] = FEATURE_FACTORY_ENDPOINT_CONTRACT_VERSION
+    snapshot["versions"] = build_versions_payload()
+    return snapshot
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, payload: dict, status: int = 200):
         body = json.dumps(payload, allow_nan=False).encode("utf-8")
@@ -1614,25 +1692,15 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": True,
                 "service": SERVICE_NAME,
                 "env": os.getenv("APP_ENV", "unknown"),
-                "schema_version": SNAPSHOT_SCHEMA_VERSION,
-                "contract_version": MARKET_SNAPSHOT_CONTRACT_VERSION,
-                "indicator_contract_version": INDICATOR_CONTRACT_VERSION,
-                "structure_contract_version": STRUCTURE_CONTRACT_VERSION,
-                "regime_inputs_contract_version": REGIME_INPUTS_CONTRACT_VERSION,
-                "multi_timeframe_context_contract_version": MULTI_TIMEFRAME_CONTEXT_CONTRACT_VERSION,
-                "v1_indicator_periods": {
-                    "ema_fast": EMA_FAST_PERIOD,
-                    "ema_medium": EMA_MEDIUM_PERIOD,
-                    "ema_slow": EMA_SLOW_PERIOD,
-                    "macd_fast": MACD_FAST_PERIOD,
-                    "macd_slow": MACD_SLOW_PERIOD,
-                    "macd_signal": MACD_SIGNAL_PERIOD,
-                    "atr": ATR_PERIOD,
-                    "atr_sma": ATR_SMA_PERIOD,
-                    "rsi": RSI_PERIOD,
-                    "adx": ADX_PERIOD,
-                    "volume_sma": VOLUME_SMA_PERIOD,
-                },
+                "versions": build_versions_payload(),
+            })
+            return
+
+        if self.path.startswith("/versions"):
+            self._send_json({
+                "ok": True,
+                "service": SERVICE_NAME,
+                "versions": build_versions_payload(),
             })
             return
 
@@ -1641,27 +1709,39 @@ class Handler(BaseHTTPRequestHandler):
             symbol = query.get("symbol", [None])[0]
 
             if not symbol:
-                self._send_json({
-                    "ok": False,
-                    "error": "missing_parameters",
-                    "required": ["symbol"],
-                }, status=400)
+                payload, status_code = build_error_response(
+                    error="missing_parameters",
+                    status_code=400,
+                    reason_codes=["MISSING_SYMBOL"],
+                    details={"required": ["symbol"]},
+                )
+                self._send_json(payload, status=status_code)
                 return
 
             snapshot, error = build_market_snapshot(symbol)
 
             if error:
-                self._send_json(error, status=400)
+                payload, status_code = build_error_response(
+                    error=error.get("error", "snapshot_build_failed"),
+                    status_code=400,
+                    symbol=symbol,
+                    details=error.get("details"),
+                    reason_codes=error.get("reason_codes", ["SNAPSHOT_BUILD_FAILED"]),
+                    data_quality=error.get("data_quality"),
+                )
+                self._send_json(payload, status=status_code)
                 return
 
-            self._send_json(snapshot)
+            self._send_json(build_snapshot_success_response(snapshot))
             return
 
-        self._send_json({
-            "ok": False,
-            "error": "not_found",
-            "path": self.path,
-        }, status=404)
+        payload, status_code = build_error_response(
+            error="not_found",
+            status_code=404,
+            reason_codes=["ENDPOINT_NOT_FOUND"],
+            details={"path": self.path},
+        )
+        self._send_json(payload, status=status_code)
 
 
 if __name__ == "__main__":
