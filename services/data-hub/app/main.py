@@ -1,5 +1,6 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from datetime import datetime, timezone
 import json
 import os
 from urllib.parse import urlparse, parse_qs
@@ -11,30 +12,41 @@ SERVICE_NAME = "data-hub"
 PORT = int(os.getenv("PORT", "8080"))
 DATA_ROOT = Path(os.getenv("DATA_ROOT", "/data"))
 
-DEFAULT_MARKET_PROVIDER = os.getenv(
-    "DEFAULT_MARKET_PROVIDER",
-    "blofin",
-).lower()
+DEFAULT_MARKET_PROVIDER = os.getenv("DEFAULT_MARKET_PROVIDER", "blofin").lower()
+DEFAULT_MARKET = os.getenv("DEFAULT_MARKET", "usdt_perp").lower()
 
-DEFAULT_MARKET = os.getenv(
-    "DEFAULT_MARKET",
-    "usdt_perp",
-).lower()
+MARKET_DATA_MAX_GAP_COUNT = int(os.getenv("MARKET_DATA_MAX_GAP_COUNT", "3"))
+MARKET_DATA_STALE_INTERVAL_MULTIPLIER = float(
+    os.getenv("MARKET_DATA_STALE_INTERVAL_MULTIPLIER", "2.5")
+)
 
 VALID_TIMEFRAMES = {
-    "1m",
-    "3m",
-    "5m",
-    "15m",
-    "30m",
-    "1h",
-    "2h",
-    "4h",
-    "6h",
-    "8h",
-    "12h",
-    "1d",
+    "1m", "3m", "5m", "15m", "30m",
+    "1h", "2h", "4h", "6h", "8h", "12h", "1d",
 }
+
+TIMEFRAME_SECONDS = {
+    "1m": 60,
+    "3m": 180,
+    "5m": 300,
+    "15m": 900,
+    "30m": 1800,
+    "1h": 3600,
+    "2h": 7200,
+    "4h": 14400,
+    "6h": 21600,
+    "8h": 28800,
+    "12h": 43200,
+    "1d": 86400,
+}
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def iso_now() -> str:
+    return utc_now().isoformat().replace("+00:00", "Z")
 
 
 def normalize_symbol(symbol: str) -> str:
@@ -70,14 +82,29 @@ def ensure_parent_dir(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def parse_timestamp(value) -> pd.Timestamp | None:
+    try:
+        ts = pd.to_datetime(value, utc=True)
+    except Exception:
+        return None
+
+    if pd.isna(ts):
+        return None
+
+    return ts
+
+
 def normalize_candles(candles: list[dict]) -> list[dict]:
     normalized = []
 
     for candle in candles:
         item = dict(candle)
 
-        if "timestamp" not in item:
+        ts = parse_timestamp(item.get("timestamp"))
+        if ts is None:
             continue
+
+        item["timestamp"] = ts.isoformat().replace("+00:00", "Z")
 
         for key in ("open", "high", "low", "close", "volume"):
             if key not in item:
@@ -95,6 +122,180 @@ def normalize_candles(candles: list[dict]) -> list[dict]:
         normalized.append(item)
 
     return normalized
+
+
+def detect_candle_gaps(
+    df: pd.DataFrame,
+    timeframe: str,
+    max_gaps: int | None = None,
+) -> dict:
+    if timeframe not in TIMEFRAME_SECONDS:
+        return {
+            "ok": False,
+            "error": "unsupported_timeframe_for_gap_check",
+            "expected_interval_seconds": None,
+            "gap_count": 0,
+            "gaps": [],
+        }
+
+    if df.empty or len(df) < 2:
+        return {
+            "ok": True,
+            "expected_interval_seconds": TIMEFRAME_SECONDS[timeframe],
+            "gap_count": 0,
+            "gaps": [],
+        }
+
+    max_gaps = MARKET_DATA_MAX_GAP_COUNT if max_gaps is None else max_gaps
+    expected_seconds = TIMEFRAME_SECONDS[timeframe]
+
+    work = df.copy()
+    work["timestamp"] = pd.to_datetime(work["timestamp"], utc=True)
+    work = work.sort_values("timestamp").reset_index(drop=True)
+
+    gaps = []
+    previous_ts = None
+
+    for current_ts in work["timestamp"]:
+        if previous_ts is not None:
+            delta_seconds = int((current_ts - previous_ts).total_seconds())
+
+            if delta_seconds > expected_seconds + 1:
+                missing_intervals = max(
+                    int(round(delta_seconds / expected_seconds)) - 1,
+                    1,
+                )
+                gaps.append({
+                    "from": previous_ts.isoformat().replace("+00:00", "Z"),
+                    "to": current_ts.isoformat().replace("+00:00", "Z"),
+                    "delta_seconds": delta_seconds,
+                    "missing_intervals_estimate": missing_intervals,
+                })
+
+                if len(gaps) >= max_gaps:
+                    break
+
+        previous_ts = current_ts
+
+    return {
+        "ok": True,
+        "expected_interval_seconds": expected_seconds,
+        "gap_count": len(gaps),
+        "gaps": gaps,
+    }
+
+
+def build_market_data_status(
+    symbol: str,
+    timeframe: str,
+    provider: str | None = None,
+    market: str | None = None,
+    min_rows: int = 1,
+    check_gaps: bool = True,
+) -> tuple[bool, str | None, dict]:
+    if timeframe not in VALID_TIMEFRAMES:
+        return False, "invalid_timeframe", {}
+
+    provider = normalize_provider(provider)
+    market = normalize_market(market)
+    symbol = normalize_symbol(symbol)
+
+    path = get_parquet_path(
+        symbol=symbol,
+        timeframe=timeframe,
+        provider=provider,
+        market=market,
+    )
+
+    base_status = {
+        "provider": provider,
+        "market": market,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "path": str(path),
+        "exists": path.exists(),
+        "stored_rows": 0,
+        "min_rows": min_rows,
+        "has_min_rows": False,
+        "expected_interval_seconds": TIMEFRAME_SECONDS.get(timeframe),
+        "stale_after_seconds": (
+            int(TIMEFRAME_SECONDS[timeframe] * MARKET_DATA_STALE_INTERVAL_MULTIPLIER)
+            if timeframe in TIMEFRAME_SECONDS
+            else None
+        ),
+        "now": iso_now(),
+        "first_timestamp": None,
+        "last_timestamp": None,
+        "last_age_seconds": None,
+        "is_stale": True,
+        "gap_count": None,
+        "gaps": [],
+        "healthy": False,
+        "reason_codes": [],
+    }
+
+    if not path.exists():
+        base_status["reason_codes"].append("CANDLES_NOT_FOUND")
+        return False, "candles_not_found", base_status
+
+    try:
+        df = pd.read_parquet(path)
+    except Exception as e:
+        base_status["reason_codes"].append("PARQUET_READ_FAILED")
+        base_status["read_error"] = str(e)
+        return False, "parquet_read_failed", base_status
+
+    if "timestamp" not in df.columns:
+        base_status["reason_codes"].append("TIMESTAMP_COLUMN_MISSING")
+        return False, "invalid_candle_shape", base_status
+
+    if df.empty:
+        base_status["reason_codes"].append("NO_STORED_ROWS")
+        return False, "no_stored_rows", base_status
+
+    df = df.copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+    df = df.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+
+    if df.empty:
+        base_status["reason_codes"].append("NO_VALID_TIMESTAMPS")
+        return False, "no_valid_timestamps", base_status
+
+    first_ts = df["timestamp"].iloc[0]
+    last_ts = df["timestamp"].iloc[-1]
+    age_seconds = max(0, int((utc_now() - last_ts.to_pydatetime()).total_seconds()))
+    stale_after_seconds = base_status["stale_after_seconds"]
+
+    base_status.update({
+        "stored_rows": len(df),
+        "has_min_rows": len(df) >= min_rows,
+        "first_timestamp": first_ts.isoformat().replace("+00:00", "Z"),
+        "last_timestamp": last_ts.isoformat().replace("+00:00", "Z"),
+        "last_age_seconds": age_seconds,
+        "is_stale": (
+            True
+            if stale_after_seconds is None
+            else age_seconds > stale_after_seconds
+        ),
+    })
+
+    if not base_status["has_min_rows"]:
+        base_status["reason_codes"].append("INSUFFICIENT_ROWS")
+
+    if base_status["is_stale"]:
+        base_status["reason_codes"].append("STALE_LAST_CANDLE")
+
+    if check_gaps:
+        gap_status = detect_candle_gaps(df, timeframe)
+        base_status["gap_count"] = gap_status.get("gap_count")
+        base_status["gaps"] = gap_status.get("gaps", [])
+
+        if base_status["gap_count"]:
+            base_status["reason_codes"].append("GAPS_DETECTED")
+
+    base_status["healthy"] = len(base_status["reason_codes"]) == 0
+
+    return True, None, base_status
 
 
 def write_candles(
@@ -154,22 +355,24 @@ def write_candles(
 
     df.to_parquet(path, index=False)
 
+    _, _, status = build_market_data_status(
+        symbol=symbol,
+        timeframe=timeframe,
+        provider=provider,
+        market=market,
+        min_rows=1,
+        check_gaps=True,
+    )
+
     metadata = {
         "provider": provider,
         "market": market,
         "symbol": symbol,
         "timeframe": timeframe,
         "path": str(path),
-        "first_timestamp": (
-            str(df["timestamp"].iloc[0])
-            if len(df) > 0
-            else None
-        ),
-        "last_timestamp": (
-            str(df["timestamp"].iloc[-1])
-            if len(df) > 0
-            else None
-        ),
+        "first_timestamp": status.get("first_timestamp"),
+        "last_timestamp": status.get("last_timestamp"),
+        "status": status,
     }
 
     return True, None, len(df), metadata
@@ -211,6 +414,15 @@ def read_latest_candles(
     df = pd.read_parquet(path).sort_values("timestamp")
     candles = df.tail(limit).to_dict(orient="records")
 
+    _, _, status = build_market_data_status(
+        symbol=symbol,
+        timeframe=timeframe,
+        provider=provider,
+        market=market,
+        min_rows=limit,
+        check_gaps=True,
+    )
+
     metadata = {
         "provider": provider,
         "market": market,
@@ -218,16 +430,9 @@ def read_latest_candles(
         "timeframe": timeframe,
         "path": str(path),
         "stored_rows": len(df),
-        "first_timestamp": (
-            str(df["timestamp"].iloc[0])
-            if len(df) > 0
-            else None
-        ),
-        "last_timestamp": (
-            str(df["timestamp"].iloc[-1])
-            if len(df) > 0
-            else None
-        ),
+        "first_timestamp": status.get("first_timestamp"),
+        "last_timestamp": status.get("last_timestamp"),
+        "status": status,
     }
 
     return True, None, candles, metadata
@@ -243,17 +448,64 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path.startswith("/health"):
+        parsed = urlparse(self.path)
+
+        if parsed.path == "/health":
             self._send_json({
                 "ok": True,
                 "service": SERVICE_NAME,
                 "default_provider": DEFAULT_MARKET_PROVIDER,
                 "default_market": DEFAULT_MARKET,
+                "market_data_stale_interval_multiplier": MARKET_DATA_STALE_INTERVAL_MULTIPLIER,
+                "market_data_max_gap_count": MARKET_DATA_MAX_GAP_COUNT,
             })
             return
 
-        if self.path.startswith("/candles"):
-            query = parse_qs(urlparse(self.path).query)
+        if parsed.path in ("/candles/status", "/market-data/status"):
+            query = parse_qs(parsed.query)
+
+            symbol = query.get("symbol", [None])[0]
+            timeframe = query.get("timeframe", [None])[0]
+            provider = query.get("provider", [DEFAULT_MARKET_PROVIDER])[0]
+            market = query.get("market", [DEFAULT_MARKET])[0]
+
+            try:
+                min_rows = int(query.get("min_rows", [1])[0])
+            except ValueError:
+                self._send_json({
+                    "ok": False,
+                    "error": "invalid_min_rows",
+                }, status=400)
+                return
+
+            check_gaps = query.get("check_gaps", ["true"])[0].lower() != "false"
+
+            if not symbol or not timeframe:
+                self._send_json({
+                    "ok": False,
+                    "error": "missing_parameters",
+                    "required": ["symbol", "timeframe"],
+                }, status=400)
+                return
+
+            ok, error, status_payload = build_market_data_status(
+                symbol=symbol,
+                timeframe=timeframe,
+                provider=provider,
+                market=market,
+                min_rows=min_rows,
+                check_gaps=check_gaps,
+            )
+
+            self._send_json({
+                "ok": ok,
+                "error": error,
+                "status": status_payload,
+            }, status=404 if error == "candles_not_found" else 200)
+            return
+
+        if parsed.path == "/candles":
+            query = parse_qs(parsed.query)
 
             symbol = query.get("symbol", [None])[0]
             timeframe = query.get("timeframe", [None])[0]
@@ -317,7 +569,9 @@ class Handler(BaseHTTPRequestHandler):
         }, status=404)
 
     def do_POST(self):
-        if self.path == "/candles/ingest":
+        parsed = urlparse(self.path)
+
+        if parsed.path == "/candles/ingest":
             try:
                 content_length = int(self.headers.get("Content-Length", "0"))
                 raw = self.rfile.read(content_length)

@@ -28,11 +28,21 @@ def refresh_symbol_candles(symbol: str):
             })
             continue
 
+        metadata = ingest_result.get("metadata", {})
+        status = metadata.get("status", {})
+
         results.append({
             "symbol": symbol,
             "timeframe": timeframe,
             "ok": True,
+            "provider": ingest_result.get("provider"),
+            "market": ingest_result.get("market"),
             "stored_rows": ingest_result.get("stored_rows"),
+            "last_timestamp": metadata.get("last_timestamp"),
+            "market_data_healthy": status.get("healthy"),
+            "market_data_reason_codes": status.get("reason_codes", []),
+            "market_data_last_age_seconds": status.get("last_age_seconds"),
+            "market_data_gap_count": status.get("gap_count"),
         })
 
     return results
