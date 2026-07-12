@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tradetower.local/schemas/strategy_signal_v2.schema.json",
+  "title": "TradeTower Strategy Signal v2",
+  "type": "object",
+  "required": [
+    "ok",
+    "schema_version",
+    "strategy_engine_version",
+    "contract_version",
+    "v1_parity_mode",
+    "symbol",
+    "decision",
+    "decision_side",
+    "selected_strategy",
+    "score",
+    "score_thresholds",
+    "entry_validation",
+    "score_breakdown",
+    "reason_tags",
+    "proposed_trade",
+    "snapshot_refs"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "strategy_signal_v2"
+    },
+    "strategy_engine_version": {
+      "type": "string"
+    },
+    "contract_version": {
+      "type": "string"
+    },
+    "v1_parity_mode": {
+      "const": "v1_full_port_first"
+    },
+    "symbol": {
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "no_trade",
+        "observe",
+        "trade_candidate"
+      ]
+    },
+    "legacy_decision": {
+      "enum": [
+        "no_trade",
+        "observe",
+        "trade",
+        null
+      ]
+    },
+    "decision_side": {
+      "enum": [
+        "long",
+        "short",
+        "neutral"
+      ]
+    },
+    "selected_strategy": {
+      "enum": [
+        "trend_following",
+        "mean_reversion",
+        "none"
+      ]
+    },
+    "regime": {
+      "enum": [
+        "Uptrend",
+        "Downtrend",
+        "Sideways",
+        "unknown"
+      ]
+    },
+    "regime_strategy": {
+      "enum": [
+        "Trend-Following",
+        "Mean-Reversion",
+        "unknown"
+      ]
+    },
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "score_thresholds": {
+      "type": "object",
+      "required": [
+        "trade_minimum_required",
+        "observe_minimum_required"
+      ],
+      "additionalProperties": true
+    },
+    "entry_validation": {
+      "type": "object",
+      "required": [
+        "valid",
+        "direction",
+        "strategy_type",
+        "reason",
+        "failed_conditions"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "valid": {
+          "type": "boolean"
+        },
+        "direction": {
+          "enum": [
+            "long",
+            "short",
+            "neutral"
+          ]
+        },
+        "strategy_type": {
+          "enum": [
+            "trend_following",
+            "mean_reversion",
+            "none"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "failed_conditions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "score_breakdown": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "reason_tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "proposed_trade": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true
+    },
+    "snapshot_refs": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "candidate_filter_context": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true
+    }
+  }
+}
