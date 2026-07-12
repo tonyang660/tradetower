@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tradetower.local/schemas/market_snapshot_v2.schema.json",
+  "title": "TradeTower MarketSnapshot v2",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "snapshot_meta",
+    "symbol",
+    "snapshot_timestamp",
+    "source",
+    "v1_parity",
+    "data_quality",
+    "timeframes",
+    "multi_timeframe_context"
+  ],
+  "properties": {
+    "schema_version": {"const": "market_snapshot_v2"},
+    "symbol": {"type": "string", "pattern": "^[A-Z0-9]+USDT$"},
+    "snapshot_timestamp": {"type": "string"},
+    "source": {"type": "string"},
+    "snapshot_meta": {
+      "type": "object",
+      "required": ["schema_version", "feature_factory_version", "generated_at", "symbol", "contract_version"],
+      "additionalProperties": true,
+      "properties": {
+        "schema_version": {"const": "market_snapshot_v2"},
+        "feature_factory_version": {"type": "string"},
+        "generated_at": {"type": "string"},
+        "symbol": {"type": "string"},
+        "contract_version": {"const": "phase3_step1"}
+      }
+    },
+    "v1_parity": {
+      "type": "object",
+      "required": [
+        "benchmark_repo",
+        "mode",
+        "behavior_policy",
+        "required_timeframe_roles",
+        "required_indicator_set",
+        "required_strategy_inputs",
+        "required_scoring_components",
+        "allowed_deviation_policy"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "benchmark_repo": {"const": "tonyang660/crypto-signal-bot"},
+        "mode": {"const": "v1_parity_first"},
+        "behavior_policy": {"type": "string"},
+        "required_timeframe_roles": {"type": "object"},
+        "required_indicator_set": {"type": "array", "items": {"type": "string"}},
+        "required_strategy_inputs": {"type": "array", "items": {"type": "string"}},
+        "required_scoring_components": {"type": "object"},
+        "allowed_deviation_policy": {"type": "string"}
+      }
+    },
+    "data_quality": {
+      "type": "object",
+      "required": ["healthy", "reason_codes", "timeframes"],
+      "additionalProperties": true,
+      "properties": {
+        "healthy": {"type": "boolean"},
+        "reason_codes": {"type": "array", "items": {"type": "string"}},
+        "timeframes": {"type": "object"}
+      }
+    },
+    "timeframes": {
+      "type": "object",
+      "required": ["5m", "15m", "4h"],
+      "additionalProperties": true,
+      "properties": {
+        "5m": {"$ref": "#/$defs/timeframe_block"},
+        "15m": {"$ref": "#/$defs/timeframe_block"},
+        "1h": {"$ref": "#/$defs/timeframe_block"},
+        "4h": {"$ref": "#/$defs/timeframe_block"}
+      }
+    },
+    "multi_timeframe_context": {
+      "type": "object",
+      "required": ["entry_timeframe", "primary_timeframe", "higher_timeframe", "alignment"],
+      "additionalProperties": true,
+      "properties": {
+        "entry_timeframe": {"const": "5m"},
+        "primary_timeframe": {"const": "15m"},
+        "higher_timeframe": {"const": "4h"},
+        "alignment": {"type": "object"}
+      }
+    }
+  },
+  "$defs": {
+    "timeframe_block": {
+      "type": "object",
+      "required": [
+        "timeframe",
+        "window_size",
+        "data_quality",
+        "latest",
+        "indicators",
+        "structure",
+        "regime_inputs",
+        "price_action",
+        "volatility"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "timeframe": {"type": "string"},
+        "window_size": {"type": "integer"},
+        "data_quality": {"type": "object"},
+        "latest": {
+          "type": "object",
+          "required": ["timestamp", "open", "high", "low", "close", "volume"],
+          "additionalProperties": true
+        },
+        "indicators": {
+          "type": "object",
+          "required": [
+            "ema_fast",
+            "ema_medium",
+            "ema_slow",
+            "macd",
+            "macd_signal",
+            "macd_hist",
+            "atr",
+            "atr_sma",
+            "rsi",
+            "adx",
+            "volume_sma"
+          ],
+          "additionalProperties": true
+        },
+        "structure": {
+          "type": "object",
+          "required": [
+            "trend_direction",
+            "swing_high",
+            "swing_low",
+            "break_of_structure",
+            "mean_reversion_range"
+          ],
+          "additionalProperties": true
+        },
+        "regime_inputs": {
+          "type": "object",
+          "required": ["ema_slope_pct", "adx", "atr_ratio", "range_pct", "ema_spread_pct"],
+          "additionalProperties": true
+        },
+        "price_action": {"type": "object", "additionalProperties": true},
+        "volatility": {"type": "object", "additionalProperties": true}
+      }
+    }
+  }
+}
