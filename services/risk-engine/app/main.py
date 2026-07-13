@@ -11,6 +11,11 @@ from leverage_policy import (
     build_leverage_policy_contract,
     select_safe_leverage,
 )
+from portfolio_policy import (
+    PORTFOLIO_POLICY_VERSION,
+    build_portfolio_policy_contract,
+    evaluate_portfolio_constraints,
+)
 from risk_policy import (
     RISK_ENGINE_VERSION,
     RISK_POLICY_VERSION,
@@ -46,7 +51,14 @@ TP1_CLOSE_PERCENT = 50
 TP2_CLOSE_PERCENT = 30
 TP3_CLOSE_PERCENT = 20
 
-RUNTIME_VERSION = "phase5_step5_leverage_liquidation_safety"
+RUNTIME_VERSION = "phase5_step6_portfolio_exposure_constraints"
+
+MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
+MAX_PENDING_ENTRIES = int(os.getenv("MAX_PENDING_ENTRIES", "5"))
+MAX_TOTAL_ACTIVE_ENTRIES = int(os.getenv("MAX_TOTAL_ACTIVE_ENTRIES", "5"))
+MAX_DIRECTIONAL_ENTRIES = int(os.getenv("MAX_DIRECTIONAL_ENTRIES", "4"))
+MAX_PORTFOLIO_NOTIONAL_MULTIPLE = float(os.getenv("MAX_PORTFOLIO_NOTIONAL_MULTIPLE", "5.0"))
+MAX_MARGIN_USAGE_PCT = float(os.getenv("MAX_MARGIN_USAGE_PCT", "80.0"))
 
 
 def iso_now():
@@ -68,6 +80,43 @@ def fetch_guardian_status(account_id: int):
         return None, payload.get("error", "TRADE_GUARDIAN_STATUS_UNAVAILABLE")
 
     return payload, None
+
+
+
+
+
+def fetch_open_positions(account_id: int):
+    try:
+        r = requests.get(
+            f"{TRADE_GUARDIAN_BASE_URL}/positions/open",
+            params={"account_id": account_id},
+            timeout=10,
+        )
+        payload = r.json()
+    except Exception:
+        return None, "TRADE_GUARDIAN_POSITIONS_UNAVAILABLE"
+
+    if not payload.get("ok"):
+        return None, payload.get("error", "TRADE_GUARDIAN_POSITIONS_UNAVAILABLE")
+
+    return payload.get("positions", []), None
+
+
+def fetch_pending_entry_orders(account_id: int):
+    try:
+        r = requests.get(
+            f"{TRADE_GUARDIAN_BASE_URL}/orders/pending-entries",
+            params={"account_id": account_id},
+            timeout=10,
+        )
+        payload = r.json()
+    except Exception:
+        return None, "TRADE_GUARDIAN_PENDING_ENTRIES_UNAVAILABLE"
+
+    if not payload.get("ok", False):
+        return None, payload.get("error", "TRADE_GUARDIAN_PENDING_ENTRIES_UNAVAILABLE")
+
+    return payload.get("items", []), None
 
 
 def safe_float(value, default: float | None = None):
@@ -342,6 +391,22 @@ def plan_trade(payload: dict):
             context={"runtime_version": RUNTIME_VERSION},
         )
 
+    open_positions, open_positions_error = fetch_open_positions(account_id)
+    if open_positions_error:
+        return build_rejection(
+            symbol,
+            [open_positions_error],
+            context={"runtime_version": RUNTIME_VERSION},
+        )
+
+    pending_entries, pending_entries_error = fetch_pending_entry_orders(account_id)
+    if pending_entries_error:
+        return build_rejection(
+            symbol,
+            [pending_entries_error],
+            context={"runtime_version": RUNTIME_VERSION},
+        )
+
     validation_errors = validate_signal_intake(working_payload)
     if validation_errors:
         return build_rejection(
@@ -435,6 +500,36 @@ def plan_trade(payload: dict):
             },
         )
 
+    portfolio_result = evaluate_portfolio_constraints(
+        symbol=symbol,
+        side=side,
+        new_notional=notional,
+        new_margin_required=leverage_result["margin_required"],
+        equity=equity,
+        cash_balance=cash_balance,
+        open_positions=open_positions,
+        pending_entries=pending_entries,
+        max_open_positions=MAX_OPEN_POSITIONS,
+        max_pending_entries=MAX_PENDING_ENTRIES,
+        max_total_entries=MAX_TOTAL_ACTIVE_ENTRIES,
+        max_directional_entries=MAX_DIRECTIONAL_ENTRIES,
+        max_portfolio_notional_multiple=MAX_PORTFOLIO_NOTIONAL_MULTIPLE,
+        max_margin_usage_pct=MAX_MARGIN_USAGE_PCT,
+    )
+
+    if not portfolio_result.get("ok"):
+        return build_rejection(
+            symbol,
+            portfolio_result.get("reason_codes", ["PORTFOLIO_CONSTRAINT_REJECTED"]),
+            context={
+                "runtime_version": RUNTIME_VERSION,
+                "portfolio_policy_version": PORTFOLIO_POLICY_VERSION,
+                "portfolio_result": portfolio_result,
+                "sizing": sizing,
+                "leverage_result": leverage_result,
+            },
+        )
+
     take_profits = tp_ladder["take_profits"]
 
     return {
@@ -479,6 +574,7 @@ def plan_trade(payload: dict):
             "max_leverage": MAX_LEVERAGE,
             "min_liquidation_buffer_pct": MIN_LIQUIDATION_BUFFER_PCT,
         },
+        "portfolio_context": portfolio_result,
         "strategy_signal_context": {
             "schema_version": normalized_signal.get("schema_version"),
             "v2_decision": normalized_signal.get("v2_decision"),
@@ -510,10 +606,12 @@ class Handler(BaseHTTPRequestHandler):
                 "risk_engine_version": RISK_ENGINE_VERSION,
                 "risk_policy_version": RISK_POLICY_VERSION,
                 "leverage_policy_version": LEVERAGE_POLICY_VERSION,
+                "portfolio_policy_version": PORTFOLIO_POLICY_VERSION,
                 "runtime_version": RUNTIME_VERSION,
                 "dynamic_risk_tiers_enabled": True,
                 "max_risk_pct_ceiling": MAX_RISK_PCT,
                 "leverage_policy": build_leverage_policy_contract(),
+                "portfolio_policy": build_portfolio_policy_contract(),
                 "phase4_step12_tp_policy": {
                     "default_tp_ratios": [TP1_RATIO, TP2_RATIO, TP3_RATIO],
                     "default_tp_close_percents": [TP1_CLOSE_PERCENT, TP2_CLOSE_PERCENT, TP3_CLOSE_PERCENT],
