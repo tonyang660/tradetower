@@ -21,6 +21,34 @@ from positions import (
 from trades import maybe_finalize_trade
 from db import get_conn
 
+import os
+
+TP1_CLOSE_PERCENT_DEFAULT = float(os.getenv("TP1_CLOSE_PERCENT", "50"))
+TP2_CLOSE_PERCENT_DEFAULT = float(os.getenv("TP2_CLOSE_PERCENT", "30"))
+TP3_CLOSE_PERCENT_DEFAULT = float(os.getenv("TP3_CLOSE_PERCENT", "20"))
+
+
+def get_tp_close_percent(payload: dict, key: str, default: float) -> float:
+    try:
+        value = payload.get(f"{key}_close_percent")
+        if value is not None:
+            return float(value)
+    except Exception:
+        pass
+
+    return float(default)
+
+
+def close_size_from_percent(
+    original_size: float,
+    close_percent: float,
+    remaining_size: float,
+) -> float:
+    close_size = round(original_size * (float(close_percent) / 100.0), 8)
+    if close_size > remaining_size:
+        return remaining_size
+    return close_size
+
 
 def apply_execution_report(payload: dict):
     account_id = int(payload["account_id"])
@@ -59,6 +87,9 @@ def apply_execution_report(payload: dict):
         tp1_price = float(payload["tp1_price"])
         tp2_price = float(payload["tp2_price"])
         tp3_price = float(payload["tp3_price"])
+        tp1_close_percent = get_tp_close_percent(payload, "tp1", TP1_CLOSE_PERCENT_DEFAULT)
+        tp2_close_percent = get_tp_close_percent(payload, "tp2", TP2_CLOSE_PERCENT_DEFAULT)
+        tp3_close_percent = get_tp_close_percent(payload, "tp3", TP3_CLOSE_PERCENT_DEFAULT)
         risk_amount = float(payload["risk_amount"])
         leverage = float(payload.get("leverage", 1.0))
 
@@ -115,6 +146,9 @@ def apply_execution_report(payload: dict):
                         tp2_price=tp2_price,
                         tp3_price=tp3_price,
                         linked_position_id=position_id,
+                        tp1_close_percent=tp1_close_percent,
+                        tp2_close_percent=tp2_close_percent,
+                        tp3_close_percent=tp3_close_percent,
                     )
 
                     apply_entry_balance_update_tx(
@@ -209,9 +243,11 @@ def apply_execution_report(payload: dict):
         if open_position["tp1_hit"]:
             return {"ok": False, "error": "tp1_already_hit", "execution_id": execution_id}
 
-        close_size = round(original_size * 0.40, 8)
-        if close_size > remaining_size:
-            close_size = remaining_size
+        close_size = close_size_from_percent(
+            original_size,
+            TP1_CLOSE_PERCENT_DEFAULT,
+            remaining_size,
+        )
 
         released_margin = open_position["margin_used"] * (close_size / remaining_size) if remaining_size > 0 else 0.0
         new_remaining_margin = round(open_position["margin_used"] - released_margin, 8)
@@ -298,9 +334,11 @@ def apply_execution_report(payload: dict):
         if open_position["tp2_hit"]:
             return {"ok": False, "error": "tp2_already_hit", "execution_id": execution_id}
 
-        close_size = round(original_size * 0.40, 8)
-        if close_size > remaining_size:
-            close_size = remaining_size
+        close_size = close_size_from_percent(
+            original_size,
+            TP2_CLOSE_PERCENT_DEFAULT,
+            remaining_size,
+        )
 
         released_margin = open_position["margin_used"] * (close_size / remaining_size) if remaining_size > 0 else 0.0
         new_remaining_margin = round(open_position["margin_used"] - released_margin, 8)

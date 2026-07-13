@@ -4,6 +4,8 @@ from uuid import uuid4
 from db import get_conn
 from position_events import record_position_event_tx
 
+import os
+
 
 ACTIVE_ORDER_STATUSES = (
     "created",
@@ -22,6 +24,49 @@ WORKING_ORDER_STATUSES = (
     "partially_filled",
     "cancel_pending",
 )
+
+TP1_CLOSE_PERCENT_DEFAULT = float(os.getenv("TP1_CLOSE_PERCENT", "50"))
+TP2_CLOSE_PERCENT_DEFAULT = float(os.getenv("TP2_CLOSE_PERCENT", "30"))
+TP3_CLOSE_PERCENT_DEFAULT = float(os.getenv("TP3_CLOSE_PERCENT", "20"))
+
+
+def normalize_tp_close_percents(
+    tp1_close_percent: float | None = None,
+    tp2_close_percent: float | None = None,
+    tp3_close_percent: float | None = None,
+) -> tuple[float, float, float]:
+    tp1 = float(tp1_close_percent if tp1_close_percent is not None else TP1_CLOSE_PERCENT_DEFAULT)
+    tp2 = float(tp2_close_percent if tp2_close_percent is not None else TP2_CLOSE_PERCENT_DEFAULT)
+    tp3 = float(tp3_close_percent if tp3_close_percent is not None else TP3_CLOSE_PERCENT_DEFAULT)
+
+    total = tp1 + tp2 + tp3
+    if total <= 0:
+        return 50.0, 30.0, 20.0
+
+    return (
+        round((tp1 / total) * 100.0, 8),
+        round((tp2 / total) * 100.0, 8),
+        round((tp3 / total) * 100.0, 8),
+    )
+
+
+def calculate_tp_sizes(
+    original_size: float,
+    tp1_close_percent: float | None = None,
+    tp2_close_percent: float | None = None,
+    tp3_close_percent: float | None = None,
+) -> tuple[float, float, float]:
+    tp1_pct, tp2_pct, tp3_pct = normalize_tp_close_percents(
+        tp1_close_percent,
+        tp2_close_percent,
+        tp3_close_percent,
+    )
+
+    tp1_size = round(original_size * (tp1_pct / 100.0), 8)
+    tp2_size = round(original_size * (tp2_pct / 100.0), 8)
+    tp3_size = round(max(original_size - tp1_size - tp2_size, 0.0), 8)
+
+    return tp1_size, tp2_size, tp3_size
 
 
 def opposite_order_side(position_side: str) -> str:
@@ -679,11 +724,17 @@ def create_protective_orders_for_position(
     tp2_price: float,
     tp3_price: float,
     linked_position_id: int,
+    tp1_close_percent: float | None = None,
+    tp2_close_percent: float | None = None,
+    tp3_close_percent: float | None = None,
 ):
     exit_side = opposite_order_side(position_side)
-    tp1_size = round(original_size * 0.40, 8)
-    tp2_size = round(original_size * 0.40, 8)
-    tp3_size = round(max(original_size - tp1_size - tp2_size, 0.0), 8)
+    tp1_size, tp2_size, tp3_size = calculate_tp_sizes(
+        original_size,
+        tp1_close_percent,
+        tp2_close_percent,
+        tp3_close_percent,
+    )
 
     common = {
         "account_id": account_id,
@@ -740,11 +791,17 @@ def create_protective_orders_for_position_tx(
     tp2_price: float,
     tp3_price: float,
     linked_position_id: int,
+    tp1_close_percent: float | None = None,
+    tp2_close_percent: float | None = None,
+    tp3_close_percent: float | None = None,
 ):
     exit_side = opposite_order_side(position_side)
-    tp1_size = round(original_size * 0.40, 8)
-    tp2_size = round(original_size * 0.40, 8)
-    tp3_size = round(max(original_size - tp1_size - tp2_size, 0.0), 8)
+    tp1_size, tp2_size, tp3_size = calculate_tp_sizes(
+        original_size,
+        tp1_close_percent,
+        tp2_close_percent,
+        tp3_close_percent,
+    )
 
     common = {
         "cur": cur,

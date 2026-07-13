@@ -138,6 +138,31 @@ def get_stop_trigger_price(order: dict):
 
     return float(value)
 
+def get_tp_close_percent(payload: dict, key: str, default: float) -> float:
+    """
+    Read TP close percent from the approved Risk/Strategy payload.
+
+    Supports:
+      payload["tp1_close_percent"]
+      payload["take_profits"]["tp1"]["close_percent"]
+
+    Falls back to v1 defaults.
+    """
+    direct_key = f"{key}_close_percent"
+
+    try:
+        if payload.get(direct_key) is not None:
+            return float(payload[direct_key])
+
+        take_profits = payload.get("take_profits") or {}
+        item = take_profits.get(key) or {}
+        if isinstance(item, dict) and item.get("close_percent") is not None:
+            return float(item["close_percent"])
+    except Exception:
+        pass
+
+    return float(default)
+
 def fetch_open_position(account_id: int, symbol: str):
     try:
         r = requests.get(
@@ -330,6 +355,9 @@ def execute_market_entry(
         "tp1_price": float(payload["tp1_price"]),
         "tp2_price": float(payload["tp2_price"]),
         "tp3_price": float(payload["tp3_price"]),
+        "tp1_close_percent": get_tp_close_percent(payload, "tp1", 50),
+        "tp2_close_percent": get_tp_close_percent(payload, "tp2", 30),
+        "tp3_close_percent": get_tp_close_percent(payload, "tp3", 20),
         "risk_amount": float(payload["risk_amount"]),
         "leverage": float(payload.get("leverage", 1.0)),
         "notes": notes,
@@ -394,6 +422,9 @@ def simulate_entry(payload: dict):
                 "tp1_price": float(payload["tp1_price"]),
                 "tp2_price": float(payload["tp2_price"]),
                 "tp3_price": float(payload["tp3_price"]),
+                "tp1_close_percent": get_tp_close_percent(payload, "tp1", 50),
+                "tp2_close_percent": get_tp_close_percent(payload, "tp2", 30),
+                "tp3_close_percent": get_tp_close_percent(payload, "tp3", 20),
                 "risk_amount": float(payload["risk_amount"]),
                 "leverage": float(payload.get("leverage", 1.0)),
                 "notes": payload.get("notes", "paper limit entry fill")
