@@ -1,5 +1,4 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import urlparse
 from datetime import datetime, timezone
 import json
 import os
@@ -16,6 +15,13 @@ MAX_LEVERAGE = float(os.getenv("MAX_LEVERAGE", "15.0"))
 MIN_NOTIONAL_PCT_OF_MAX_DEPLOYABLE = float(os.getenv("MIN_NOTIONAL_PCT_OF_MAX_DEPLOYABLE", "1.0"))
 MIN_LIQUIDATION_BUFFER_PCT = float(os.getenv("MIN_LIQUIDATION_BUFFER_PCT", "0.35"))
 LEVERAGE_SEQUENCE = [15.0, 14.0, 13.0, 12.0, 11.0, 10.0, 9.0, 8.0, 7.0]
+
+TP1_RATIO = 1.5
+TP2_RATIO = 2.5
+TP3_RATIO = 3.5
+TP1_CLOSE_PERCENT = 50
+TP2_CLOSE_PERCENT = 30
+TP3_CLOSE_PERCENT = 20
 
 
 def iso_now():
@@ -75,34 +81,85 @@ def compute_stop_distance(side: str, entry: float, stop: float) -> float:
         return stop - entry
     return 0.0
 
-def build_tp_ladder(side: str, entry: float, stop: float):
-    risk_unit = abs(entry - stop)
 
+def _smart_float(value, default=None):
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _extract_nested_tp(take_profits: dict, key: str):
+    item = take_profits.get(key) or {}
+    if not isinstance(item, dict):
+        return None
+    price = _smart_float(item.get("price"))
+    close_percent = _smart_float(item.get("close_percent"))
+    ratio = _smart_float(item.get("ratio"))
+    if price is None:
+        return None
+    return {
+        "price": price,
+        "close_percent": close_percent,
+        "ratio": ratio,
+    }
+
+
+def build_tp_ladder(side: str, entry: float, stop: float, payload: dict | None = None):
+    payload = payload or {}
+    take_profits = payload.get("take_profits") or {}
+
+    if isinstance(take_profits, dict):
+        tp1 = _extract_nested_tp(take_profits, "tp1")
+        tp2 = _extract_nested_tp(take_profits, "tp2")
+        tp3 = _extract_nested_tp(take_profits, "tp3")
+        if tp1 and tp2 and tp3:
+            return {
+                "tp1_price": tp1["price"],
+                "tp2_price": tp2["price"],
+                "tp3_price": tp3["price"],
+                "tp1_close_percent": tp1["close_percent"] if tp1["close_percent"] is not None else TP1_CLOSE_PERCENT,
+                "tp2_close_percent": tp2["close_percent"] if tp2["close_percent"] is not None else TP2_CLOSE_PERCENT,
+                "tp3_close_percent": tp3["close_percent"] if tp3["close_percent"] is not None else TP3_CLOSE_PERCENT,
+                "tp1_ratio": tp1["ratio"] if tp1["ratio"] is not None else TP1_RATIO,
+                "tp2_ratio": tp2["ratio"] if tp2["ratio"] is not None else TP2_RATIO,
+                "tp3_ratio": tp3["ratio"] if tp3["ratio"] is not None else TP3_RATIO,
+                "source": "strategy_engine_v1_take_profits",
+            }
+
+    risk_unit = abs(entry - stop)
     if risk_unit <= 0:
         return None
 
     if side == "long":
-        return {
-            "tp1_price": entry + (1.0 * risk_unit),
-            "tp2_price": entry + (2.0 * risk_unit),
-            "tp3_price": entry + (3.5 * risk_unit),
-        }
+        tp1_price = entry + (TP1_RATIO * risk_unit)
+        tp2_price = entry + (TP2_RATIO * risk_unit)
+        tp3_price = entry + (TP3_RATIO * risk_unit)
+    elif side == "short":
+        tp1_price = entry - (TP1_RATIO * risk_unit)
+        tp2_price = entry - (TP2_RATIO * risk_unit)
+        tp3_price = entry - (TP3_RATIO * risk_unit)
+    else:
+        return None
 
-    if side == "short":
-        return {
-            "tp1_price": entry - (1.0 * risk_unit),
-            "tp2_price": entry - (2.0 * risk_unit),
-            "tp3_price": entry - (3.5 * risk_unit),
-        }
+    return {
+        "tp1_price": tp1_price,
+        "tp2_price": tp2_price,
+        "tp3_price": tp3_price,
+        "tp1_close_percent": TP1_CLOSE_PERCENT,
+        "tp2_close_percent": TP2_CLOSE_PERCENT,
+        "tp3_close_percent": TP3_CLOSE_PERCENT,
+        "tp1_ratio": TP1_RATIO,
+        "tp2_ratio": TP2_RATIO,
+        "tp3_ratio": TP3_RATIO,
+        "source": "risk_engine_v1_fallback",
+    }
 
-    return None
 
 def approximate_liquidation_price(side: str, entry: float, leverage: float) -> float | None:
     if leverage <= 0:
         return None
 
-    # Simplified isolated-margin style approximation for paper trading.
-    # Long liquidation is below entry, short liquidation is above entry.
     if side == "long":
         return entry * (1.0 - (1.0 / leverage))
     if side == "short":
@@ -115,24 +172,18 @@ def liquidation_buffer_pct(side: str, stop: float, liquidation_price: float, ent
         return 0.0
 
     if side == "long":
-        # want liquidation below stop; positive buffer means safe
         return ((stop - liquidation_price) / entry) * 100.0
 
     if side == "short":
-        # want liquidation above stop; positive buffer means safe
         return ((liquidation_price - stop) / entry) * 100.0
 
     return 0.0
 
 
-def is_liquidation_safely_beyond_stop(
-    side: str,
-    stop: float,
-    liquidation_price: float,
-    entry: float,
-) -> bool:
+def is_liquidation_safely_beyond_stop(side: str, stop: float, liquidation_price: float, entry: float) -> bool:
     buffer_pct = liquidation_buffer_pct(side, stop, liquidation_price, entry)
     return buffer_pct >= MIN_LIQUIDATION_BUFFER_PCT
+
 
 def get_minimum_notional_required(equity: float) -> float:
     max_deployable = equity * MAX_LEVERAGE
@@ -197,7 +248,7 @@ def plan_trade(payload: dict):
     risk_amount = equity * (MAX_RISK_PCT / 100.0)
     stop_distance = compute_stop_distance(side, entry, stop)
 
-    tp_ladder = build_tp_ladder(side, entry, stop)
+    tp_ladder = build_tp_ladder(side, entry, stop, payload)
     if tp_ladder is None:
         return {
             "ok": True,
@@ -250,18 +301,11 @@ def plan_trade(payload: dict):
         liq_price = approximate_liquidation_price(side, entry, lev)
 
         if liq_price is None:
-            leverage_rejections.append({
-                "leverage": lev,
-                "reason": "INVALID_LIQUIDATION_MODEL"
-            })
+            leverage_rejections.append({"leverage": lev, "reason": "INVALID_LIQUIDATION_MODEL"})
             continue
 
         if required > cash_balance:
-            leverage_rejections.append({
-                "leverage": lev,
-                "reason": "MARGIN_EXCEEDS_AVAILABLE_CAPITAL",
-                "margin_required": round(required, 8),
-            })
+            leverage_rejections.append({"leverage": lev, "reason": "MARGIN_EXCEEDS_AVAILABLE_CAPITAL", "margin_required": round(required, 8)})
             continue
 
         if not is_liquidation_safely_beyond_stop(side, stop, liq_price, entry):
@@ -280,14 +324,7 @@ def plan_trade(payload: dict):
         break
 
     if chosen_leverage is None:
-        rejection_codes = [x["reason"] for x in leverage_rejections] or ["NO_VALID_LEVERAGE_FOUND"]
-
-        primary_reason = (
-            "LIQUIDATION_CONSTRAINT_OR_MARGIN_EXCEEDED"
-            if any(x["reason"] == "LIQUIDATION_TOO_CLOSE_TO_STOP" for x in leverage_rejections)
-            else "MARGIN_EXCEEDS_AVAILABLE_CAPITAL"
-        )
-
+        primary_reason = "LIQUIDATION_CONSTRAINT_OR_MARGIN_EXCEEDED" if any(x["reason"] == "LIQUIDATION_TOO_CLOSE_TO_STOP" for x in leverage_rejections) else "MARGIN_EXCEEDS_AVAILABLE_CAPITAL"
         return {
             "ok": True,
             "approved": False,
@@ -307,6 +344,13 @@ def plan_trade(payload: dict):
         "tp1_price": round(tp_ladder["tp1_price"], 8),
         "tp2_price": round(tp_ladder["tp2_price"], 8),
         "tp3_price": round(tp_ladder["tp3_price"], 8),
+        "tp1_close_percent": round(float(tp_ladder["tp1_close_percent"]), 8),
+        "tp2_close_percent": round(float(tp_ladder["tp2_close_percent"]), 8),
+        "tp3_close_percent": round(float(tp_ladder["tp3_close_percent"]), 8),
+        "tp1_ratio": round(float(tp_ladder["tp1_ratio"]), 8),
+        "tp2_ratio": round(float(tp_ladder["tp2_ratio"]), 8),
+        "tp3_ratio": round(float(tp_ladder["tp3_ratio"]), 8),
+        "tp_ladder_source": tp_ladder.get("source"),
         "risk_amount": round(risk_amount, 8),
         "risk_pct": MAX_RISK_PCT,
         "stop_distance": round(stop_distance, 8),
@@ -317,6 +361,11 @@ def plan_trade(payload: dict):
         "minimum_notional_required": round(minimum_notional_required, 8),
         "liquidation_price_estimate": round(liquidation_price, 8) if liquidation_price is not None else None,
         "liquidation_buffer_pct": round(liquidation_buffer, 6) if liquidation_buffer is not None else None,
+        "take_profits": {
+            "tp1": {"price": round(tp_ladder["tp1_price"], 8), "close_percent": round(float(tp_ladder["tp1_close_percent"]), 8), "ratio": round(float(tp_ladder["tp1_ratio"]), 8)},
+            "tp2": {"price": round(tp_ladder["tp2_price"], 8), "close_percent": round(float(tp_ladder["tp2_close_percent"]), 8), "ratio": round(float(tp_ladder["tp2_ratio"]), 8)},
+            "tp3": {"price": round(tp_ladder["tp3_price"], 8), "close_percent": round(float(tp_ladder["tp3_close_percent"]), 8), "ratio": round(float(tp_ladder["tp3_ratio"]), 8)},
+        },
         "reason_codes": []
     }
 
@@ -335,15 +384,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({
                 "ok": True,
                 "service": SERVICE_NAME,
-                "timestamp": iso_now()
+                "timestamp": iso_now(),
+                "phase4_step12_tp_policy": {
+                    "default_tp_ratios": [TP1_RATIO, TP2_RATIO, TP3_RATIO],
+                    "default_tp_close_percents": [TP1_CLOSE_PERCENT, TP2_CLOSE_PERCENT, TP3_CLOSE_PERCENT],
+                    "preserves_strategy_take_profits": True,
+                }
             })
             return
 
-        self._send_json({
-            "ok": False,
-            "error": "not_found",
-            "path": self.path
-        }, status=404)
+        self._send_json({"ok": False, "error": "not_found", "path": self.path}, status=404)
 
     def do_POST(self):
         if self.path == "/plan":
@@ -355,18 +405,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(result, status=200 if result.get("ok") else 400)
                 return
             except Exception as e:
-                self._send_json({
-                    "ok": False,
-                    "error": "internal_error",
-                    "details": str(e)
-                }, status=500)
+                self._send_json({"ok": False, "error": "internal_error", "details": str(e)}, status=500)
                 return
 
-        self._send_json({
-            "ok": False,
-            "error": "not_found",
-            "path": self.path
-        }, status=404)
+        self._send_json({"ok": False, "error": "not_found", "path": self.path}, status=404)
 
 
 if __name__ == "__main__":

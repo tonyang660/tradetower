@@ -34,14 +34,86 @@ def build_pending_entry_status(
     }
 
 
+def normalize_position_side(payload: dict) -> str | None:
+    """
+    Phase 4 Step 12 compatibility helper.
+
+    Strategy Signal v2 emits:
+        decision      = legacy decision for current Scheduler: trade/observe/no_trade
+        v2_decision   = trade_candidate/observe/no_trade
+        decision_side = long/short/neutral
+        position_side = long/short for trade candidates
+
+    Scheduler/Risk/Paper must use position_side, not decision.
+    """
+    for key in ("position_side", "decision_side", "side"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        value = str(value).lower()
+        if value in ("long", "short"):
+            return value
+    return None
+
+
+def extract_take_profits(strategy_result: dict) -> dict:
+    if isinstance(strategy_result.get("take_profits"), dict):
+        return strategy_result["take_profits"]
+
+    proposed_trade = strategy_result.get("proposed_trade") or {}
+    if isinstance(proposed_trade.get("take_profits"), dict):
+        return proposed_trade["take_profits"]
+
+    return {}
+
+
+def extract_entry_order_type(strategy_result: dict) -> str | None:
+    value = strategy_result.get("entry_order_type")
+    if value:
+        return str(value).lower()
+
+    proposed_trade = strategy_result.get("proposed_trade") or {}
+    value = proposed_trade.get("entry_order_type")
+    if value:
+        return str(value).lower()
+
+    return None
+
+
+def extract_entry_price(strategy_result: dict):
+    if strategy_result.get("entry_price") is not None:
+        return strategy_result.get("entry_price")
+
+    proposed_trade = strategy_result.get("proposed_trade") or {}
+    return proposed_trade.get("entry_price")
+
+
+def extract_stop_loss(strategy_result: dict):
+    if strategy_result.get("stop_loss") is not None:
+        return strategy_result.get("stop_loss")
+
+    proposed_trade = strategy_result.get("proposed_trade") or {}
+    return proposed_trade.get("stop_loss")
+
+
 def build_risk_payload_from_strategy(account_id: int, strategy_result: dict):
+    position_side = normalize_position_side(strategy_result)
     return {
         "account_id": account_id,
         "symbol": strategy_result["symbol"],
-        "position_side": strategy_result["decision"],
-        "entry_order_type": strategy_result["entry_order_type"],
-        "entry_price": strategy_result["entry_price"],
-        "stop_loss": strategy_result["stop_loss"],
+        "position_side": position_side,
+        "entry_order_type": extract_entry_order_type(strategy_result),
+        "entry_price": extract_entry_price(strategy_result),
+        "stop_loss": extract_stop_loss(strategy_result),
+        "take_profits": extract_take_profits(strategy_result),
+        "strategy_signal": {
+            "schema_version": strategy_result.get("schema_version"),
+            "v2_decision": strategy_result.get("v2_decision"),
+            "legacy_decision": strategy_result.get("legacy_decision"),
+            "selected_strategy": strategy_result.get("selected_strategy"),
+            "score": strategy_result.get("score") or strategy_result.get("confidence"),
+            "reason_tags": strategy_result.get("reason_tags", []),
+        },
     }
 
 
@@ -53,6 +125,7 @@ def build_repriced_risk_payload(account_id: int, pending_payload: dict, new_entr
         "entry_order_type": "limit",
         "entry_price": new_entry_price,
         "stop_loss": float(pending_payload["stop_loss"]),
+        "take_profits": pending_payload.get("take_profits", {}),
     }
 
 
@@ -68,6 +141,7 @@ def build_repriced_paper_payload(account_id: int, pending_payload: dict, risk_re
         "order_type": "limit",
         "entry_price": new_entry_price,
         "stop_loss": float(pending_payload["stop_loss"]),
+        "take_profits": pending_payload.get("take_profits", {}),
     }
 
     if isinstance(risk_result, dict):
@@ -90,19 +164,23 @@ def build_paper_execution_payload(
     attempt_number: int = 1,
     max_attempts: int = ENTRY_RETRY_MAX_ATTEMPTS,
 ):
+    position_side = normalize_position_side(strategy_result)
     payload = {
         "account_id": account_id,
         "symbol": strategy_result["symbol"],
         "selected_strategy": strategy_result.get("selected_strategy"),
         "regime": strategy_result.get("regime"),
-        "strategy_confidence": strategy_result.get("confidence"),
+        "strategy_confidence": strategy_result.get("confidence") or strategy_result.get("score"),
         "strategy_reason_tags": strategy_result.get("reason_tags", []),
-        "position_side": strategy_result["decision"],
-        "order_type": strategy_result["entry_order_type"],
-        "entry_price": strategy_result["entry_price"],
-        "stop_loss": strategy_result["stop_loss"],
+        "position_side": position_side,
+        "order_type": extract_entry_order_type(strategy_result),
+        "entry_price": extract_entry_price(strategy_result),
+        "stop_loss": extract_stop_loss(strategy_result),
+        "take_profits": extract_take_profits(strategy_result),
         "attempt_number": int(attempt_number),
         "max_attempts": int(max_attempts),
+        "v2_decision": strategy_result.get("v2_decision"),
+        "legacy_decision": strategy_result.get("legacy_decision"),
     }
 
     if cycle_id is not None:
@@ -113,6 +191,9 @@ def build_paper_execution_payload(
         payload.update(risk_result)
 
     if "entry_order_type" in payload and "order_type" not in payload:
+        payload["order_type"] = payload["entry_order_type"]
+
+    if "order_type" not in payload and payload.get("entry_order_type"):
         payload["order_type"] = payload["entry_order_type"]
 
     return payload
