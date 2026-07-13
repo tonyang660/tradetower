@@ -21,6 +21,11 @@ from portfolio_policy import (
     build_portfolio_policy_contract,
     evaluate_portfolio_constraints,
 )
+from weekly_drawdown_policy import (
+    WEEKLY_DRAWDOWN_POLICY_VERSION,
+    build_weekly_drawdown_policy_contract,
+    evaluate_weekly_drawdown_threshold,
+)
 from risk_policy import (
     RISK_ENGINE_VERSION,
     RISK_POLICY_VERSION,
@@ -56,7 +61,11 @@ TP1_CLOSE_PERCENT = 50
 TP2_CLOSE_PERCENT = 30
 TP3_CLOSE_PERCENT = 20
 
-RUNTIME_VERSION = "phase5_step7_correlation_group_exposure"
+RUNTIME_VERSION = "phase5_step8_weekly_drawdown_threshold_penalty"
+
+WEEKLY_DRAWDOWN_THRESHOLD_PCT = float(os.getenv("WEEKLY_DRAWDOWN_THRESHOLD_PCT", "3.0"))
+WEEKLY_DRAWDOWN_SCORE_PENALTY = int(os.getenv("WEEKLY_DRAWDOWN_SCORE_PENALTY", "15"))
+BASE_TRADE_SCORE_THRESHOLD = int(os.getenv("BASE_TRADE_SCORE_THRESHOLD", "70"))
 
 MAX_CORRELATED_ENTRIES = int(os.getenv("MAX_CORRELATED_ENTRIES", "2"))
 
@@ -141,6 +150,40 @@ def fetch_pending_entry_orders(account_id: int):
         return None, payload.get("error", "TRADE_GUARDIAN_PENDING_ENTRIES_UNAVAILABLE")
 
     return payload.get("items", []), None
+
+
+
+
+def fetch_guardian_risk_state(account_id: int, guardian_status: dict | None = None):
+    """
+    Trade Guardian owns risk/account state.
+
+    Preferred future endpoint:
+        GET /risk/state?account_id=...
+
+    Backward-compatible fallback:
+        use fields already present in /status if /risk/state does not exist.
+    """
+    try:
+        r = requests.get(
+            f"{TRADE_GUARDIAN_BASE_URL}/risk/state",
+            params={"account_id": account_id},
+            timeout=10,
+        )
+        payload = r.json()
+        if r.status_code == 200 and payload.get("ok", False):
+            return payload, None
+    except Exception:
+        pass
+
+    if guardian_status is not None:
+        return {
+            "ok": True,
+            "source": "trade_guardian_status_fallback",
+            **guardian_status,
+        }, None
+
+    return None, "TRADE_GUARDIAN_RISK_STATE_UNAVAILABLE"
 
 
 def safe_float(value, default: float | None = None):
@@ -445,6 +488,41 @@ def plan_trade(payload: dict):
             },
         )
 
+    guardian_risk_state, guardian_risk_state_error = fetch_guardian_risk_state(
+        account_id,
+        guardian_status=guardian_status,
+    )
+    if guardian_risk_state_error:
+        return build_rejection(
+            symbol,
+            [guardian_risk_state_error],
+            context={"runtime_version": RUNTIME_VERSION},
+        )
+
+    weekly_drawdown_result = evaluate_weekly_drawdown_threshold(
+        account_state=guardian_risk_state,
+        strategy_context=normalized_signal,
+        fallback_equity=float(guardian_status["equity"]),
+        weekly_drawdown_threshold_pct=WEEKLY_DRAWDOWN_THRESHOLD_PCT,
+        weekly_drawdown_score_penalty=WEEKLY_DRAWDOWN_SCORE_PENALTY,
+        base_trade_score_threshold=BASE_TRADE_SCORE_THRESHOLD,
+    )
+
+    if not weekly_drawdown_result.get("ok"):
+        return build_rejection(
+            symbol,
+            weekly_drawdown_result.get("reason_codes", ["SCORE_BELOW_WEEKLY_DRAWDOWN_THRESHOLD"]),
+            context={
+                "runtime_version": RUNTIME_VERSION,
+                "weekly_drawdown_policy_version": WEEKLY_DRAWDOWN_POLICY_VERSION,
+                "weekly_drawdown_result": weekly_drawdown_result,
+                "normalized_signal": {
+                    k: v for k, v in normalized_signal.items()
+                    if k != "raw_signal"
+                },
+            },
+        )
+
     side = normalize_position_side(working_payload)
     entry_order_type = working_payload["entry_order_type"]
     entry = float(working_payload["entry_price"])
@@ -615,6 +693,7 @@ def plan_trade(payload: dict):
         "liquidation_price_estimate": round(leverage_result["liquidation_price_estimate"], 8),
         "liquidation_buffer_pct": round(leverage_result["liquidation_buffer_pct"], 6),
         "dynamic_risk": sizing["dynamic_risk"],
+        "weekly_drawdown_context": weekly_drawdown_result,
         "leverage_context": {
             "candidates": leverage_result.get("candidates", []),
             "candidate_notes": leverage_result.get("candidate_notes", []),
@@ -657,12 +736,14 @@ class Handler(BaseHTTPRequestHandler):
                 "leverage_policy_version": LEVERAGE_POLICY_VERSION,
                 "portfolio_policy_version": PORTFOLIO_POLICY_VERSION,
                 "correlation_policy_version": CORRELATION_POLICY_VERSION,
+                "weekly_drawdown_policy_version": WEEKLY_DRAWDOWN_POLICY_VERSION,
                 "runtime_version": RUNTIME_VERSION,
                 "dynamic_risk_tiers_enabled": True,
                 "max_risk_pct_ceiling": MAX_RISK_PCT,
                 "leverage_policy": build_leverage_policy_contract(),
                 "portfolio_policy": build_portfolio_policy_contract(),
                 "correlation_policy": build_correlation_policy_contract(),
+                "weekly_drawdown_policy": build_weekly_drawdown_policy_contract(),
                 "phase4_step12_tp_policy": {
                     "default_tp_ratios": [TP1_RATIO, TP2_RATIO, TP3_RATIO],
                     "default_tp_close_percents": [TP1_CLOSE_PERCENT, TP2_CLOSE_PERCENT, TP3_CLOSE_PERCENT],
