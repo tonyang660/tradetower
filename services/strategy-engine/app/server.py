@@ -1,7 +1,7 @@
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from analyzer import analyze_symbol
+from analyzer import analyze_symbol, build_analyzer_orchestration_contract
 from config import OBSERVE_SCORE_THRESHOLD, PORT, SERVICE_NAME, STRICT_SCORE_THRESHOLD, TRADE_SCORE_THRESHOLD
 from time_utils import iso_now
 
@@ -21,10 +21,15 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": True,
                 "service": SERVICE_NAME,
                 "timestamp": iso_now(),
+                "orchestration": build_analyzer_orchestration_contract(),
                 "strict_score_threshold_legacy": STRICT_SCORE_THRESHOLD,
-                "trade_score_threshold": TRADE_SCORE_THRESHOLD,
-                "observe_score_threshold": OBSERVE_SCORE_THRESHOLD
+                "trade_score_threshold_legacy": TRADE_SCORE_THRESHOLD,
+                "observe_score_threshold_legacy": OBSERVE_SCORE_THRESHOLD
             })
+            return
+
+        if self.path.startswith("/contract"):
+            self._send_json(build_analyzer_orchestration_contract())
             return
 
         self._send_json({
@@ -48,7 +53,11 @@ class Handler(BaseHTTPRequestHandler):
                     }, status=400)
                     return
 
-                result = analyze_symbol(symbol.upper())
+                result = analyze_symbol(
+                    symbol.upper(),
+                    account_context=payload.get("account_context"),
+                    candidate_filter_context=payload.get("candidate_filter_context"),
+                )
                 self._send_json(result, status=200 if result.get("ok") else 400)
                 return
 
