@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tradetower.local/schemas/risk_approval_v2.schema.json",
+  "title": "RiskApprovalV2",
+  "type": "object",
+  "required": [
+    "ok",
+    "approved",
+    "risk_engine_version",
+    "risk_policy_version",
+    "symbol",
+    "reason_codes"
+  ],
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "approved": {
+      "type": "boolean"
+    },
+    "risk_engine_version": {
+      "const": "risk_engine_v2"
+    },
+    "risk_policy_version": {
+      "type": "string"
+    },
+    "risk_decision": {
+      "enum": [
+        "approved",
+        "rejected"
+      ]
+    },
+    "symbol": {
+      "type": "string"
+    },
+    "position_side": {
+      "enum": [
+        "long",
+        "short"
+      ]
+    },
+    "entry_order_type": {
+      "enum": [
+        "limit",
+        "market"
+      ]
+    },
+    "entry_price": {
+      "type": "number"
+    },
+    "stop_loss": {
+      "type": "number"
+    },
+    "take_profits": {
+      "type": "object",
+      "properties": {
+        "tp1": {
+          "$ref": "#/$defs/takeProfit"
+        },
+        "tp2": {
+          "$ref": "#/$defs/takeProfit"
+        },
+        "tp3": {
+          "$ref": "#/$defs/takeProfit"
+        }
+      },
+      "required": [
+        "tp1",
+        "tp2",
+        "tp3"
+      ]
+    },
+    "risk_pct": {
+      "type": "number"
+    },
+    "risk_amount": {
+      "type": "number"
+    },
+    "stop_distance": {
+      "type": "number"
+    },
+    "size": {
+      "type": "number"
+    },
+    "notional": {
+      "type": "number"
+    },
+    "leverage": {
+      "type": "number"
+    },
+    "margin_required": {
+      "type": "number"
+    },
+    "liquidation_price_estimate": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "liquidation_buffer_pct": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "portfolio_context": {
+      "type": "object"
+    },
+    "correlation_context": {
+      "type": "object"
+    },
+    "drawdown_context": {
+      "type": "object"
+    },
+    "risk_context": {
+      "type": "object"
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "reason_details": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "takeProfit": {
+      "type": "object",
+      "required": [
+        "price",
+        "close_percent",
+        "ratio"
+      ],
+      "properties": {
+        "price": {
+          "type": "number"
+        },
+        "close_percent": {
+          "type": "number"
+        },
+        "ratio": {
+          "type": "number"
+        }
+      }
+    }
+  }
+}
