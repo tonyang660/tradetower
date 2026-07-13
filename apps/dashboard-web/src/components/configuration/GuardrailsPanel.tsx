@@ -1,21 +1,29 @@
 import GlassCard from "../ui/GlassCard";
 import SectionTitle from "../ui/SectionTitle";
 
-export default function GuardrailsPanel({
-  maxRiskPct,
-  maxLeverage,
-  minNotionalPct,
-  limitFeePct,
-  marketFeePct,
-  marketSlippagePct,
-}: {
+interface PanelSettings {
   maxRiskPct: number;
   maxLeverage: number;
   minNotionalPct: number;
   limitFeePct: number;
   marketFeePct: number;
   marketSlippagePct: number;
-}) {
+}
+
+interface GuardrailsPanelProps {
+  settings: PanelSettings;
+}
+
+export default function GuardrailsPanel({ settings }: GuardrailsPanelProps) {
+  const {
+    maxRiskPct,
+    maxLeverage,
+    minNotionalPct,
+    limitFeePct,
+    marketFeePct,
+    marketSlippagePct,
+  } = settings;
+
   const items = [
     { label: "Max Risk %", value: `${maxRiskPct.toFixed(2)}%`, source: "Risk Engine Env" },
     { label: "Max Leverage", value: `${maxLeverage.toFixed(2)}x`, source: "Risk Engine Env" },

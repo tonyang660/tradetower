@@ -17,6 +17,11 @@ def normalize_symbol(symbol: str) -> str:
     return str(symbol).strip().upper().replace("/", "").replace("-", "")
 
 
+def normalize_correlation_group(value: str | None) -> str:
+    value = str(value or "").strip().lower()
+    return value or "independent"
+
+
 def _base_rejection(item: dict, reason: str) -> dict:
     return {
         "symbol": item.get("symbol"),
@@ -27,6 +32,7 @@ def _base_rejection(item: dict, reason: str) -> dict:
         ),
         "enabled": bool(item.get("enabled", False)),
         "priority": item.get("priority"),
+        "correlation_group": normalize_correlation_group(item.get("correlation_group")),
         "reason": reason,
     }
 
@@ -61,7 +67,6 @@ def load_symbol_universe_report() -> dict:
                 "normalized_symbol": symbol,
             })
             continue
-
         if symbol in seen:
             rejected.append({
                 **_base_rejection(item, "duplicate_symbol"),
@@ -75,7 +80,14 @@ def load_symbol_universe_report() -> dict:
             "symbol": symbol,
             "enabled": True,
             "priority": int(item.get("priority", 999)),
-            "metadata": {},
+            "correlation_group": normalize_correlation_group(
+                item.get("correlation_group")
+            ),
+            "metadata": {
+                "correlation_group": normalize_correlation_group(
+                    item.get("correlation_group")
+                ),
+            },
         }
 
         if MARKET_SYMBOL_VALIDATION_ENABLED:
@@ -92,7 +104,10 @@ def load_symbol_universe_report() -> dict:
             normalized_item["provider_symbol"] = instrument.get(
                 "provider_symbol"
             )
-            normalized_item["metadata"] = instrument
+            normalized_item["metadata"] = {
+                **instrument,
+                "correlation_group": normalized_item["correlation_group"],
+            }
         else:
             normalized_item["provider"] = MARKET_DATA_PROVIDER
             normalized_item["market"] = MARKET_DATA_MARKET

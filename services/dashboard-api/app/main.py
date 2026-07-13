@@ -19,7 +19,11 @@ from data_fetchers import (
     get_bootstrap_strategy_analytics,
 )
 from health import get_market_session_banner, get_system_health
-from symbol_config import save_symbol_universe_config, validate_symbol_via_api_gateway
+from symbol_config import (
+    normalize_symbol_item,
+    save_symbol_universe_config,
+    validate_symbol_via_api_gateway,
+)
 from time_utils import iso_now
 
 
@@ -91,18 +95,29 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({
                     "ok": False,
                     "error": "invalid_symbols_payload",
-                    "required": {"symbols": ["BTCUSDT", "ETHUSDT"]},
+                    "required": {
+                        "symbols": [
+                            {
+                                "symbol": "BTCUSDT",
+                                "enabled": True,
+                                "priority": 1,
+                                "correlation_group": "btc_followers",
+                            }
+                        ]
+                    },
                 }, status=400)
                 return
 
-            normalized_symbols = []
+            normalized_items = []
             seen = set()
             validation_errors = []
 
-            for raw_symbol in symbols:
-                symbol = str(raw_symbol).upper().strip()
-                if not symbol:
+            for raw_item in symbols:
+                item = normalize_symbol_item(raw_item)
+                if not item:
                     continue
+
+                symbol = item["symbol"]
                 if symbol in seen:
                     continue
                 seen.add(symbol)
@@ -115,7 +130,7 @@ class Handler(BaseHTTPRequestHandler):
                     })
                     continue
 
-                normalized_symbols.append(symbol)
+                normalized_items.append(item)
 
             if validation_errors:
                 self._send_json({
@@ -125,7 +140,7 @@ class Handler(BaseHTTPRequestHandler):
                 }, status=400)
                 return
 
-            result = save_symbol_universe_config(normalized_symbols)
+            result = save_symbol_universe_config(normalized_items)
             self._send_json(result, status=200 if result.get("ok") else 400)
             return
 
@@ -212,7 +227,7 @@ class Handler(BaseHTTPRequestHandler):
             account_id = int(query.get("account_id", ["1"])[0])
             self._send_json(get_bootstrap_performance(account_id))
             return
-        
+
         if parsed.path == "/bootstrap/strategy-analytics":
             account_id = int(query.get("account_id", ["1"])[0])
             self._send_json(get_bootstrap_strategy_analytics(account_id))

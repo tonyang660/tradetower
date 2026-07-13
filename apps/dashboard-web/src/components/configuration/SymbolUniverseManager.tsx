@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import type { SymbolUniverseItem } from "../../types/configuration";
 import GlassCard from "../ui/GlassCard";
 import SectionTitle from "../ui/SectionTitle";
 
@@ -9,6 +10,18 @@ type ValidationMap = Record<
     message?: string;
   }
 >;
+
+const CORRELATION_GROUPS = [
+  "btc_followers",
+  "major_alts",
+  "layer1",
+  "defi",
+  "meme",
+  "privacy",
+  "ai_sector",
+  "gaming_rwa",
+  "independent",
+];
 
 function pillTone(state?: "valid" | "invalid" | "pending") {
   if (state === "valid") return "border-emerald-400/15 bg-emerald-500/10 text-emerald-200";
@@ -24,21 +37,26 @@ export default function SymbolUniverseManager({
   onInputChange,
   onAddSymbol,
   onRemoveSymbol,
+  onUpdateCorrelationGroup,
 }: {
-  symbols: string[];
+  symbols: SymbolUniverseItem[];
   symbolInput: string;
   validationMap: ValidationMap;
   onInputChange: (value: string) => void;
   onAddSymbol: () => void;
   onRemoveSymbol: (symbol: string) => void;
+  onUpdateCorrelationGroup: (symbol: string, correlationGroup: string) => void;
 }) {
-  const sortedSymbols = useMemo(() => [...symbols].sort(), [symbols]);
+  const sortedSymbols = useMemo(
+    () => [...symbols].sort((a, b) => a.symbol.localeCompare(b.symbol)),
+    [symbols]
+  );
 
   return (
     <GlassCard>
       <SectionTitle
         title="Symbol Universe"
-        subtitle="Define the active tradable universe and validate symbols through the provider-neutral market gateway"
+        subtitle="Define active symbols and their editable correlation groups for Risk Engine exposure checks"
       />
 
       <div className="mt-5 flex flex-col gap-4 xl:flex-row xl:items-start">
@@ -64,16 +82,16 @@ export default function SymbolUniverseManager({
                 No active symbols configured.
               </div>
             ) : (
-              sortedSymbols.map((symbol) => {
-                const validation = validationMap[symbol];
+              sortedSymbols.map((item) => {
+                const validation = validationMap[item.symbol];
 
                 return (
                   <div
-                    key={symbol}
+                    key={item.symbol}
                     className="rounded-[22px] border border-white/8 bg-white/5 px-4 py-3"
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="text-sm font-semibold text-white">{symbol}</div>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="text-sm font-semibold text-white">{item.symbol}</div>
                       <div className={`rounded-full border px-2 py-1 text-[11px] ${pillTone(validation?.state ?? "valid")}`}>
                         {validation?.state === "pending"
                           ? "Pending"
@@ -81,8 +99,19 @@ export default function SymbolUniverseManager({
                           ? "Invalid"
                           : "Valid"}
                       </div>
+                      <select
+                        value={item.correlation_group}
+                        onChange={(e) => onUpdateCorrelationGroup(item.symbol, e.target.value)}
+                        className="rounded-full border border-white/10 bg-white/8 px-3 py-1 text-[11px] text-white outline-none"
+                      >
+                        {CORRELATION_GROUPS.map((group) => (
+                          <option key={group} value={group} className="bg-slate-950 text-white">
+                            {group}
+                          </option>
+                        ))}
+                      </select>
                       <button
-                        onClick={() => onRemoveSymbol(symbol)}
+                        onClick={() => onRemoveSymbol(item.symbol)}
                         className="rounded-full border border-white/10 bg-white/8 px-2 py-1 text-[11px] text-white/70 transition hover:bg-white/12 hover:text-white"
                       >
                         Remove

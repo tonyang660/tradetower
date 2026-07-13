@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type {
   ConfigurationBootstrapResponse,
   ConfigurationSettings,
+  SymbolUniverseItem,
 } from "../types/configuration";
 import {
   fetchConfigurationBootstrap,
@@ -27,6 +28,25 @@ type ValidationMap = Record<
   }
 >;
 
+const DEFAULT_GROUP = "independent";
+
+function normalizeUniverseItem(item: Partial<SymbolUniverseItem> & { symbol: string }): SymbolUniverseItem {
+  return {
+    symbol: normalizeSymbol(item.symbol),
+    enabled: item.enabled ?? true,
+    priority: item.priority ?? 1,
+    correlation_group: item.correlation_group || DEFAULT_GROUP,
+  };
+}
+
+function universeSymbols(items: SymbolUniverseItem[]) {
+  return items.filter((item) => item.enabled).map((item) => item.symbol);
+}
+
+function universeEqual(a?: SymbolUniverseItem[] | null, b?: SymbolUniverseItem[] | null) {
+  return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+}
+
 export default function ConfigurationPage() {
   const [bootstrap, setBootstrap] = useState<ConfigurationBootstrapResponse | null>(null);
   const [originalSettings, setOriginalSettings] = useState<ConfigurationSettings | null>(null);
@@ -38,10 +58,13 @@ export default function ConfigurationPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const hasUnsavedChanges = useMemo(
-    () => !settingsEqual(originalSettings, settings),
-    [originalSettings, settings]
-  );
+  const hasUnsavedChanges = useMemo(() => {
+    if (!originalSettings || !settings) return false;
+    return (
+      !settingsEqual(originalSettings, settings) ||
+      !universeEqual(originalSettings.symbol_universe, settings.symbol_universe)
+    );
+  }, [originalSettings, settings]);
 
   async function load(showLoading = false, showRefreshing = false) {
     try {
@@ -49,13 +72,23 @@ export default function ConfigurationPage() {
       if (showRefreshing) setRefreshing(true);
 
       const payload = await fetchConfigurationBootstrap();
-      setBootstrap(payload);
-      setOriginalSettings(payload.settings);
-      setSettings(payload.settings);
+      const normalizedSettings = {
+        ...payload.settings,
+        symbol_universe:
+          payload.settings.symbol_universe?.length > 0
+            ? payload.settings.symbol_universe.map(normalizeUniverseItem)
+            : payload.settings.enabled_symbols.map((symbol) =>
+                normalizeUniverseItem({ symbol, correlation_group: DEFAULT_GROUP })
+              ),
+      };
+
+      setBootstrap({ ...payload, settings: normalizedSettings });
+      setOriginalSettings(normalizedSettings);
+      setSettings(normalizedSettings);
       setValidationMap(
         Object.fromEntries(
-          payload.settings.enabled_symbols.map((symbol) => [
-            symbol,
+          normalizedSettings.symbol_universe.map((item) => [
+            item.symbol,
             { state: "valid" as const, message: "Validated" },
           ])
         )
@@ -109,7 +142,7 @@ export default function ConfigurationPage() {
     const normalized = normalizeSymbol(symbolInput);
     if (!normalized) return;
 
-    if (settings.enabled_symbols.includes(normalized)) {
+    if (settings.symbol_universe.some((item) => item.symbol === normalized)) {
       setValidationMap((prev) => ({
         ...prev,
         [normalized]: { state: "invalid", message: "Duplicate symbol" },
@@ -124,11 +157,20 @@ export default function ConfigurationPage() {
     }));
 
     try {
-      await validateConfigurationSymbol(normalized);
+      const validation = await validateConfigurationSymbol(normalized);
+
+      const nextUniverse = [
+        ...settings.symbol_universe,
+        normalizeUniverseItem({
+          symbol: normalized,
+          correlation_group: validation.default_correlation_group || DEFAULT_GROUP,
+        }),
+      ];
 
       setSettings({
         ...settings,
-        enabled_symbols: [...settings.enabled_symbols, normalized],
+        symbol_universe: nextUniverse,
+        enabled_symbols: universeSymbols(nextUniverse),
       });
 
       setValidationMap((prev) => ({
@@ -151,9 +193,31 @@ export default function ConfigurationPage() {
   function handleRemoveSymbol(symbol: string) {
     if (!settings) return;
 
+    const nextUniverse = settings.symbol_universe.filter((item) => item.symbol !== symbol);
+
     setSettings({
       ...settings,
-      enabled_symbols: settings.enabled_symbols.filter((s) => s !== symbol),
+      symbol_universe: nextUniverse,
+      enabled_symbols: universeSymbols(nextUniverse),
+    });
+  }
+
+  function handleUpdateCorrelationGroup(symbol: string, correlationGroup: string) {
+    if (!settings) return;
+
+    const nextUniverse = settings.symbol_universe.map((item) =>
+      item.symbol === symbol
+        ? {
+            ...item,
+            correlation_group: correlationGroup,
+          }
+        : item
+    );
+
+    setSettings({
+      ...settings,
+      symbol_universe: nextUniverse,
+      enabled_symbols: universeSymbols(nextUniverse),
     });
   }
 
@@ -162,8 +226,8 @@ export default function ConfigurationPage() {
     setSettings(originalSettings);
     setValidationMap(
       Object.fromEntries(
-        originalSettings.enabled_symbols.map((symbol) => [
-          symbol,
+        originalSettings.symbol_universe.map((item) => [
+          item.symbol,
           { state: "valid" as const, message: "Validated" },
         ])
       )
@@ -177,13 +241,15 @@ export default function ConfigurationPage() {
     try {
       setSaving(true);
 
-      if (settings.enabled_symbols.join(",") !== originalSettings.enabled_symbols.join(",")) {
-        const result = await saveConfigurationSymbolUniverse(settings.enabled_symbols);
+      if (!universeEqual(settings.symbol_universe, originalSettings.symbol_universe)) {
+        const result = await saveConfigurationSymbolUniverse(settings.symbol_universe);
 
-        const savedSymbols = result.enabled_symbols ?? settings.enabled_symbols;
+        const savedUniverse = result.symbols ?? settings.symbol_universe;
+        const savedSymbols = result.enabled_symbols ?? universeSymbols(savedUniverse);
 
         const updated = {
           ...settings,
+          symbol_universe: savedUniverse,
           enabled_symbols: savedSymbols,
         };
 
@@ -258,65 +324,42 @@ export default function ConfigurationPage() {
         <StrictnessPanel strictScoreThreshold={settings.strict_score_threshold} />
       </div>
 
-      <GlassCard>
-        <SectionTitle
-          title="Order Cycle"
-          subtitle="Dedicated pending-entry retry loop runtime"
-        />
-
-        <div className="mt-4 grid gap-4 md:grid-cols-4">
-          <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
-            <div className="text-xs text-white/40">Main Cycle</div>
-            <div className="mt-1 text-lg font-semibold text-white">
-              {settings.loop_interval_seconds}s
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
-            <div className="text-xs text-white/40">Order Cycle</div>
-            <div className="mt-1 text-lg font-semibold text-white">
-              {settings.pending_entry_loop_interval_seconds}s
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
-            <div className="text-xs text-white/40">Max Attempts</div>
-            <div className="mt-1 text-lg font-semibold text-white">
-              {settings.pending_entry_max_attempts}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
-            <div className="text-xs text-white/40">Pending Entries</div>
-            <div className="mt-1 text-lg font-semibold text-white">
-              {settings.pending_entries_count}
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-4 text-sm text-white/45">
-          Pending entries are repriced through the scheduler-owned order cycle.
-          These values are runtime-controlled and currently read-only in the UI.
-        </div>
-      </GlassCard>      
-
       <SymbolUniverseManager
-        symbols={settings.enabled_symbols}
+        symbols={settings.symbol_universe}
         symbolInput={symbolInput}
         validationMap={validationMap}
         onInputChange={setSymbolInput}
         onAddSymbol={handleAddSymbol}
         onRemoveSymbol={handleRemoveSymbol}
+        onUpdateCorrelationGroup={handleUpdateCorrelationGroup}
       />
 
-      <GuardrailsPanel
-        maxRiskPct={settings.max_risk_pct}
-        maxLeverage={settings.max_leverage}
-        minNotionalPct={settings.min_notional_pct_of_max_deployable}
-        limitFeePct={settings.limit_fee_pct}
-        marketFeePct={settings.market_fee_pct}
-        marketSlippagePct={settings.market_slippage_pct}
-      />
+      <div className="grid gap-6 xl:grid-cols-2">
+        <GuardrailsPanel 
+          settings={{
+            maxRiskPct: settings.max_risk_pct,
+            maxLeverage: settings.max_leverage,
+            minNotionalPct: settings.min_notional_pct_of_max_deployable,
+            limitFeePct: settings.limit_fee_pct,
+            marketFeePct: settings.market_fee_pct,
+            marketSlippagePct: settings.market_slippage_pct,
+          }} 
+        />
+        <GlassCard>
+          <SectionTitle
+            title="Configuration Sources"
+            subtitle="Every setting remains tied to its runtime owner to avoid drift"
+          />
+          <div className="mt-4 space-y-2 text-sm text-white/55">
+            {Object.entries(bootstrap.sources).map(([key, value]) => (
+              <div key={key} className="flex items-center justify-between gap-3 rounded-2xl bg-white/[0.04] px-4 py-3">
+                <span>{key}</span>
+                <span className="text-white/35">{String(value)}</span>
+              </div>
+            ))}
+          </div>
+        </GlassCard>
+      </div>
     </div>
   );
 }

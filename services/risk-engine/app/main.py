@@ -6,6 +6,11 @@ import os
 
 import requests
 
+from correlation_policy import (
+    CORRELATION_POLICY_VERSION,
+    build_correlation_policy_contract,
+    evaluate_correlation_constraints,
+)
 from leverage_policy import (
     LEVERAGE_POLICY_VERSION,
     build_leverage_policy_contract,
@@ -51,7 +56,9 @@ TP1_CLOSE_PERCENT = 50
 TP2_CLOSE_PERCENT = 30
 TP3_CLOSE_PERCENT = 20
 
-RUNTIME_VERSION = "phase5_step6_portfolio_exposure_constraints"
+RUNTIME_VERSION = "phase5_step7_correlation_group_exposure"
+
+MAX_CORRELATED_ENTRIES = int(os.getenv("MAX_CORRELATED_ENTRIES", "2"))
 
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
 MAX_PENDING_ENTRIES = int(os.getenv("MAX_PENDING_ENTRIES", "5"))
@@ -59,6 +66,23 @@ MAX_TOTAL_ACTIVE_ENTRIES = int(os.getenv("MAX_TOTAL_ACTIVE_ENTRIES", "5"))
 MAX_DIRECTIONAL_ENTRIES = int(os.getenv("MAX_DIRECTIONAL_ENTRIES", "4"))
 MAX_PORTFOLIO_NOTIONAL_MULTIPLE = float(os.getenv("MAX_PORTFOLIO_NOTIONAL_MULTIPLE", "10.0"))
 MAX_MARGIN_USAGE_PCT = float(os.getenv("MAX_MARGIN_USAGE_PCT", "80.0"))
+
+SYMBOL_UNIVERSE_PATH = os.getenv("SYMBOL_UNIVERSE_PATH", "/app/config/symbol_universe.json")
+
+
+def load_symbol_universe_metadata() -> list[dict]:
+    try:
+        with open(SYMBOL_UNIVERSE_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception:
+        return []
+
+    items = []
+    for item in payload.get("symbols", []) or []:
+        if isinstance(item, dict):
+            items.append(item)
+    return items
+
 
 
 def iso_now():
@@ -530,6 +554,30 @@ def plan_trade(payload: dict):
             },
         )
 
+    symbol_universe = load_symbol_universe_metadata()
+    correlation_result = evaluate_correlation_constraints(
+        symbol=symbol,
+        side=side,
+        open_positions=open_positions,
+        pending_entries=pending_entries,
+        symbol_universe=symbol_universe,
+        max_correlated_entries=MAX_CORRELATED_ENTRIES,
+    )
+
+    if not correlation_result.get("ok"):
+        return build_rejection(
+            symbol,
+            correlation_result.get("reason_codes", ["CORRELATION_GROUP_LIMIT_REACHED"]),
+            context={
+                "runtime_version": RUNTIME_VERSION,
+                "correlation_policy_version": CORRELATION_POLICY_VERSION,
+                "correlation_result": correlation_result,
+                "portfolio_result": portfolio_result,
+                "sizing": sizing,
+                "leverage_result": leverage_result,
+            },
+        )
+
     take_profits = tp_ladder["take_profits"]
 
     return {
@@ -575,6 +623,7 @@ def plan_trade(payload: dict):
             "min_liquidation_buffer_pct": MIN_LIQUIDATION_BUFFER_PCT,
         },
         "portfolio_context": portfolio_result,
+        "correlation_context": correlation_result,
         "strategy_signal_context": {
             "schema_version": normalized_signal.get("schema_version"),
             "v2_decision": normalized_signal.get("v2_decision"),
@@ -607,11 +656,13 @@ class Handler(BaseHTTPRequestHandler):
                 "risk_policy_version": RISK_POLICY_VERSION,
                 "leverage_policy_version": LEVERAGE_POLICY_VERSION,
                 "portfolio_policy_version": PORTFOLIO_POLICY_VERSION,
+                "correlation_policy_version": CORRELATION_POLICY_VERSION,
                 "runtime_version": RUNTIME_VERSION,
                 "dynamic_risk_tiers_enabled": True,
                 "max_risk_pct_ceiling": MAX_RISK_PCT,
                 "leverage_policy": build_leverage_policy_contract(),
                 "portfolio_policy": build_portfolio_policy_contract(),
+                "correlation_policy": build_correlation_policy_contract(),
                 "phase4_step12_tp_policy": {
                     "default_tp_ratios": [TP1_RATIO, TP2_RATIO, TP3_RATIO],
                     "default_tp_close_percents": [TP1_CLOSE_PERCENT, TP2_CLOSE_PERCENT, TP3_CLOSE_PERCENT],

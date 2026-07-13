@@ -5,8 +5,76 @@ from config import API_GATEWAY_BASE_URL, MARKET_DATA_PROVIDER, SYMBOL_UNIVERSE_P
 from http_client import get_json
 
 
+DEFAULT_CORRELATION_GROUP = "independent"
+
+DEFAULT_SYMBOL_CORRELATION_GROUPS = {
+    "BTCUSDT": "btc_followers",
+    "LTCUSDT": "btc_followers",
+    "ETHUSDT": "major_alts",
+    "XRPUSDT": "major_alts",
+    "XLMUSDT": "major_alts",
+    "BNBUSDT": "major_alts",
+    "SOLUSDT": "layer1",
+    "ADAUSDT": "layer1",
+    "DOTUSDT": "layer1",
+    "SUIUSDT": "layer1",
+    "SEIUSDT": "layer1",
+    "LINKUSDT": "defi",
+    "ARBUSDT": "defi",
+    "HBARUSDT": "independent",
+    "DOGEUSDT": "meme",
+    "PEPEUSDT": "meme",
+    "ZECUSDT": "privacy",
+    "XMRUSDT": "privacy",
+    "TAOUSDT": "ai_sector",
+    "HYPEUSDT": "independent",
+}
+
+
 def normalize_symbol(symbol: str) -> str:
     return str(symbol).upper().strip().replace("/", "").replace("-", "")
+
+
+def normalize_correlation_group(value: str | None) -> str:
+    value = str(value or "").strip().lower()
+    return value or DEFAULT_CORRELATION_GROUP
+
+
+def default_correlation_group_for_symbol(symbol: str) -> str:
+    return DEFAULT_SYMBOL_CORRELATION_GROUPS.get(
+        normalize_symbol(symbol),
+        DEFAULT_CORRELATION_GROUP,
+    )
+
+
+def normalize_symbol_item(item) -> dict | None:
+    if isinstance(item, str):
+        symbol = normalize_symbol(item)
+        if not symbol:
+            return None
+        return {
+            "symbol": symbol,
+            "enabled": True,
+            "priority": 1,
+            "correlation_group": default_correlation_group_for_symbol(symbol),
+        }
+
+    if not isinstance(item, dict):
+        return None
+
+    symbol = normalize_symbol(item.get("symbol", ""))
+    if not symbol:
+        return None
+
+    return {
+        "symbol": symbol,
+        "enabled": bool(item.get("enabled", True)),
+        "priority": int(item.get("priority", 1)),
+        "correlation_group": normalize_correlation_group(
+            item.get("correlation_group")
+            or default_correlation_group_for_symbol(symbol)
+        ),
+    }
 
 
 def load_symbol_universe_config():
@@ -30,32 +98,45 @@ def load_symbol_universe_config():
             "path": str(path),
         }
 
+    symbols = []
     enabled_symbols = []
-    for item in payload.get("symbols", []):
-        symbol = normalize_symbol(item.get("symbol", ""))
-        if symbol and bool(item.get("enabled", False)):
-            enabled_symbols.append(symbol)
+
+    for raw_item in payload.get("symbols", []):
+        item = normalize_symbol_item(raw_item)
+        if not item:
+            continue
+        symbols.append(item)
+        if item["enabled"]:
+            enabled_symbols.append(item["symbol"])
 
     return {
         "ok": True,
         "path": str(path),
         "raw": payload,
+        "symbols": symbols,
         "enabled_symbols": enabled_symbols,
+        "correlation_groups": sorted({
+            item["correlation_group"]
+            for item in symbols
+        }),
     }
 
 
-def save_symbol_universe_config(symbols: list[str]):
+def save_symbol_universe_config(symbols: list):
     path = Path(SYMBOL_UNIVERSE_PATH)
 
     normalized = []
     seen = set()
 
-    for symbol in symbols:
-        value = normalize_symbol(symbol)
-        if not value or value in seen:
+    for raw_item in symbols:
+        item = normalize_symbol_item(raw_item)
+        if not item:
             continue
-        seen.add(value)
-        normalized.append(value)
+        symbol = item["symbol"]
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        normalized.append(item)
 
     if not normalized:
         return {
@@ -64,18 +145,16 @@ def save_symbol_universe_config(symbols: list[str]):
         }
 
     payload = {
-        "schema_version": "symbol_universe_v2",
+        "schema_version": "symbol_universe_v3",
         "provider_neutral": True,
         "market": "usdt_perp",
         "quote_currency": "USDT",
-        "symbols": [
-            {
-                "symbol": symbol,
-                "enabled": True,
-                "priority": 1,
-            }
-            for symbol in normalized
+        "notes": [
+            "Symbols are TradeTower internal symbols, e.g. BTCUSDT.",
+            "Provider-specific symbols such as BTC-USDT are resolved by api-gateway.",
+            "correlation_group is user-editable and consumed by Risk Engine Step 7.",
         ],
+        "symbols": normalized,
     }
 
     try:
@@ -95,7 +174,12 @@ def save_symbol_universe_config(symbols: list[str]):
         "ok": True,
         "saved": True,
         "path": str(path),
-        "enabled_symbols": normalized,
+        "symbols": normalized,
+        "enabled_symbols": [
+            item["symbol"]
+            for item in normalized
+            if item["enabled"]
+        ],
         "count": len(normalized),
     }
 
@@ -165,4 +249,5 @@ def validate_symbol_via_api_gateway(symbol: str):
         "provider": MARKET_DATA_PROVIDER,
         "message": "Symbol validated successfully.",
         "instrument": live_instruments[0],
+        "default_correlation_group": default_correlation_group_for_symbol(normalized),
     }, 200

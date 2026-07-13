@@ -1,103 +1,122 @@
 {
-  "schema_version": "symbol_universe_v2",
+  "schema_version": "symbol_universe_v3",
   "provider_neutral": true,
   "market": "usdt_perp",
   "quote_currency": "USDT",
   "notes": [
     "Symbols are TradeTower internal symbols, e.g. BTCUSDT.",
     "Provider-specific symbols such as BTC-USDT are resolved by api-gateway.",
-    "Scheduler validates enabled symbols against /market/instruments before refresh."
+    "Scheduler validates enabled symbols against /market/instruments before refresh.",
+    "correlation_group is consumed by Risk Engine Phase 5 Step 7 and is editable from dashboard configuration."
   ],
   "symbols": [
     {
       "symbol": "ETHUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "major_alts"
     },
     {
       "symbol": "SOLUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "layer1"
     },
     {
       "symbol": "LTCUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "btc_followers"
     },
     {
       "symbol": "XRPUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "major_alts"
     },
     {
       "symbol": "HBARUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "independent"
     },
     {
       "symbol": "LINKUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "defi"
     },
     {
       "symbol": "XLMUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "major_alts"
     },
     {
       "symbol": "DOGEUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "meme"
     },
     {
       "symbol": "PEPEUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "meme"
     },
     {
       "symbol": "SEIUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "layer1"
     },
     {
       "symbol": "TAOUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "ai_sector"
     },
     {
       "symbol": "DOTUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "layer1"
     },
     {
       "symbol": "ARBUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "defi"
     },
     {
       "symbol": "ZECUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "privacy"
     },
     {
       "symbol": "ADAUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "layer1"
     },
     {
       "symbol": "SUIUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "layer1"
     },
     {
       "symbol": "XMRUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "privacy"
     },
     {
       "symbol": "HYPEUSDT",
       "enabled": true,
-      "priority": 1
+      "priority": 1,
+      "correlation_group": "independent"
     }
   ]
 }

@@ -10,6 +10,7 @@ import type { PerformanceBootstrapResponse } from "../types/performance";
 import type { SystemHealthBootstrapResponse } from "../types/systemHealth";
 import type {
   ConfigurationBootstrapResponse,
+  SymbolUniverseItem,
   ValidateSymbolResponse,
   SaveSymbolUniverseResponse,
   SetAutoLoopResponse,
@@ -144,7 +145,7 @@ export function validateConfigurationSymbol(symbol: string) {
   });
 }
 
-export function saveConfigurationSymbolUniverse(symbols: string[]) {
+export function saveConfigurationSymbolUniverse(symbols: SymbolUniverseItem[]) {
   return postJson<SaveSymbolUniverseResponse>("/configuration/symbol-universe", {
     symbols,
   });

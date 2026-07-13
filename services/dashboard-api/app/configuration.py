@@ -38,6 +38,7 @@ def get_bootstrap_configuration():
         })
 
     enabled_symbols = symbol_config.get("enabled_symbols", []) if symbol_config.get("ok") else []
+    symbol_universe = symbol_config.get("symbols", []) if symbol_config.get("ok") else []
 
     return {
         "ok": len(errors) == 0,
@@ -60,6 +61,7 @@ def get_bootstrap_configuration():
             "mtm_auto_refresh_enabled": MTM_AUTO_REFRESH_ENABLED,
             "mtm_auto_refresh_interval_seconds": MTM_AUTO_REFRESH_INTERVAL_SECONDS,
             "enabled_symbols": enabled_symbols,
+            "symbol_universe": symbol_universe,
             "strict_score_threshold": STRICT_SCORE_THRESHOLD,
             "max_risk_pct": MAX_RISK_PCT,
             "max_leverage": MAX_LEVERAGE,
@@ -71,6 +73,7 @@ def get_bootstrap_configuration():
         "editability": {
             "auto_loop_enabled": "live",
             "enabled_symbols": "live",
+            "symbol_universe": "live",
             "loop_interval_seconds": "read_only",
             "pending_entry_loop_interval_seconds": "read_only",
             "pending_entry_max_attempts": "read_only",
@@ -96,6 +99,7 @@ def get_bootstrap_configuration():
             "mtm_auto_refresh_enabled": "trade_guardian_env",
             "mtm_auto_refresh_interval_seconds": "trade_guardian_env",
             "enabled_symbols": "symbol_universe_json",
+            "symbol_universe": "symbol_universe_json",
             "strict_score_threshold": "strategy_engine_env",
             "max_risk_pct": "risk_engine_env",
             "max_leverage": "risk_engine_env",

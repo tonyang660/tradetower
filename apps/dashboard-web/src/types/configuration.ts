@@ -1,11 +1,19 @@
 export type ConfigurationEditability = "live" | "read_only";
 
+export type SymbolUniverseItem = {
+  symbol: string;
+  enabled: boolean;
+  priority: number;
+  correlation_group: string;
+};
+
 export type ConfigurationSettings = {
   auto_loop_enabled: boolean;
   loop_interval_seconds: number;
   mtm_auto_refresh_enabled: boolean;
   mtm_auto_refresh_interval_seconds: number;
   enabled_symbols: string[];
+  symbol_universe: SymbolUniverseItem[];
   strict_score_threshold: number;
   max_risk_pct: number;
   max_leverage: number;
@@ -38,8 +46,8 @@ export type ConfigurationBootstrapResponse = {
   generated_at: string;
   environment: string;
   settings: ConfigurationSettings;
-  editability: Record<keyof ConfigurationSettings, ConfigurationEditability>;
-  sources: Record<keyof ConfigurationSettings, string>;
+  editability: Partial<Record<keyof ConfigurationSettings, ConfigurationEditability>>;
+  sources: Partial<Record<keyof ConfigurationSettings, string>>;
   errors: Array<Record<string, unknown>>;
 };
 
@@ -50,11 +58,13 @@ export type ValidateSymbolResponse = {
   provider?: string;
   message?: string;
   error?: string;
+  default_correlation_group?: string;
 };
 
 export type SaveSymbolUniverseResponse = {
   ok: boolean;
   saved?: boolean;
+  symbols?: SymbolUniverseItem[];
   enabled_symbols?: string[];
   count?: number;
   path?: string;
