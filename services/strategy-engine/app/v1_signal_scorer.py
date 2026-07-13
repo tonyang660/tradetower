@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from v1_history_access import get_history_values, is_decreasing, is_increasing
+
 from snapshot_v1_adapter import (
     direction_bias,
     get_bos_for_direction,
@@ -31,7 +33,7 @@ from snapshot_v1_adapter import (
     v1_trend_direction,
 )
 
-V1_SIGNAL_SCORER_VERSION = "phase4_step6_7_v1_signal_scoring"
+V1_SIGNAL_SCORER_VERSION = "phase4_step11_v1_signal_scoring_history"
 
 TREND_WEIGHTS = {
     "htf_alignment": 25,
@@ -211,24 +213,42 @@ def _score_trend_htf_alignment(snapshot: dict[str, Any], direction: str) -> tupl
 
 
 def _score_trend_momentum(snapshot: dict[str, Any], direction: str) -> tuple[int, str]:
-    hist = _macd_hist(snapshot, "primary")
-    slope = _macd_slope(snapshot, "primary")
+    macd_tail = get_history_values(snapshot, "primary", "macd_hist", tail_size=3)
+    hist = macd_tail[-1] if macd_tail else _macd_hist(snapshot, "primary")
 
-    # v1 used the last three histogram values. Snapshot v2 currently exposes
-    # latest histogram and slope, so we approximate the three-tier structure.
+    if len(macd_tail) >= 3:
+        if direction == "long":
+            if macd_tail[-1] > macd_tail[-2] > macd_tail[-3] > 0:
+                return 20, "Accelerating momentum"
+            if macd_tail[-1] > macd_tail[-2] > 0:
+                return 14, "Increasing momentum"
+            if macd_tail[-1] > 0:
+                return 8, "Positive but weak momentum"
+            return 0, "Momentum does not support long"
+
+        if macd_tail[-1] < macd_tail[-2] < macd_tail[-3] < 0:
+            return 20, "Accelerating downside momentum"
+        if macd_tail[-1] < macd_tail[-2] < 0:
+            return 14, "Increasing downside momentum"
+        if macd_tail[-1] < 0:
+            return 8, "Negative but weak momentum"
+        return 0, "Momentum does not support short"
+
+    # Fallback for malformed fixture/snapshot. Normal Feature Factory snapshots
+    # include enough candles for the tail calculation.
+    slope = _macd_slope(snapshot, "primary")
     if direction == "long":
         if hist > 0 and slope > 0:
-            return 20, "Accelerating/increasing momentum"
+            return 14, "Increasing momentum from latest+slope fallback"
         if hist > 0:
             return 8, "Positive but weak momentum"
         return 0, "Momentum does not support long"
 
     if hist < 0 and slope < 0:
-        return 20, "Accelerating/increasing downside momentum"
+        return 14, "Increasing downside momentum from latest+slope fallback"
     if hist < 0:
         return 8, "Negative but weak momentum"
     return 0, "Momentum does not support short"
-
 
 def _score_trend_rsi(snapshot: dict[str, Any], direction: str, htf_alignment_points: float) -> tuple[int, str]:
     rsi = _rsi(snapshot, "primary")
@@ -338,9 +358,7 @@ def score_trend_following(snapshot: dict[str, Any], direction: str, symbol: str 
         reason_tags=reasons,
         details={
             "weights": TREND_WEIGHTS,
-            "snapshot_native_deviation": (
-                "v1 used three MACD histogram samples. MarketSnapshot v2 currently uses latest histogram and slope."
-            ),
+            "history_parity": "uses v1_history_access primary macd_hist tail(3) computed from candles",
             "primary_direction_bias": direction_bias(snapshot, "primary"),
             "htf_direction_bias": direction_bias(snapshot, "htf"),
         },
@@ -365,11 +383,18 @@ def _score_mr_breakout_safety(snapshot: dict[str, Any]) -> tuple[int, str]:
 
 
 def _score_mr_reversal_pattern(snapshot: dict[str, Any], direction: str) -> tuple[int, str]:
+    macd_tail = get_history_values(snapshot, "entry", "macd_hist", tail_size=2)
+    if len(macd_tail) >= 2:
+        if (direction == "long" and macd_tail[-1] > macd_tail[-2]) or (
+            direction == "short" and macd_tail[-1] < macd_tail[-2]
+        ):
+            return 20, "5m MACD confirming reversal"
+        return 8, "5m MACD not yet confirming"
+
     slope = _macd_slope(snapshot, "entry")
     if (direction == "long" and slope > 0) or (direction == "short" and slope < 0):
-        return 20, "5m MACD confirming reversal"
+        return 20, "5m MACD confirming reversal from slope fallback"
     return 8, "5m MACD not yet confirming"
-
 
 def _score_mr_entry_extremity(snapshot: dict[str, Any], direction: str) -> tuple[int, str]:
     range_info = get_mean_reversion_range(snapshot, "primary") or {}
@@ -450,9 +475,7 @@ def score_mean_reversion(snapshot: dict[str, Any], direction: str, symbol: str =
         reason_tags=reasons,
         details={
             "weights": MEAN_REVERSION_WEIGHTS,
-            "snapshot_native_deviation": (
-                "v1 used previous 5m MACD histogram values. MarketSnapshot v2 currently uses histogram slope."
-            ),
+            "history_parity": "uses v1_history_access entry macd_hist latest vs previous computed from candles",
             "range_info": get_mean_reversion_range(snapshot, "primary"),
             "primary_direction_bias": direction_bias(snapshot, "primary"),
             "htf_direction_bias": direction_bias(snapshot, "htf"),

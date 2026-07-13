@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from v1_history_access import get_history_values, is_decreasing, is_increasing, latest_from_history
+
 from snapshot_v1_adapter import (
     direction_bias,
     get_bos_for_direction,
@@ -27,7 +29,7 @@ from snapshot_v1_adapter import (
     v1_trend_direction,
 )
 
-TREND_ENTRY_VALIDATOR_VERSION = "phase4_step5_v1_entry_validation"
+TREND_ENTRY_VALIDATOR_VERSION = "phase4_step11_v1_entry_validation_history"
 
 VOLATILITY_MIN_RATIO = 0.7
 VOLATILITY_MAX_RATIO = 2.0
@@ -219,43 +221,45 @@ def _is_too_close_to_swing(snapshot: dict[str, Any], direction: str) -> tuple[bo
 
 
 def _entry_macd_turns(snapshot: dict[str, Any], direction: str) -> tuple[bool, dict[str, Any]]:
-    hist = _macd_hist(snapshot, "entry")
-    slope = _macd_slope(snapshot, "entry")
+    macd_tail = get_history_values(snapshot, "entry", "macd_hist", tail_size=2)
+    hist = macd_tail[-1] if macd_tail else _macd_hist(snapshot, "entry")
+    prev = macd_tail[-2] if len(macd_tail) >= 2 else hist - _macd_slope(snapshot, "entry")
 
     if direction == "long":
-        ok = slope > 0
+        ok = hist > prev
         reason = "5M_MACD_TURNING_UP" if ok else "5M_MACD_NOT_TURNING_UP"
     else:
-        ok = slope < 0
+        ok = hist < prev
         reason = "5M_MACD_TURNING_DOWN" if ok else "5M_MACD_NOT_TURNING_DOWN"
 
     return ok, {
         "macd_hist": hist,
-        "macd_histogram_slope": slope,
+        "macd_hist_prev": prev,
+        "macd_hist_tail": macd_tail,
         "reason": reason,
     }
 
-
 def _primary_macd_strength(snapshot: dict[str, Any], direction: str) -> tuple[bool, dict[str, Any]]:
-    hist = _macd_hist(snapshot, "primary")
-    slope = _macd_slope(snapshot, "primary")
+    macd_tail = get_history_values(snapshot, "primary", "macd_hist", tail_size=3)
+    hist = macd_tail[-1] if macd_tail else _macd_hist(snapshot, "primary")
+    slope = hist - macd_tail[-2] if len(macd_tail) >= 2 else _macd_slope(snapshot, "primary")
 
-    # The v1 dataframe implementation used the last three MACD histogram values.
-    # MarketSnapshot v2 currently exposes latest histogram and slope, so this is
-    # the closest snapshot-native parity check until Step 11 fixtures/history are added.
     if direction == "long":
         if hist <= 0:
-            return False, {"reason": "MACD_HISTOGRAM_NOT_POSITIVE", "macd_hist": hist, "slope": slope}
-        if slope < 0:
-            return False, {"reason": "MACD_MOMENTUM_DECLINING", "macd_hist": hist, "slope": slope}
-        return True, {"reason": "MACD_MOMENTUM_SUPPORTS_LONG", "macd_hist": hist, "slope": slope}
+            return False, {"reason": "MACD_HISTOGRAM_NOT_POSITIVE", "macd_hist": hist, "slope": slope, "macd_hist_tail": macd_tail}
+        if len(macd_tail) >= 3 and macd_tail[-1] < macd_tail[-2]:
+            return False, {"reason": "MACD_MOMENTUM_DECLINING", "macd_hist": hist, "slope": slope, "macd_hist_tail": macd_tail}
+        if len(macd_tail) >= 3 and abs(macd_tail[-1]) < abs(macd_tail[-3]) * 0.5:
+            return False, {"reason": "MACD_MOMENTUM_TOO_WEAK", "macd_hist": hist, "slope": slope, "macd_hist_tail": macd_tail}
+        return True, {"reason": "MACD_MOMENTUM_SUPPORTS_LONG", "macd_hist": hist, "slope": slope, "macd_hist_tail": macd_tail}
 
     if hist >= 0:
-        return False, {"reason": "MACD_HISTOGRAM_NOT_NEGATIVE", "macd_hist": hist, "slope": slope}
-    if slope > 0:
-        return False, {"reason": "MACD_MOMENTUM_NOT_DECLINING", "macd_hist": hist, "slope": slope}
-    return True, {"reason": "MACD_MOMENTUM_SUPPORTS_SHORT", "macd_hist": hist, "slope": slope}
-
+        return False, {"reason": "MACD_HISTOGRAM_NOT_NEGATIVE", "macd_hist": hist, "slope": slope, "macd_hist_tail": macd_tail}
+    if len(macd_tail) >= 3 and macd_tail[-1] > macd_tail[-2]:
+        return False, {"reason": "MACD_MOMENTUM_NOT_DECLINING", "macd_hist": hist, "slope": slope, "macd_hist_tail": macd_tail}
+    if len(macd_tail) >= 3 and abs(macd_tail[-1]) < abs(macd_tail[-3]) * 0.5:
+        return False, {"reason": "MACD_MOMENTUM_TOO_WEAK", "macd_hist": hist, "slope": slope, "macd_hist_tail": macd_tail}
+    return True, {"reason": "MACD_MOMENTUM_SUPPORTS_SHORT", "macd_hist": hist, "slope": slope, "macd_hist_tail": macd_tail}
 
 def _check_common_trend_conditions(snapshot: dict[str, Any], direction: str) -> tuple[list[str], list[str], dict[str, Any]]:
     failed: list[str] = []
@@ -432,28 +436,23 @@ def _primary_regime(snapshot: dict[str, Any]) -> str:
 
 
 def _rsi_confirmation(snapshot: dict[str, Any], direction: str) -> tuple[bool, dict[str, Any]]:
-    rsi = safe_float(get_indicator(snapshot, "primary", "rsi_14", get_indicator(snapshot, "primary", "rsi", 50.0)), 50.0)
-    rsi_slope = safe_float(get_indicator(snapshot, "primary", "rsi_slope", 0.0), 0.0)
+    rsi_tail = get_history_values(snapshot, "primary", "rsi", tail_size=2)
+    rsi = rsi_tail[-1] if rsi_tail else safe_float(get_indicator(snapshot, "primary", "rsi_14", get_indicator(snapshot, "primary", "rsi", 50.0)), 50.0)
+    rsi_prev = rsi_tail[-2] if len(rsi_tail) >= 2 else rsi
 
-    # v1 used the previous RSI value directly. MarketSnapshot v2 currently
-    # exposes latest RSI and may expose rsi_slope. If rsi_slope is absent, use
-    # threshold-only confirmation as a snapshot-native fallback.
     if direction == "long":
-        slope_ok = rsi_slope > 0 if rsi_slope != 0 else True
-        ok = slope_ok and rsi <= 48
+        ok = rsi > rsi_prev and rsi <= 48
         reason = "RSI_BULLISH_CONFIRMATION" if ok else "RSI_NOT_BULLISH_CONFIRMATION"
     else:
-        slope_ok = rsi_slope < 0 if rsi_slope != 0 else True
-        ok = slope_ok and rsi >= 52
+        ok = rsi < rsi_prev and rsi >= 52
         reason = "RSI_BEARISH_CONFIRMATION" if ok else "RSI_NOT_BEARISH_CONFIRMATION"
 
     return ok, {
         "rsi": rsi,
-        "rsi_slope": rsi_slope,
-        "slope_available": rsi_slope != 0,
+        "rsi_prev": rsi_prev,
+        "rsi_tail": rsi_tail,
         "reason": reason,
     }
-
 
 def _mean_reversion_zone(snapshot: dict[str, Any], direction: str) -> tuple[bool, dict[str, Any]]:
     current_price = latest_close(snapshot, "entry")
@@ -506,23 +505,23 @@ def _mean_reversion_zone(snapshot: dict[str, Any], direction: str) -> tuple[bool
 
 
 def _mean_reversion_macd_turn(snapshot: dict[str, Any], direction: str) -> tuple[bool, dict[str, Any]]:
-    hist = _macd_hist(snapshot, "entry")
-    slope = _macd_slope(snapshot, "entry")
+    macd_tail = get_history_values(snapshot, "entry", "macd_hist", tail_size=2)
+    hist = macd_tail[-1] if macd_tail else _macd_hist(snapshot, "entry")
+    prev = macd_tail[-2] if len(macd_tail) >= 2 else hist - _macd_slope(snapshot, "entry")
 
-    # v1 used latest vs previous 5m MACD histogram. Snapshot v2 uses slope.
     if direction == "long":
-        ok = slope > 0
+        ok = hist > prev
         reason = "MR_5M_MACD_TURNING_UP" if ok else "MR_5M_MACD_NOT_TURNING_UP"
     else:
-        ok = slope < 0
+        ok = hist < prev
         reason = "MR_5M_MACD_TURNING_DOWN" if ok else "MR_5M_MACD_NOT_TURNING_DOWN"
 
     return ok, {
         "macd_hist": hist,
-        "macd_histogram_slope": slope,
+        "macd_hist_prev": prev,
+        "macd_hist_tail": macd_tail,
         "reason": reason,
     }
-
 
 def _check_common_mean_reversion_conditions(snapshot: dict[str, Any], direction: str) -> tuple[list[str], list[str], dict[str, Any]]:
     failed: list[str] = []
@@ -687,12 +686,7 @@ def build_entry_validation_contract() -> dict[str, Any]:
             "RSI reversal confirmation",
             "5m MACD turn confirmation",
         ],
-        "snapshot_native_deviation": (
-            "v1 used previous dataframe values for MACD and RSI. "
-            "MarketSnapshot v2 currently exposes latest values and slopes, "
-            "so this validator uses histogram/RSI values plus slope when available "
-            "until historical indicator arrays/fixtures are introduced."
-        ),
+        "history_parity": "uses v1_history_access tails computed from MarketSnapshot v2 candles",
         "does_not_score": True,
         "does_not_execute": True,
     }
