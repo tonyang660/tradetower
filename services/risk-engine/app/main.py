@@ -1,10 +1,16 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse
 from datetime import datetime, timezone
 import json
 import os
 
 import requests
 
+from leverage_policy import (
+    LEVERAGE_POLICY_VERSION,
+    build_leverage_policy_contract,
+    select_safe_leverage,
+)
 from risk_policy import (
     RISK_ENGINE_VERSION,
     RISK_POLICY_VERSION,
@@ -12,6 +18,7 @@ from risk_policy import (
     extract_strategy_trade_candidate,
     build_rejection,
 )
+
 
 SERVICE_NAME = "risk-engine"
 PORT = int(os.getenv("PORT", "8080"))
@@ -21,9 +28,17 @@ MAX_RISK_PCT = float(os.getenv("MAX_RISK_PCT", "1.0"))
 MAX_LEVERAGE = float(os.getenv("MAX_LEVERAGE", "15.0"))
 MIN_NOTIONAL_PCT_OF_MAX_DEPLOYABLE = float(os.getenv("MIN_NOTIONAL_PCT_OF_MAX_DEPLOYABLE", "1.0"))
 MIN_LIQUIDATION_BUFFER_PCT = float(os.getenv("MIN_LIQUIDATION_BUFFER_PCT", "0.35"))
-LEVERAGE_SEQUENCE = [15.0, 14.0, 13.0, 12.0, 11.0, 10.0, 9.0, 8.0, 7.0]
+LEVERAGE_SEQUENCE = [
+    float(item.strip())
+    for item in os.getenv(
+        "LEVERAGE_SEQUENCE",
+        "15,14,13,12,11,10,9,8,7",
+    ).split(",")
+    if item.strip()
+]
 
-# v1 TP fallback. Strategy Engine/Risk payloads should normally carry take_profits.
+# v1 TP policy fallback. Strategy Engine/Risk payloads should normally carry
+# take_profits from Phase 4 Step 9/12.
 TP1_RATIO = 1.5
 TP2_RATIO = 2.5
 TP3_RATIO = 3.5
@@ -31,7 +46,7 @@ TP1_CLOSE_PERCENT = 50
 TP2_CLOSE_PERCENT = 30
 TP3_CLOSE_PERCENT = 20
 
-RUNTIME_VERSION = "phase5_step3_4_signal_intake_position_sizing"
+RUNTIME_VERSION = "phase5_step5_leverage_liquidation_safety"
 
 
 def iso_now():
@@ -43,7 +58,7 @@ def fetch_guardian_status(account_id: int):
         r = requests.get(
             f"{TRADE_GUARDIAN_BASE_URL}/status",
             params={"account_id": account_id},
-            timeout=10,
+            timeout=10
         )
         payload = r.json()
     except Exception:
@@ -55,7 +70,7 @@ def fetch_guardian_status(account_id: int):
     return payload, None
 
 
-def safe_float(value, default=None):
+def safe_float(value, default: float | None = None):
     try:
         return float(value)
     except Exception:
@@ -76,8 +91,25 @@ def normalize_position_side(payload: dict):
 def extract_v2_signal_payload(payload: dict) -> dict:
     """
     Accept both payload styles:
-    1. Scheduler wrapper with top-level approved fields plus strategy_signal.
-    2. Direct Strategy Signal v2.
+
+    1. Scheduler wrapper:
+       {
+         account_id,
+         symbol,
+         position_side,
+         entry_order_type,
+         entry_price,
+         stop_loss,
+         take_profits,
+         strategy_signal: {...}
+       }
+
+    2. Direct Strategy Signal v2:
+       {
+         schema_version: strategy_signal_v2,
+         v2_decision: trade_candidate,
+         proposed_trade: {...}
+       }
     """
     strategy_signal = payload.get("strategy_signal")
     if isinstance(strategy_signal, dict):
@@ -95,6 +127,7 @@ def extract_v2_signal_payload(payload: dict) -> dict:
             if payload.get(key) is not None:
                 merged[key] = payload[key]
         return merged
+
     return payload
 
 
@@ -150,19 +183,15 @@ def normalize_take_profits(payload: dict, side: str, entry: float, stop: float) 
     return None
 
 
-def compute_stop_distance(side: str, entry: float, stop: float) -> float:
-    if side == "long":
-        return entry - stop
-    if side == "short":
-        return stop - entry
-    return 0.0
-
-
 def validate_signal_intake(payload: dict):
     reason_codes = []
+
     schema_version = payload.get("schema_version")
     v2_decision = payload.get("v2_decision") or payload.get("decision")
 
+    # During Step 12 compatibility, Scheduler sends legacy decision=trade and
+    # may put compact Strategy Signal metadata under strategy_signal. Accept both
+    # direct v2 and wrapped compatibility forms.
     direct_v2 = schema_version == "strategy_signal_v2"
     compatible_trade = payload.get("legacy_decision") == "trade" or payload.get("decision") == "trade"
 
@@ -193,10 +222,21 @@ def validate_signal_intake(payload: dict):
     if entry is not None and stop is not None and side in ("long", "short"):
         if compute_stop_distance(side, entry, stop) <= 0:
             reason_codes.append("INVALID_STOP_DISTANCE")
-        elif normalize_take_profits(payload, side, entry, stop) is None:
+
+    if entry is not None and stop is not None and side in ("long", "short"):
+        tps = normalize_take_profits(payload, side, entry, stop)
+        if tps is None:
             reason_codes.append("MISSING_TAKE_PROFITS")
 
     return reason_codes
+
+
+def compute_stop_distance(side: str, entry: float, stop: float) -> float:
+    if side == "long":
+        return entry - stop
+    if side == "short":
+        return stop - entry
+    return 0.0
 
 
 def build_tp_ladder(side: str, entry: float, stop: float, payload: dict | None = None):
@@ -220,68 +260,36 @@ def build_tp_ladder(side: str, entry: float, stop: float, payload: dict | None =
     }
 
 
-def approximate_liquidation_price(side: str, entry: float, leverage: float) -> float | None:
-    if leverage <= 0:
-        return None
-    if side == "long":
-        return entry * (1.0 - (1.0 / leverage))
-    if side == "short":
-        return entry * (1.0 + (1.0 / leverage))
-    return None
-
-
-def liquidation_buffer_pct(side: str, stop: float, liquidation_price: float, entry: float) -> float:
-    if entry <= 0:
-        return 0.0
-    if side == "long":
-        return ((stop - liquidation_price) / entry) * 100.0
-    if side == "short":
-        return ((liquidation_price - stop) / entry) * 100.0
-    return 0.0
-
-
-def is_liquidation_safely_beyond_stop(side: str, stop: float, liquidation_price: float, entry: float) -> bool:
-    return liquidation_buffer_pct(side, stop, liquidation_price, entry) >= MIN_LIQUIDATION_BUFFER_PCT
-
-
 def get_minimum_notional_required(equity: float) -> float:
     max_deployable = equity * MAX_LEVERAGE
     return max_deployable * (MIN_NOTIONAL_PCT_OF_MAX_DEPLOYABLE / 100.0)
 
 
-def pick_starting_leverage(leverage_hint):
-    if leverage_hint is not None:
-        try:
-            lev = float(leverage_hint)
-            if lev <= 0:
-                return None, "LEVERAGE_TOO_LOW"
-            if lev > MAX_LEVERAGE:
-                return None, "LEVERAGE_TOO_HIGH"
-            return lev, None
-        except Exception:
-            return None, "INVALID_LEVERAGE_HINT"
-    return MAX_LEVERAGE, None
-
-
-def build_leverage_candidates(start_leverage: float | None = None):
-    seq = sorted(set(LEVERAGE_SEQUENCE), reverse=True)
-    seq = [x for x in seq if x <= MAX_LEVERAGE and x > 0]
-    if start_leverage is not None and start_leverage > 0 and start_leverage <= MAX_LEVERAGE:
-        if start_leverage not in seq:
-            seq.append(start_leverage)
-            seq = sorted(set(seq), reverse=True)
-    return seq
-
-
-def build_position_sizing(*, equity: float, side: str, entry: float, stop: float) -> dict:
-    base_risk = calculate_base_risk_amount(equity, max_risk_pct_ceiling=MAX_RISK_PCT)
+def build_position_sizing(
+    *,
+    equity: float,
+    side: str,
+    entry: float,
+    stop: float,
+) -> dict:
+    base_risk = calculate_base_risk_amount(
+        equity,
+        max_risk_pct_ceiling=MAX_RISK_PCT,
+    )
     stop_distance = compute_stop_distance(side, entry, stop)
+
     if stop_distance <= 0:
-        return {"ok": False, "reason_codes": ["INVALID_STOP_DISTANCE"], "base_risk": base_risk, "stop_distance": stop_distance}
+        return {
+            "ok": False,
+            "reason_codes": ["INVALID_STOP_DISTANCE"],
+            "base_risk": base_risk,
+            "stop_distance": stop_distance,
+        }
 
     risk_amount = float(base_risk["risk_amount"])
     size = risk_amount / stop_distance
     notional = size * entry
+
     return {
         "ok": True,
         "risk_engine_version": RISK_ENGINE_VERSION,
@@ -298,26 +306,55 @@ def build_position_sizing(*, equity: float, side: str, entry: float, stop: float
 
 def plan_trade(payload: dict):
     account_id = int(payload["account_id"])
+
     signal_payload = extract_v2_signal_payload(payload)
     normalized_signal = extract_strategy_trade_candidate(signal_payload)
 
+    # Merge normalized signal back into payload for compatibility with existing
+    # leverage/margin code.
     working_payload = dict(payload)
     for key in (
-        "schema_version", "symbol", "v2_decision", "legacy_decision", "position_side",
-        "selected_strategy", "regime", "score", "entry_order_type", "entry_price",
-        "stop_loss", "take_profits", "risk_per_unit", "reason_tags",
+        "schema_version",
+        "symbol",
+        "v2_decision",
+        "legacy_decision",
+        "position_side",
+        "selected_strategy",
+        "regime",
+        "score",
+        "entry_order_type",
+        "entry_price",
+        "stop_loss",
+        "take_profits",
+        "risk_per_unit",
+        "reason_tags",
     ):
         if normalized_signal.get(key) is not None:
             working_payload[key] = normalized_signal[key]
 
     symbol = str(working_payload.get("symbol") or "").upper()
+
     guardian_status, g_error = fetch_guardian_status(account_id)
     if g_error:
-        return build_rejection(symbol, [g_error], context={"runtime_version": RUNTIME_VERSION})
+        return build_rejection(
+            symbol,
+            [g_error],
+            context={"runtime_version": RUNTIME_VERSION},
+        )
 
     validation_errors = validate_signal_intake(working_payload)
     if validation_errors:
-        return build_rejection(symbol, validation_errors, context={"runtime_version": RUNTIME_VERSION, "normalized_signal": {k: v for k, v in normalized_signal.items() if k != "raw_signal"}})
+        return build_rejection(
+            symbol,
+            validation_errors,
+            context={
+                "runtime_version": RUNTIME_VERSION,
+                "normalized_signal": {
+                    k: v for k, v in normalized_signal.items()
+                    if k != "raw_signal"
+                },
+            },
+        )
 
     side = normalize_position_side(working_payload)
     entry_order_type = working_payload["entry_order_type"]
@@ -328,9 +365,18 @@ def plan_trade(payload: dict):
     equity = float(guardian_status["equity"])
     cash_balance = float(guardian_status["cash_balance"])
 
-    sizing = build_position_sizing(equity=equity, side=side, entry=entry, stop=stop)
+    sizing = build_position_sizing(
+        equity=equity,
+        side=side,
+        entry=entry,
+        stop=stop,
+    )
     if not sizing.get("ok"):
-        return build_rejection(symbol, sizing.get("reason_codes", ["INVALID_POSITION_SIZING"]), context={"runtime_version": RUNTIME_VERSION, "sizing": sizing})
+        return build_rejection(
+            symbol,
+            sizing.get("reason_codes", ["INVALID_POSITION_SIZING"]),
+            context={"runtime_version": RUNTIME_VERSION, "sizing": sizing},
+        )
 
     size = sizing["size"]
     notional = sizing["notional"]
@@ -338,54 +384,65 @@ def plan_trade(payload: dict):
     stop_distance = sizing["stop_distance"]
 
     if size <= 0:
-        return build_rejection(symbol, ["SIZE_NON_POSITIVE"], context={"runtime_version": RUNTIME_VERSION, "sizing": sizing})
+        return build_rejection(
+            symbol,
+            ["SIZE_NON_POSITIVE"],
+            context={"runtime_version": RUNTIME_VERSION, "sizing": sizing},
+        )
 
     minimum_notional_required = get_minimum_notional_required(equity)
     if notional < minimum_notional_required:
-        return build_rejection(symbol, ["NOTIONAL_BELOW_MINIMUM"], context={"runtime_version": RUNTIME_VERSION, "notional": notional, "minimum_notional_required": minimum_notional_required, "sizing": sizing})
+        return build_rejection(
+            symbol,
+            ["NOTIONAL_BELOW_MINIMUM"],
+            context={
+                "runtime_version": RUNTIME_VERSION,
+                "notional": notional,
+                "minimum_notional_required": minimum_notional_required,
+                "sizing": sizing,
+            },
+        )
 
     tp_ladder = build_tp_ladder(side, entry, stop, working_payload)
     if tp_ladder is None:
-        return build_rejection(symbol, ["MISSING_TAKE_PROFITS"], context={"runtime_version": RUNTIME_VERSION})
+        return build_rejection(
+            symbol,
+            ["MISSING_TAKE_PROFITS"],
+            context={"runtime_version": RUNTIME_VERSION},
+        )
 
-    start_leverage, lev_error = pick_starting_leverage(leverage_hint)
-    if lev_error:
-        return build_rejection(symbol, [lev_error], context={"runtime_version": RUNTIME_VERSION})
+    leverage_result = select_safe_leverage(
+        side=side,
+        entry=entry,
+        stop=stop,
+        notional=notional,
+        cash_balance=cash_balance,
+        max_leverage=MAX_LEVERAGE,
+        leverage_hint=leverage_hint,
+        min_liquidation_buffer_pct=MIN_LIQUIDATION_BUFFER_PCT,
+        leverage_sequence=LEVERAGE_SEQUENCE,
+    )
 
-    chosen_leverage = None
-    margin_required = None
-    liquidation_price = None
-    liquidation_buffer = None
-    leverage_rejections = []
-
-    for lev in build_leverage_candidates(start_leverage):
-        required = notional / lev
-        liq_price = approximate_liquidation_price(side, entry, lev)
-        if liq_price is None:
-            leverage_rejections.append({"leverage": lev, "reason": "INVALID_LIQUIDATION_MODEL"})
-            continue
-        if required > cash_balance:
-            leverage_rejections.append({"leverage": lev, "reason": "MARGIN_EXCEEDS_AVAILABLE_CAPITAL", "margin_required": round(required, 8)})
-            continue
-        if not is_liquidation_safely_beyond_stop(side, stop, liq_price, entry):
-            leverage_rejections.append({"leverage": lev, "reason": "LIQUIDATION_TOO_CLOSE_TO_STOP", "liquidation_price": round(liq_price, 8), "liquidation_buffer_pct": round(liquidation_buffer_pct(side, stop, liq_price, entry), 6)})
-            continue
-        chosen_leverage = lev
-        margin_required = required
-        liquidation_price = liq_price
-        liquidation_buffer = liquidation_buffer_pct(side, stop, liq_price, entry)
-        break
-
-    if chosen_leverage is None:
-        primary_reason = "LIQUIDATION_CONSTRAINT_OR_MARGIN_EXCEEDED" if any(x["reason"] == "LIQUIDATION_TOO_CLOSE_TO_STOP" for x in leverage_rejections) else "MARGIN_EXCEEDS_AVAILABLE_CAPITAL"
-        return build_rejection(symbol, [primary_reason], context={"runtime_version": RUNTIME_VERSION, "leverage_rejections": leverage_rejections, "sizing": sizing})
+    if not leverage_result.get("ok"):
+        return build_rejection(
+            symbol,
+            [leverage_result.get("reason", "NO_VALID_LEVERAGE_FOUND")],
+            context={
+                "runtime_version": RUNTIME_VERSION,
+                "leverage_policy_version": LEVERAGE_POLICY_VERSION,
+                "leverage_result": leverage_result,
+                "sizing": sizing,
+            },
+        )
 
     take_profits = tp_ladder["take_profits"]
+
     return {
         "ok": True,
         "approved": True,
         "risk_engine_version": RISK_ENGINE_VERSION,
         "risk_policy_version": RISK_POLICY_VERSION,
+        "leverage_policy_version": LEVERAGE_POLICY_VERSION,
         "runtime_version": RUNTIME_VERSION,
         "account_id": account_id,
         "symbol": symbol,
@@ -409,12 +466,19 @@ def plan_trade(payload: dict):
         "stop_distance": round(stop_distance, 8),
         "size": round(size, 8),
         "notional": round(notional, 8),
-        "leverage": round(chosen_leverage, 8),
-        "margin_required": round(margin_required, 8),
+        "leverage": round(leverage_result["chosen_leverage"], 8),
+        "margin_required": round(leverage_result["margin_required"], 8),
         "minimum_notional_required": round(minimum_notional_required, 8),
-        "liquidation_price_estimate": round(liquidation_price, 8) if liquidation_price is not None else None,
-        "liquidation_buffer_pct": round(liquidation_buffer, 6) if liquidation_buffer is not None else None,
+        "liquidation_price_estimate": round(leverage_result["liquidation_price_estimate"], 8),
+        "liquidation_buffer_pct": round(leverage_result["liquidation_buffer_pct"], 6),
         "dynamic_risk": sizing["dynamic_risk"],
+        "leverage_context": {
+            "candidates": leverage_result.get("candidates", []),
+            "candidate_notes": leverage_result.get("candidate_notes", []),
+            "leverage_rejections": leverage_result.get("leverage_rejections", []),
+            "max_leverage": MAX_LEVERAGE,
+            "min_liquidation_buffer_pct": MIN_LIQUIDATION_BUFFER_PCT,
+        },
         "strategy_signal_context": {
             "schema_version": normalized_signal.get("schema_version"),
             "v2_decision": normalized_signal.get("v2_decision"),
@@ -424,7 +488,7 @@ def plan_trade(payload: dict):
             "score": normalized_signal.get("score"),
             "reason_tags": normalized_signal.get("reason_tags", []),
         },
-        "reason_codes": [],
+        "reason_codes": []
     }
 
 
@@ -445,9 +509,11 @@ class Handler(BaseHTTPRequestHandler):
                 "timestamp": iso_now(),
                 "risk_engine_version": RISK_ENGINE_VERSION,
                 "risk_policy_version": RISK_POLICY_VERSION,
+                "leverage_policy_version": LEVERAGE_POLICY_VERSION,
                 "runtime_version": RUNTIME_VERSION,
                 "dynamic_risk_tiers_enabled": True,
                 "max_risk_pct_ceiling": MAX_RISK_PCT,
+                "leverage_policy": build_leverage_policy_contract(),
                 "phase4_step12_tp_policy": {
                     "default_tp_ratios": [TP1_RATIO, TP2_RATIO, TP3_RATIO],
                     "default_tp_close_percents": [TP1_CLOSE_PERCENT, TP2_CLOSE_PERCENT, TP3_CLOSE_PERCENT],
@@ -455,7 +521,12 @@ class Handler(BaseHTTPRequestHandler):
                 }
             })
             return
-        self._send_json({"ok": False, "error": "not_found", "path": self.path}, status=404)
+
+        self._send_json({
+            "ok": False,
+            "error": "not_found",
+            "path": self.path
+        }, status=404)
 
     def do_POST(self):
         if self.path == "/plan":
@@ -467,9 +538,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(result, status=200 if result.get("ok") else 400)
                 return
             except Exception as e:
-                self._send_json({"ok": False, "error": "internal_error", "details": str(e)}, status=500)
+                self._send_json({
+                    "ok": False,
+                    "error": "internal_error",
+                    "details": str(e)
+                }, status=500)
                 return
-        self._send_json({"ok": False, "error": "not_found", "path": self.path}, status=404)
+
+        self._send_json({
+            "ok": False,
+            "error": "not_found",
+            "path": self.path
+        }, status=404)
 
 
 if __name__ == "__main__":
