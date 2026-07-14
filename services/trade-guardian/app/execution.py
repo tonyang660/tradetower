@@ -21,6 +21,8 @@ from positions import (
 from trades import maybe_finalize_trade
 from db import get_conn
 
+from partial_close_policy import build_partial_close_accounting
+
 import os
 
 TP1_CLOSE_PERCENT_DEFAULT = float(os.getenv("TP1_CLOSE_PERCENT", "50"))
@@ -37,17 +39,6 @@ def get_tp_close_percent(payload: dict, key: str, default: float) -> float:
         pass
 
     return float(default)
-
-
-def close_size_from_percent(
-    original_size: float,
-    close_percent: float,
-    remaining_size: float,
-) -> float:
-    close_size = round(original_size * (float(close_percent) / 100.0), 8)
-    if close_size > remaining_size:
-        return remaining_size
-    return close_size
 
 
 def apply_execution_report(payload: dict):
@@ -243,14 +234,18 @@ def apply_execution_report(payload: dict):
         if open_position["tp1_hit"]:
             return {"ok": False, "error": "tp1_already_hit", "execution_id": execution_id}
 
-        close_size = close_size_from_percent(
-            original_size,
-            TP1_CLOSE_PERCENT_DEFAULT,
-            remaining_size,
+        accounting = build_partial_close_accounting(
+            execution_type="TP1",
+            original_size=original_size,
+            remaining_size_before=remaining_size,
+            margin_used_before=open_position["margin_used"],
+            close_percent=TP1_CLOSE_PERCENT_DEFAULT,
         )
 
-        released_margin = open_position["margin_used"] * (close_size / remaining_size) if remaining_size > 0 else 0.0
-        new_remaining_margin = round(open_position["margin_used"] - released_margin, 8)
+        close_size = accounting["close_size"]
+        released_margin = accounting["released_margin"]
+        new_remaining = accounting["remaining_size_after"]
+        new_remaining_margin = accounting["remaining_margin_after"]
 
         execution_id = insert_execution_report(
             account_id=account_id,
@@ -266,7 +261,6 @@ def apply_execution_report(payload: dict):
         )
 
         realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
-        new_remaining = round(remaining_size - close_size, 8)
 
         update_position_after_partial_exit(
             open_position["position_id"],
@@ -301,6 +295,7 @@ def apply_execution_report(payload: dict):
                 "symbol": symbol,
                 "fee_paid": fee_paid,
                 "realized_pnl": realized_pnl,
+                "partial_close_accounting": accounting,
             },
         )
 
@@ -317,6 +312,7 @@ def apply_execution_report(payload: dict):
                 "fill_price": fill_price,
                 "fee_paid": fee_paid,
                 "realized_pnl": realized_pnl,
+                "partial_close_accounting": accounting,
             },
         )
 
@@ -334,14 +330,18 @@ def apply_execution_report(payload: dict):
         if open_position["tp2_hit"]:
             return {"ok": False, "error": "tp2_already_hit", "execution_id": execution_id}
 
-        close_size = close_size_from_percent(
-            original_size,
-            TP2_CLOSE_PERCENT_DEFAULT,
-            remaining_size,
+        accounting = build_partial_close_accounting(
+            execution_type="TP2",
+            original_size=original_size,
+            remaining_size_before=remaining_size,
+            margin_used_before=open_position["margin_used"],
+            close_percent=TP2_CLOSE_PERCENT_DEFAULT,
         )
 
-        released_margin = open_position["margin_used"] * (close_size / remaining_size) if remaining_size > 0 else 0.0
-        new_remaining_margin = round(open_position["margin_used"] - released_margin, 8)
+        close_size = accounting["close_size"]
+        released_margin = accounting["released_margin"]
+        new_remaining = accounting["remaining_size_after"]
+        new_remaining_margin = accounting["remaining_margin_after"]
 
         execution_id = insert_execution_report(
             account_id=account_id,
@@ -357,7 +357,6 @@ def apply_execution_report(payload: dict):
         )
 
         realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
-        new_remaining = round(remaining_size - close_size, 8)
 
         update_position_after_partial_exit(
             open_position["position_id"],
@@ -392,6 +391,7 @@ def apply_execution_report(payload: dict):
                 "symbol": symbol,
                 "fee_paid": fee_paid,
                 "realized_pnl": realized_pnl,
+                "partial_close_accounting": accounting,
             },
         )
 
@@ -408,6 +408,7 @@ def apply_execution_report(payload: dict):
                 "fill_price": fill_price,
                 "fee_paid": fee_paid,
                 "realized_pnl": realized_pnl,
+                "partial_close_accounting": accounting,
             },
         )
 
@@ -436,10 +437,22 @@ def apply_execution_report(payload: dict):
             position_side=position_side,
         )
 
-        close_size = remaining_size
-        realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
+        accounting = build_partial_close_accounting(
+            execution_type="TP3",
+            original_size=original_size,
+            remaining_size_before=remaining_size,
+            margin_used_before=open_position["margin_used"],
+        )
 
-        released_margin = open_position["margin_used"]
+        close_size = accounting["close_size"]
+        released_margin = accounting["released_margin"]
+
+        realized_pnl = calculate_realized_pnl(
+            position_side,
+            open_position["entry_price"],
+            fill_price,
+            close_size,
+        )
 
         close_position(
             open_position["position_id"],
@@ -477,6 +490,7 @@ def apply_execution_report(payload: dict):
                 "symbol": symbol,
                 "fee_paid": fee_paid,
                 "realized_pnl": realized_pnl,
+                "partial_close_accounting": accounting,
             },
         )
 
@@ -499,6 +513,7 @@ def apply_execution_report(payload: dict):
                 "close_reason": "TP3",
                 "fee_paid": fee_paid,
                 "realized_pnl": realized_pnl,
+                "partial_close_accounting": accounting,
             },
         )
 
@@ -515,6 +530,7 @@ def apply_execution_report(payload: dict):
                 "fill_price": fill_price,
                 "fee_paid": fee_paid,
                 "realized_pnl": realized_pnl,
+                "partial_close_accounting": accounting,
             },
         )
 
@@ -531,8 +547,6 @@ def apply_execution_report(payload: dict):
         }
 
     if execution_type == "STOP_LOSS":
-        close_size = remaining_size
-
         execution_id = insert_execution_report(
             account_id=account_id,
             order_id=order_id,
@@ -546,9 +560,17 @@ def apply_execution_report(payload: dict):
             position_side=position_side,
         )
 
-        realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
+        accounting = build_partial_close_accounting(
+            execution_type="STOP_LOSS",
+            original_size=original_size,
+            remaining_size_before=remaining_size,
+            margin_used_before=open_position["margin_used"],
+        )
 
-        released_margin = open_position["margin_used"]
+        close_size = accounting["close_size"]
+        released_margin = accounting["released_margin"]
+
+        realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
 
         close_position(open_position["position_id"])
         apply_exit_balance_update(account_id, released_margin, realized_pnl, fee_paid)
@@ -583,6 +605,7 @@ def apply_execution_report(payload: dict):
                 "symbol": symbol,
                 "fee_paid": fee_paid,
                 "realized_pnl": realized_pnl,
+                "partial_close_accounting": accounting,
             },
         )
 
@@ -605,6 +628,7 @@ def apply_execution_report(payload: dict):
                 "close_reason": "STOP_LOSS",
                 "fee_paid": fee_paid,
                 "realized_pnl": realized_pnl,
+                "partial_close_accounting": accounting,
             },
         )
 
@@ -621,6 +645,7 @@ def apply_execution_report(payload: dict):
                 "fill_price": fill_price,
                 "fee_paid": fee_paid,
                 "realized_pnl": realized_pnl,
+                "partial_close_accounting": accounting,
             },
         )
 
