@@ -6,6 +6,20 @@ import os
 
 import requests
 
+from entry_fill_model import evaluate_entry_fill
+from paper_execution_contract import (
+    PAPER_EXECUTION_REPORT_VERSION,
+    PAPER_EXECUTION_VERSION,
+    build_entry_execution_report_v2,
+    build_entry_filled_result,
+    build_entry_pending_result,
+)
+from pending_entry_policy import (
+    PENDING_ENTRY_POLICY_VERSION,
+    build_pending_entry_policy_contract,
+    evaluate_pending_limit_lifecycle,
+)
+
 
 SERVICE_NAME = "paper-execution"
 PORT = int(os.getenv("PORT", "8080"))
@@ -18,6 +32,8 @@ API_GATEWAY_LATEST_PRICE_PATH = os.getenv("API_GATEWAY_LATEST_PRICE_PATH", "/mar
 LIMIT_FEE_PCT = float(os.getenv("LIMIT_FEE_PCT", "0.02"))
 MARKET_FEE_PCT = float(os.getenv("MARKET_FEE_PCT", "0.06"))
 MARKET_SLIPPAGE_PCT = float(os.getenv("MARKET_SLIPPAGE_PCT", "0.06"))
+
+RUNTIME_VERSION = "phase6_step3_pending_limit_lifecycle"
 
 
 def iso_now():
@@ -37,7 +53,6 @@ def apply_market_slippage(price: float, position_side: str, execution_type: str)
         if position_side == "short":
             return price * (1 - slip)
 
-    # exits
     if position_side == "long":
         return price * (1 - slip)
     if position_side == "short":
@@ -45,13 +60,16 @@ def apply_market_slippage(price: float, position_side: str, execution_type: str)
 
     return price
 
+
 def can_fill_stop_limit_now(candles: list[dict], stop_price: float) -> bool:
     return recent_candles_touch_limit(candles, stop_price)
+
 
 def apply_exit_fill_price(trigger_price: float, position_side: str, execution_type: str) -> float:
     if execution_type.startswith("TP") or execution_type == "STOP_LOSS":
         return trigger_price
     return apply_market_slippage(trigger_price, position_side, execution_type)
+
 
 def fetch_recent_candles(symbol: str, timeframe: str = "5m", limit: int = 3):
     try:
@@ -72,6 +90,7 @@ def fetch_recent_candles(symbol: str, timeframe: str = "5m", limit: int = 3):
         return None, "no_recent_candles"
 
     return candles, None
+
 
 def fetch_latest_price(symbol: str):
     try:
@@ -96,6 +115,7 @@ def fetch_latest_price(symbol: str):
 
     return float(price), None
 
+
 def get_order_trigger_price(order: dict):
     if order is None:
         return None
@@ -108,6 +128,7 @@ def get_order_trigger_price(order: dict):
         return None
 
     return float(value)
+
 
 def get_order_requested_price(order: dict):
     if order is None:
@@ -138,16 +159,8 @@ def get_stop_trigger_price(order: dict):
 
     return float(value)
 
+
 def get_tp_close_percent(payload: dict, key: str, default: float) -> float:
-    """
-    Read TP close percent from the approved Risk/Strategy payload.
-
-    Supports:
-      payload["tp1_close_percent"]
-      payload["take_profits"]["tp1"]["close_percent"]
-
-    Falls back to v1 defaults.
-    """
     direct_key = f"{key}_close_percent"
 
     try:
@@ -162,6 +175,7 @@ def get_tp_close_percent(payload: dict, key: str, default: float) -> float:
         pass
 
     return float(default)
+
 
 def fetch_open_position(account_id: int, symbol: str):
     try:
@@ -179,6 +193,7 @@ def fetch_open_position(account_id: int, symbol: str):
 
     return payload["position"], None
 
+
 def fetch_open_orders(account_id: int):
     try:
         r = requests.get(
@@ -195,6 +210,7 @@ def fetch_open_orders(account_id: int):
 
     return payload.get("items", []), None
 
+
 def get_symbol_protective_orders(account_id: int, symbol: str, linked_position_id: int):
     orders, error = fetch_open_orders(account_id)
     if error:
@@ -208,6 +224,7 @@ def get_symbol_protective_orders(account_id: int, symbol: str, linked_position_i
     ]
 
     return filtered, None
+
 
 def ensure_entry_order(payload: dict, order_type: str):
     try:
@@ -282,11 +299,13 @@ def send_execution_to_guardian(execution_event: dict):
 def candle_touches_limit(candle: dict, price: float) -> bool:
     return float(candle["low"]) <= price <= float(candle["high"])
 
+
 def recent_candles_touch_limit(candles: list[dict], price: float) -> bool:
     for candle in candles:
         if candle_touches_limit(candle, price):
             return True
     return False
+
 
 def evaluate_live_price_trigger(side: str, current_price: float, orders_by_role: dict, remaining_size: float):
     sl_order = orders_by_role.get("stop_loss")
@@ -321,6 +340,35 @@ def evaluate_live_price_trigger(side: str, current_price: float, orders_by_role:
 
     return None
 
+
+def build_entry_execution_from_fill(
+    *,
+    payload: dict,
+    order_id: int,
+    order_type: str,
+    fill_result: dict,
+    fee_pct: float,
+    notes: str,
+):
+    fill_price = float(fill_result["fill_price"])
+    size = float(payload["size"])
+    notional = fill_price * size
+    fee_paid = calc_fee(notional, fee_pct)
+
+    return build_entry_execution_report_v2(
+        payload=payload,
+        order_id=order_id,
+        order_type=order_type,
+        fill_price=fill_price,
+        filled_size=size,
+        fee_paid=fee_paid,
+        slippage_bps=float(fill_result.get("slippage_bps", 0.0)),
+        fill_source=fill_result.get("fill_source", "unknown"),
+        fill_reason=fill_result.get("fill_reason", "ENTRY_FILLED"),
+        notes=notes,
+    )
+
+
 def execute_market_entry(
     account_id: int,
     symbol: str,
@@ -329,6 +377,8 @@ def execute_market_entry(
     size: float,
     payload: dict,
     notes: str = "paper market entry fill",
+    candles: list[dict] | None = None,
+    latest_price: float | None = None,
 ):
     order_id, order_error = ensure_entry_order(payload, "market")
     if order_error:
@@ -336,52 +386,46 @@ def execute_market_entry(
 
     payload["order_id"] = order_id
 
-    slipped_price = apply_market_slippage(entry_price, position_side, "ENTRY")
-    notional = slipped_price * size
-    fee_paid = calc_fee(notional, MARKET_FEE_PCT)
+    fill_result = evaluate_entry_fill(
+        payload={**payload, "order_type": "market"},
+        candles=candles or [],
+        latest_price=latest_price,
+        market_slippage_pct=MARKET_SLIPPAGE_PCT,
+    )
+    if not fill_result.get("ok") or not fill_result.get("filled"):
+        return {
+            "ok": False,
+            "error": "market_entry_fill_failed",
+            "fill_result": fill_result,
+        }
 
-    execution_event = {
-        "account_id": account_id,
-        "order_id": order_id,
-        "symbol": symbol,
-        "position_side": position_side,
-        "execution_type": "ENTRY",
-        "order_type": "market",
-        "fill_price": slipped_price,
-        "filled_size": size,
-        "fee_paid": fee_paid,
-        "slippage_bps": MARKET_SLIPPAGE_PCT * 100,
-        "stop_loss": float(payload["stop_loss"]),
-        "tp1_price": float(payload["tp1_price"]),
-        "tp2_price": float(payload["tp2_price"]),
-        "tp3_price": float(payload["tp3_price"]),
-        "tp1_close_percent": get_tp_close_percent(payload, "tp1", 50),
-        "tp2_close_percent": get_tp_close_percent(payload, "tp2", 30),
-        "tp3_close_percent": get_tp_close_percent(payload, "tp3", 20),
-        "risk_amount": float(payload["risk_amount"]),
-        "leverage": float(payload.get("leverage", 1.0)),
-        "notes": notes,
-    }
+    execution_event = build_entry_execution_from_fill(
+        payload=payload,
+        order_id=order_id,
+        order_type="market",
+        fill_result=fill_result,
+        fee_pct=MARKET_FEE_PCT,
+        notes=notes,
+    )
 
     guardian_result, g_error = send_execution_to_guardian(execution_event)
     if g_error:
         return {"ok": False, "error": g_error}
 
-    return {
-        "ok": True,
-        "action": "ENTRY_FILLED",
-        "fill_method": "market",
-        "execution_event": execution_event,
-        "guardian_result": guardian_result,
-        "order_id": order_id,
-    }
+    return build_entry_filled_result(
+        fill_method="market",
+        execution_event=execution_event,
+        guardian_result=guardian_result,
+        order_id=order_id,
+        fill_model_context=fill_result.get("context", {}),
+    )
 
 
 def simulate_entry(payload: dict):
     account_id = int(payload["account_id"])
     symbol = payload["symbol"].upper()
     position_side = payload["position_side"].lower()
-    
+
     order_type = str(payload.get("order_type") or payload.get("entry_order_type") or "").lower()
     if order_type not in ("limit", "market"):
         return {"ok": False, "error": "unsupported_order_type"}
@@ -402,70 +446,91 @@ def simulate_entry(payload: dict):
     if error:
         return {"ok": False, "error": error}
 
-    if order_type == "limit":
-        if recent_candles_touch_limit(candles, entry_price):
-            notional = entry_price * size
-            fee_paid = calc_fee(notional, LIMIT_FEE_PCT)
+    latest_price, latest_price_error = fetch_latest_price(symbol)
+    if latest_price_error is not None:
+        latest_price = None
 
-            execution_event = {
-                "account_id": account_id,
-                "order_id": order_id,
-                "symbol": symbol,
-                "position_side": position_side,
-                "execution_type": "ENTRY",
-                "order_type": "limit",
-                "fill_price": entry_price,
-                "filled_size": size,
-                "fee_paid": fee_paid,
-                "slippage_bps": 0.0,
-                "stop_loss": float(payload["stop_loss"]),
-                "tp1_price": float(payload["tp1_price"]),
-                "tp2_price": float(payload["tp2_price"]),
-                "tp3_price": float(payload["tp3_price"]),
-                "tp1_close_percent": get_tp_close_percent(payload, "tp1", 50),
-                "tp2_close_percent": get_tp_close_percent(payload, "tp2", 30),
-                "tp3_close_percent": get_tp_close_percent(payload, "tp3", 20),
-                "risk_amount": float(payload["risk_amount"]),
-                "leverage": float(payload.get("leverage", 1.0)),
-                "notes": payload.get("notes", "paper limit entry fill")
-            }
+    fill_result = evaluate_entry_fill(
+        payload=payload,
+        candles=candles,
+        latest_price=latest_price,
+        market_slippage_pct=MARKET_SLIPPAGE_PCT,
+    )
+
+    if not fill_result.get("ok"):
+        return {
+            "ok": False,
+            "error": "entry_fill_model_rejected",
+            "fill_result": fill_result,
+        }
+
+    if order_type == "limit":
+        lifecycle = evaluate_pending_limit_lifecycle(
+            attempt_number=attempt_number,
+            max_attempts=max_attempts,
+            fill_result=fill_result,
+        )
+
+        if lifecycle["decision"] == "fill_now":
+            execution_event = build_entry_execution_from_fill(
+                payload=payload,
+                order_id=order_id,
+                order_type="limit",
+                fill_result=fill_result,
+                fee_pct=LIMIT_FEE_PCT,
+                notes=payload.get("notes", "paper limit entry fill"),
+            )
 
             guardian_result, g_error = send_execution_to_guardian(execution_event)
             if g_error:
                 return {"ok": False, "error": g_error}
 
-            return {
-                "ok": True,
-                "action": "ENTRY_FILLED",
-                "fill_method": "limit",
-                "execution_event": execution_event,
-                "guardian_result": guardian_result,
-                "order_id": order_id,
-            }
+            return build_entry_filled_result(
+                fill_method="limit",
+                execution_event=execution_event,
+                guardian_result=guardian_result,
+                order_id=order_id,
+                fill_model_context={
+                    **fill_result.get("context", {}),
+                    "pending_lifecycle": lifecycle,
+                },
+            )
 
-        if attempt_number < max_attempts:
+        if lifecycle["decision"] == "keep_pending":
             marked_open, mark_open_error = mark_entry_order_open(order_id)
             if not marked_open:
                 return {"ok": False, "error": mark_open_error}
 
-            return {
-                "ok": True,
-                "action": "ENTRY_PENDING",
-                "order_id": order_id,
-                "attempt_number": attempt_number,
-                "next_attempt_number": attempt_number + 1,
-                "reason_codes": ["LIMIT_NOT_TOUCHED"],
-            }
+            return build_entry_pending_result(
+                order_id=order_id,
+                attempt_number=attempt_number,
+                next_attempt_number=lifecycle["next_attempt_number"],
+                reason_codes=lifecycle["reason_codes"],
+                fill_model_context={
+                    **fill_result.get("context", {}),
+                    "pending_lifecycle": lifecycle,
+                },
+            )
 
-        return execute_market_entry(
-            account_id=account_id,
-            symbol=symbol,
-            position_side=position_side,
-            entry_price=entry_price,
-            size=size,
-            payload=payload,
-            notes="paper market fallback after limit max attempts",
-        )
+        if lifecycle["decision"] == "market_fallback":
+            fallback_payload = {
+                **payload,
+                "order_type": "market",
+                "entry_order_type": "market",
+                "fallback_from_order_id": order_id,
+                "fallback_reason_codes": lifecycle["reason_codes"],
+            }
+            return execute_market_entry(
+                account_id=account_id,
+                symbol=symbol,
+                position_side=position_side,
+                entry_price=entry_price,
+                size=size,
+                payload=fallback_payload,
+                notes="paper market fallback after limit max attempts",
+                candles=candles,
+                latest_price=latest_price,
+            )
 
     if order_type == "market":
         return execute_market_entry(
@@ -476,6 +541,8 @@ def simulate_entry(payload: dict):
             size=size,
             payload=payload,
             notes=payload.get("notes", "paper market entry fill"),
+            candles=candles,
+            latest_price=latest_price,
         )
 
     return {"ok": False, "error": "unsupported_order_type"}
@@ -597,7 +664,7 @@ def simulate_maintenance(payload: dict):
                     trigger_order = tp3_order
                     break
             else:
-                return {"ok": False, "error": "unsupported_position_side"}   
+                return {"ok": False, "error": "unsupported_position_side"}
 
     if execution_type is None:
         return {
@@ -680,7 +747,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({
                 "ok": True,
                 "service": SERVICE_NAME,
-                "timestamp": iso_now()
+                "timestamp": iso_now(),
+                "runtime_version": RUNTIME_VERSION,
+                "paper_execution_version": PAPER_EXECUTION_VERSION,
+                "paper_execution_report_version": PAPER_EXECUTION_REPORT_VERSION,
+                "pending_entry_policy_version": PENDING_ENTRY_POLICY_VERSION,
+                "pending_entry_policy": build_pending_entry_policy_contract(),
             })
             return
 
