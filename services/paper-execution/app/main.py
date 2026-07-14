@@ -20,6 +20,11 @@ from paper_execution_contract import (
     build_entry_filled_result,
     build_entry_pending_result,
 )
+from protective_order_policy import (
+    PROTECTIVE_ORDER_POLICY_VERSION,
+    build_protective_order_policy_contract,
+    validate_protective_order_set,
+)
 from pending_entry_policy import (
     PENDING_ENTRY_POLICY_VERSION,
     build_pending_entry_policy_contract,
@@ -39,7 +44,7 @@ LIMIT_FEE_PCT = float(os.getenv("LIMIT_FEE_PCT", "0.02"))
 MARKET_FEE_PCT = float(os.getenv("MARKET_FEE_PCT", "0.06"))
 MARKET_SLIPPAGE_PCT = float(os.getenv("MARKET_SLIPPAGE_PCT", "0.06"))
 
-RUNTIME_VERSION = "phase6_step4_execution_pricing_accounting"
+RUNTIME_VERSION = "phase6_step5_protective_order_lifecycle"
 
 
 def iso_now():
@@ -617,6 +622,18 @@ def simulate_maintenance(payload: dict):
     trigger_order = None
 
     orders_by_role = {o["role"]: o for o in protective_orders}
+    protective_validation = validate_protective_order_set(
+        position=position,
+        protective_orders=protective_orders,
+    )
+    if not protective_validation.get("ok"):
+        return {
+            "ok": False,
+            "error": "protective_order_set_invalid",
+            "reason_codes": protective_validation.get("reason_codes", []),
+            "protective_order_validation": protective_validation,
+        }
+
     latest_price, latest_price_error = fetch_latest_price(symbol)
     if latest_price_error is None:
         live_trigger = evaluate_live_price_trigger(
@@ -710,7 +727,8 @@ def simulate_maintenance(payload: dict):
     if execution_type is None:
         return {
             "ok": True,
-            "action": "NO_ACTION"
+            "action": "NO_ACTION",
+            "protective_order_validation": protective_validation,
         }
 
     if execution_type == "STOP_LOSS":
@@ -770,7 +788,8 @@ def simulate_maintenance(payload: dict):
         "ok": True,
         "action": f"{execution_type}_TRIGGERED",
         "execution_event": execution_event,
-        "guardian_result": guardian_result
+        "guardian_result": guardian_result,
+        "protective_order_validation": protective_validation,
     }
 
 
@@ -794,8 +813,10 @@ class Handler(BaseHTTPRequestHandler):
                 "paper_execution_report_version": PAPER_EXECUTION_REPORT_VERSION,
                 "pending_entry_policy_version": PENDING_ENTRY_POLICY_VERSION,
                 "execution_pricing_version": EXECUTION_PRICING_VERSION,
+                "protective_order_policy_version": PROTECTIVE_ORDER_POLICY_VERSION,
                 "pending_entry_policy": build_pending_entry_policy_contract(),
                 "execution_pricing": pricing_contract(),
+                "protective_order_policy": build_protective_order_policy_contract(),
             })
             return
 
