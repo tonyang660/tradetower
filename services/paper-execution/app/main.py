@@ -7,6 +7,12 @@ import os
 import requests
 
 from entry_fill_model import evaluate_entry_fill
+from execution_pricing import (
+    EXECUTION_PRICING_VERSION,
+    build_entry_pricing_context,
+    extract_reference_prices,
+    pricing_contract,
+)
 from paper_execution_contract import (
     PAPER_EXECUTION_REPORT_VERSION,
     PAPER_EXECUTION_VERSION,
@@ -33,7 +39,7 @@ LIMIT_FEE_PCT = float(os.getenv("LIMIT_FEE_PCT", "0.02"))
 MARKET_FEE_PCT = float(os.getenv("MARKET_FEE_PCT", "0.06"))
 MARKET_SLIPPAGE_PCT = float(os.getenv("MARKET_SLIPPAGE_PCT", "0.06"))
 
-RUNTIME_VERSION = "phase6_step3_pending_limit_lifecycle"
+RUNTIME_VERSION = "phase6_step4_execution_pricing_accounting"
 
 
 def iso_now():
@@ -92,7 +98,7 @@ def fetch_recent_candles(symbol: str, timeframe: str = "5m", limit: int = 3):
     return candles, None
 
 
-def fetch_latest_price(symbol: str):
+def fetch_latest_ticker(symbol: str):
     try:
         r = requests.get(
             f"{API_GATEWAY_BASE_URL}{API_GATEWAY_LATEST_PRICE_PATH}",
@@ -101,14 +107,22 @@ def fetch_latest_price(symbol: str):
         )
         payload = r.json()
     except Exception as e:
-        return None, f"latest_price_request_failed: {str(e)}"
+        return None, f"latest_ticker_request_failed: {str(e)}"
 
     if not payload.get("ok", False):
-        return None, payload.get("error", "latest_price_fetch_failed")
+        return None, payload.get("error", "latest_ticker_fetch_failed")
 
-    price = payload.get("mark_price")
+    return payload, None
+
+
+def fetch_latest_price(symbol: str):
+    ticker, error = fetch_latest_ticker(symbol)
+    if error:
+        return None, error
+
+    price = ticker.get("mark_price")
     if price is None:
-        price = payload.get("last_price")
+        price = ticker.get("last_price")
 
     if price is None:
         return None, "latest_price_missing_in_response"
@@ -349,24 +363,37 @@ def build_entry_execution_from_fill(
     fill_result: dict,
     fee_pct: float,
     notes: str,
+    reference_prices: dict | None = None,
 ):
-    fill_price = float(fill_result["fill_price"])
-    size = float(payload["size"])
-    notional = fill_price * size
-    fee_paid = calc_fee(notional, fee_pct)
-
-    return build_entry_execution_report_v2(
+    pricing = build_entry_pricing_context(
         payload=payload,
-        order_id=order_id,
         order_type=order_type,
-        fill_price=fill_price,
-        filled_size=size,
-        fee_paid=fee_paid,
+        fill_price=float(fill_result["fill_price"]),
+        size=float(payload["size"]),
+        fee_pct=fee_pct,
         slippage_bps=float(fill_result.get("slippage_bps", 0.0)),
         fill_source=fill_result.get("fill_source", "unknown"),
         fill_reason=fill_result.get("fill_reason", "ENTRY_FILLED"),
+        reference_prices=reference_prices,
+    )
+
+    execution_event = build_entry_execution_report_v2(
+        payload=payload,
+        order_id=order_id,
+        order_type=order_type,
+        fill_price=pricing["fill_price"],
+        filled_size=pricing["filled_size"],
+        fee_paid=pricing["fee_paid"],
+        slippage_bps=pricing["slippage_bps"],
+        fill_source=pricing["fill_source"],
+        fill_reason=pricing["fill_reason"],
         notes=notes,
     )
+    execution_event["notional"] = pricing["notional"]
+    execution_event["fee_pct"] = pricing["fee_pct"]
+    execution_event["pricing_context"] = pricing
+
+    return execution_event
 
 
 def execute_market_entry(
@@ -379,6 +406,7 @@ def execute_market_entry(
     notes: str = "paper market entry fill",
     candles: list[dict] | None = None,
     latest_price: float | None = None,
+    latest_ticker: dict | None = None,
 ):
     order_id, order_error = ensure_entry_order(payload, "market")
     if order_error:
@@ -386,10 +414,14 @@ def execute_market_entry(
 
     payload["order_id"] = order_id
 
+    reference_prices = extract_reference_prices(
+        ticker_payload=latest_ticker,
+        fallback_price=entry_price,
+    )
     fill_result = evaluate_entry_fill(
         payload={**payload, "order_type": "market"},
         candles=candles or [],
-        latest_price=latest_price,
+        latest_price=reference_prices["reference_price"],
         market_slippage_pct=MARKET_SLIPPAGE_PCT,
     )
     if not fill_result.get("ok") or not fill_result.get("filled"):
@@ -406,6 +438,7 @@ def execute_market_entry(
         fill_result=fill_result,
         fee_pct=MARKET_FEE_PCT,
         notes=notes,
+        reference_prices=reference_prices,
     )
 
     guardian_result, g_error = send_execution_to_guardian(execution_event)
@@ -446,14 +479,19 @@ def simulate_entry(payload: dict):
     if error:
         return {"ok": False, "error": error}
 
-    latest_price, latest_price_error = fetch_latest_price(symbol)
-    if latest_price_error is not None:
-        latest_price = None
+    latest_ticker, latest_ticker_error = fetch_latest_ticker(symbol)
+    if latest_ticker_error is not None:
+        latest_ticker = None
+
+    reference_prices = extract_reference_prices(
+        ticker_payload=latest_ticker,
+        fallback_price=entry_price,
+    )
 
     fill_result = evaluate_entry_fill(
         payload=payload,
         candles=candles,
-        latest_price=latest_price,
+        latest_price=reference_prices["reference_price"],
         market_slippage_pct=MARKET_SLIPPAGE_PCT,
     )
 
@@ -479,6 +517,7 @@ def simulate_entry(payload: dict):
                 fill_result=fill_result,
                 fee_pct=LIMIT_FEE_PCT,
                 notes=payload.get("notes", "paper limit entry fill"),
+                reference_prices=reference_prices,
             )
 
             guardian_result, g_error = send_execution_to_guardian(execution_event)
@@ -493,6 +532,7 @@ def simulate_entry(payload: dict):
                 fill_model_context={
                     **fill_result.get("context", {}),
                     "pending_lifecycle": lifecycle,
+                    "reference_prices": reference_prices,
                 },
             )
 
@@ -509,6 +549,7 @@ def simulate_entry(payload: dict):
                 fill_model_context={
                     **fill_result.get("context", {}),
                     "pending_lifecycle": lifecycle,
+                    "reference_prices": reference_prices,
                 },
             )
 
@@ -529,7 +570,7 @@ def simulate_entry(payload: dict):
                 payload=fallback_payload,
                 notes="paper market fallback after limit max attempts",
                 candles=candles,
-                latest_price=latest_price,
+                latest_ticker=latest_ticker,
             )
 
     if order_type == "market":
@@ -542,7 +583,7 @@ def simulate_entry(payload: dict):
             payload=payload,
             notes=payload.get("notes", "paper market entry fill"),
             candles=candles,
-            latest_price=latest_price,
+            latest_ticker=latest_ticker,
         )
 
     return {"ok": False, "error": "unsupported_order_type"}
@@ -752,7 +793,9 @@ class Handler(BaseHTTPRequestHandler):
                 "paper_execution_version": PAPER_EXECUTION_VERSION,
                 "paper_execution_report_version": PAPER_EXECUTION_REPORT_VERSION,
                 "pending_entry_policy_version": PENDING_ENTRY_POLICY_VERSION,
+                "execution_pricing_version": EXECUTION_PRICING_VERSION,
                 "pending_entry_policy": build_pending_entry_policy_contract(),
+                "execution_pricing": pricing_contract(),
             })
             return
 
