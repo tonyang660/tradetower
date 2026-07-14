@@ -1,6 +1,10 @@
 from config import ENTRY_RETRY_MAX_ATTEMPTS, PENDING_ENTRY_LOOP_INTERVAL_SECONDS
 
 
+RISK_APPROVAL_PAYLOAD_VERSION_V2 = "phase5_step10_risk_approval_payload_v2"
+SCHEDULER_RISK_COMPATIBILITY_VERSION = "phase5_step11_scheduler_paper_compatibility"
+
+
 def build_pending_entry_status(
     pending_entries: list[dict] | None = None,
 ):
@@ -20,6 +24,8 @@ def build_pending_entry_status(
             "entry_price": order.get("requested_price"),
             "originating_cycle_id": order.get("originating_cycle_id"),
             "selected_strategy": context.get("selected_strategy"),
+            "risk_approval_payload_version": context.get("risk_approval_payload_version"),
+            "risk_decision": context.get("risk_decision"),
         })
 
     items.sort(key=lambda x: x["symbol"] or "")
@@ -36,8 +42,6 @@ def build_pending_entry_status(
 
 def normalize_position_side(payload: dict) -> str | None:
     """
-    Phase 4 Step 12 compatibility helper.
-
     Strategy Signal v2 emits:
         decision      = legacy decision for current Scheduler: trade/observe/no_trade
         v2_decision   = trade_candidate/observe/no_trade
@@ -96,9 +100,43 @@ def extract_stop_loss(strategy_result: dict):
     return proposed_trade.get("stop_loss")
 
 
+def extract_btc_macro_context(strategy_result: dict) -> dict:
+    for key in ("btc_macro_policy", "btc_macro_context"):
+        value = strategy_result.get(key)
+        if isinstance(value, dict):
+            return value
+
+    market_context = strategy_result.get("market_context") or {}
+    if isinstance(market_context, dict):
+        value = market_context.get("btc_macro_policy") or market_context.get("btc_macro_context")
+        if isinstance(value, dict):
+            return value
+
+    mtf_context = strategy_result.get("mtf_context") or {}
+    if isinstance(mtf_context, dict):
+        value = mtf_context.get("btc_macro_policy") or mtf_context.get("btc_macro_context")
+        if isinstance(value, dict):
+            return value
+
+    proposed_trade = strategy_result.get("proposed_trade") or {}
+    if isinstance(proposed_trade, dict):
+        for key in ("btc_macro_policy", "btc_macro_context"):
+            value = proposed_trade.get(key)
+            if isinstance(value, dict):
+                return value
+
+    flat = {}
+    for key in ("position_size_mult", "btc_position_mult", "score_threshold_adj", "max_signals_adj"):
+        if strategy_result.get(key) is not None:
+            flat[key] = strategy_result[key]
+    return flat
+
+
 def build_risk_payload_from_strategy(account_id: int, strategy_result: dict):
     position_side = normalize_position_side(strategy_result)
-    return {
+    btc_macro_context = extract_btc_macro_context(strategy_result)
+
+    payload = {
         "account_id": account_id,
         "symbol": strategy_result["symbol"],
         "position_side": position_side,
@@ -111,14 +149,77 @@ def build_risk_payload_from_strategy(account_id: int, strategy_result: dict):
             "v2_decision": strategy_result.get("v2_decision"),
             "legacy_decision": strategy_result.get("legacy_decision"),
             "selected_strategy": strategy_result.get("selected_strategy"),
+            "regime": strategy_result.get("regime"),
             "score": strategy_result.get("score") or strategy_result.get("confidence"),
+            "confidence": strategy_result.get("confidence") or strategy_result.get("score"),
             "reason_tags": strategy_result.get("reason_tags", []),
         },
     }
 
+    if btc_macro_context:
+        payload["btc_macro_context"] = btc_macro_context
+        payload["strategy_signal"]["btc_macro_context"] = btc_macro_context
+
+    return payload
+
+
+def is_risk_approved(risk_result: dict) -> bool:
+    if not isinstance(risk_result, dict):
+        return False
+    if not risk_result.get("ok"):
+        return False
+    if risk_result.get("approved") is True:
+        return True
+    return str(risk_result.get("risk_decision") or "").lower() == "approved"
+
+
+def normalize_risk_order_type(risk_result: dict, fallback: str | None = None) -> str | None:
+    value = risk_result.get("entry_order_type") or risk_result.get("order_type") or fallback
+    if value:
+        return str(value).lower()
+    return None
+
+
+def required_risk_payload_fields_missing(risk_result: dict) -> list[str]:
+    required = [
+        "symbol",
+        "position_side",
+        "entry_price",
+        "stop_loss",
+        "risk_amount",
+        "size",
+        "notional",
+        "leverage",
+        "margin_required",
+        "take_profits",
+    ]
+    return [
+        field
+        for field in required
+        if risk_result.get(field) is None
+    ]
+
+
+def summarize_risk_result_for_cycle(risk_result: dict) -> dict:
+    return {
+        "symbol": risk_result.get("symbol"),
+        "ok": bool(risk_result.get("ok")),
+        "approved": bool(risk_result.get("approved")),
+        "risk_decision": risk_result.get("risk_decision"),
+        "risk_approval_payload_version": risk_result.get("risk_approval_payload_version"),
+        "runtime_version": risk_result.get("runtime_version"),
+        "reason_codes": risk_result.get("reason_codes", []),
+        "risk_amount": risk_result.get("risk_amount"),
+        "base_risk_amount": risk_result.get("base_risk_amount"),
+        "risk_amount_multiplier": risk_result.get("risk_amount_multiplier"),
+        "size": risk_result.get("size"),
+        "notional": risk_result.get("notional"),
+        "leverage": risk_result.get("leverage"),
+    }
+
 
 def build_repriced_risk_payload(account_id: int, pending_payload: dict, new_entry_price: float):
-    return {
+    payload = {
         "account_id": account_id,
         "symbol": pending_payload["symbol"],
         "position_side": pending_payload["position_side"],
@@ -128,25 +229,37 @@ def build_repriced_risk_payload(account_id: int, pending_payload: dict, new_entr
         "take_profits": pending_payload.get("take_profits", {}),
     }
 
+    btc_macro_context = pending_payload.get("btc_macro_context")
+    if isinstance(btc_macro_context, dict):
+        payload["btc_macro_context"] = btc_macro_context
+
+    strategy_signal = pending_payload.get("strategy_signal")
+    if isinstance(strategy_signal, dict):
+        payload["strategy_signal"] = strategy_signal
+
+    return payload
+
 
 def build_repriced_paper_payload(account_id: int, pending_payload: dict, risk_result: dict, new_entry_price: float):
     payload = {
         "account_id": account_id,
-        "symbol": pending_payload["symbol"],
+        "symbol": risk_result.get("symbol") or pending_payload["symbol"],
         "selected_strategy": pending_payload.get("selected_strategy"),
         "regime": pending_payload.get("regime"),
         "strategy_confidence": pending_payload.get("strategy_confidence"),
         "strategy_reason_tags": pending_payload.get("strategy_reason_tags", []),
-        "position_side": pending_payload["position_side"],
-        "order_type": "limit",
+        "position_side": risk_result.get("position_side") or pending_payload["position_side"],
+        "order_type": normalize_risk_order_type(risk_result, "limit"),
         "entry_price": new_entry_price,
-        "stop_loss": float(pending_payload["stop_loss"]),
-        "take_profits": pending_payload.get("take_profits", {}),
+        "stop_loss": risk_result.get("stop_loss", float(pending_payload["stop_loss"])),
+        "take_profits": risk_result.get("take_profits") or pending_payload.get("take_profits", {}),
+        "scheduler_risk_compatibility_version": SCHEDULER_RISK_COMPATIBILITY_VERSION,
     }
 
     if isinstance(risk_result, dict):
         payload.update(risk_result)
 
+    payload["order_type"] = normalize_risk_order_type(payload, "limit")
     payload["attempt_number"] = int(pending_payload.get("attempt_number", 1))
     payload["max_attempts"] = ENTRY_RETRY_MAX_ATTEMPTS
 
@@ -164,23 +277,36 @@ def build_paper_execution_payload(
     attempt_number: int = 1,
     max_attempts: int = ENTRY_RETRY_MAX_ATTEMPTS,
 ):
-    position_side = normalize_position_side(strategy_result)
+    """
+    Build the entry payload from the finalized Risk Approval v2 result.
+
+    Strategy fields are retained as context, but execution-critical fields come
+    from Risk Engine after sizing, leverage, portfolio, correlation, drawdown,
+    and BTC macro checks.
+    """
+    position_side = risk_result.get("position_side") or normalize_position_side(strategy_result)
+    order_type = normalize_risk_order_type(
+        risk_result,
+        extract_entry_order_type(strategy_result),
+    )
+
     payload = {
         "account_id": account_id,
-        "symbol": strategy_result["symbol"],
+        "symbol": risk_result.get("symbol") or strategy_result["symbol"],
         "selected_strategy": strategy_result.get("selected_strategy"),
         "regime": strategy_result.get("regime"),
         "strategy_confidence": strategy_result.get("confidence") or strategy_result.get("score"),
         "strategy_reason_tags": strategy_result.get("reason_tags", []),
         "position_side": position_side,
-        "order_type": extract_entry_order_type(strategy_result),
-        "entry_price": extract_entry_price(strategy_result),
-        "stop_loss": extract_stop_loss(strategy_result),
-        "take_profits": extract_take_profits(strategy_result),
+        "order_type": order_type,
+        "entry_price": risk_result.get("entry_price", extract_entry_price(strategy_result)),
+        "stop_loss": risk_result.get("stop_loss", extract_stop_loss(strategy_result)),
+        "take_profits": risk_result.get("take_profits") or extract_take_profits(strategy_result),
         "attempt_number": int(attempt_number),
         "max_attempts": int(max_attempts),
         "v2_decision": strategy_result.get("v2_decision"),
         "legacy_decision": strategy_result.get("legacy_decision"),
+        "scheduler_risk_compatibility_version": SCHEDULER_RISK_COMPATIBILITY_VERSION,
     }
 
     if cycle_id is not None:
@@ -190,11 +316,11 @@ def build_paper_execution_payload(
     if isinstance(risk_result, dict):
         payload.update(risk_result)
 
-    if "entry_order_type" in payload and "order_type" not in payload:
-        payload["order_type"] = payload["entry_order_type"]
-
-    if "order_type" not in payload and payload.get("entry_order_type"):
-        payload["order_type"] = payload["entry_order_type"]
+    payload["order_type"] = normalize_risk_order_type(payload, order_type)
+    payload["position_side"] = payload.get("position_side") or position_side
+    payload["entry_price"] = payload.get("entry_price")
+    payload["stop_loss"] = payload.get("stop_loss")
+    payload["take_profits"] = payload.get("take_profits") or {}
 
     return payload
 
@@ -211,20 +337,6 @@ def _candidate_symbol(item: dict) -> str | None:
 
 
 def extract_candidate_symbols(candidate_payload: dict):
-    """
-    Return only symbols explicitly emitted in Candidate Filter's `candidates`
-    bucket.
-
-    This is the scheduler-side safety boundary for Phase 3.5:
-    - candidates -> Strategy Engine
-    - rejected -> skip
-    - unavailable -> skip
-
-    Backward compatibility:
-    Older candidate-filter responses may not include candidate_status, so items
-    inside the candidates list are treated as passable unless they explicitly say
-    rejected/unavailable.
-    """
     symbols = []
     seen = set()
 
@@ -251,38 +363,16 @@ def extract_candidate_symbols(candidate_payload: dict):
 
 
 def build_candidate_filter_cycle_summary(candidate_payload: dict) -> dict:
-    """
-    Build a compact scheduler summary that makes Candidate Filter routing clear.
-    The full candidate filter payload is still stored separately.
-    """
     candidates = candidate_payload.get("candidates", []) or []
     rejected = candidate_payload.get("rejected", []) or []
     unavailable = candidate_payload.get("unavailable", []) or []
 
-    candidate_symbols = extract_candidate_symbols(candidate_payload)
-    rejected_symbols = sorted([
-        symbol for symbol in (_candidate_symbol(item) for item in rejected)
-        if symbol
-    ])
-    unavailable_symbols = sorted([
-        symbol for symbol in (_candidate_symbol(item) for item in unavailable)
-        if symbol
-    ])
-
     return {
-        "ok": bool(candidate_payload.get("ok", False)),
         "schema_version": candidate_payload.get("schema_version"),
-        "runtime_version": candidate_payload.get("runtime_version"),
         "candidate_filter_mode": candidate_payload.get("candidate_filter_mode"),
         "input_symbols_count": candidate_payload.get("input_symbols_count"),
         "candidate_count": len(candidates),
         "rejected_count": len(rejected),
         "unavailable_count": len(unavailable),
-        "candidate_symbols_for_strategy_engine": candidate_symbols,
-        "rejected_symbols_skipped": rejected_symbols,
-        "unavailable_symbols_skipped": unavailable_symbols,
-        "routing_policy": (
-            "Only Candidate Filter `candidates` are sent to Strategy Engine. "
-            "`rejected` and `unavailable` are logged and skipped."
-        ),
+        "candidate_symbols": extract_candidate_symbols(candidate_payload),
     }

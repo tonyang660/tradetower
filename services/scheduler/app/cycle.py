@@ -24,6 +24,9 @@ from cycle_utils import (
     build_paper_execution_payload,
     build_risk_payload_from_strategy,
     extract_candidate_symbols,
+    is_risk_approved,
+    required_risk_payload_fields_missing,
+    summarize_risk_result_for_cycle,
 )
 from execution_router import execute_entry
 from market_data import refresh_symbol_candles
@@ -72,6 +75,7 @@ def run_one_cycle():
             "checked": 0,
             "approved": 0,
             "results": [],
+            "compatibility_version": "phase5_step11_scheduler_paper_compatibility",
         },
         "final_entry_gate": {
             "checked": 0,
@@ -83,6 +87,7 @@ def run_one_cycle():
             "fills": 0,
             "pending_retries": 0,
             "results": [],
+            "compatibility_version": "phase5_step11_scheduler_paper_compatibility",
         },
         "errors": [],
     }
@@ -186,8 +191,6 @@ def run_one_cycle():
                 "unavailable": [],
             }
 
-        # Store the full payload for diagnostics/evaluator analysis, but route
-        # only the compact candidate list to Strategy Engine.
         summary["candidate_filter"] = candidate_filter_payload
         summary["candidate_filter_summary"] = build_candidate_filter_cycle_summary(
             candidate_filter_payload
@@ -235,19 +238,39 @@ def run_one_cycle():
                     "symbol": strategy_payload.get("symbol"),
                     "ok": False,
                     "approved": False,
+                    "risk_decision": "rejected",
                     "reason_codes": [risk_error],
                 })
                 continue
 
             summary["risk_engine"]["checked"] += 1
+
+            if isinstance(risk_result, dict):
+                risk_result["scheduler_risk_summary"] = summarize_risk_result_for_cycle(
+                    risk_result
+                )
             summary["risk_engine"]["results"].append(risk_result)
 
-            if risk_result.get("approved"):
+            if is_risk_approved(risk_result):
+                missing_fields = required_risk_payload_fields_missing(risk_result)
+                if missing_fields:
+                    risk_result["approved"] = False
+                    risk_result["risk_decision"] = "rejected"
+                    risk_result.setdefault("reason_codes", []).append(
+                        "RISK_APPROVAL_PAYLOAD_MISSING_FIELDS"
+                    )
+                    risk_result["missing_fields"] = missing_fields
+                    summary["errors"].append(
+                        f"risk_approval_payload_missing_fields_{risk_result.get('symbol')}:"
+                        f"{','.join(missing_fields)}"
+                    )
+                    continue
+
                 summary["risk_engine"]["approved"] += 1
 
         approved_risk_results = [
             item for item in summary["risk_engine"]["results"]
-            if item.get("ok") and item.get("approved")
+            if is_risk_approved(item)
         ]
 
         for risk_result in approved_risk_results:
