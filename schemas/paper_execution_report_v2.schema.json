@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tradetower.local/schemas/paper_execution_report_v2.schema.json",
+  "title": "PaperExecutionReportV2",
+  "type": "object",
+  "required": [
+    "ok",
+    "paper_execution_version",
+    "paper_execution_report_version",
+    "execution_report_type",
+    "execution_scope",
+    "account_id",
+    "order_id",
+    "symbol",
+    "position_side",
+    "execution_type",
+    "order_type",
+    "fill_price",
+    "filled_size",
+    "fee_paid",
+    "slippage_bps",
+    "risk_amount",
+    "leverage"
+  ],
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "paper_execution_version": {
+      "const": "paper_execution_v2"
+    },
+    "paper_execution_report_version": {
+      "const": "phase6_step1_paper_execution_report_v2"
+    },
+    "execution_report_type": {
+      "enum": [
+        "entry_fill",
+        "exit_fill"
+      ]
+    },
+    "execution_scope": {
+      "enum": [
+        "paper"
+      ]
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "account_id": {
+      "type": "integer"
+    },
+    "order_id": {
+      "type": "integer"
+    },
+    "symbol": {
+      "type": "string"
+    },
+    "position_side": {
+      "enum": [
+        "long",
+        "short"
+      ]
+    },
+    "execution_type": {
+      "type": "string"
+    },
+    "order_type": {
+      "enum": [
+        "limit",
+        "market"
+      ]
+    },
+    "fill_price": {
+      "type": "number"
+    },
+    "filled_size": {
+      "type": "number"
+    },
+    "fee_paid": {
+      "type": "number"
+    },
+    "slippage_bps": {
+      "type": "number"
+    },
+    "stop_loss": {
+      "type": "number"
+    },
+    "tp1_price": {
+      "type": "number"
+    },
+    "tp2_price": {
+      "type": "number"
+    },
+    "tp3_price": {
+      "type": "number"
+    },
+    "tp1_close_percent": {
+      "type": "number"
+    },
+    "tp2_close_percent": {
+      "type": "number"
+    },
+    "tp3_close_percent": {
+      "type": "number"
+    },
+    "risk_amount": {
+      "type": "number"
+    },
+    "leverage": {
+      "type": "number"
+    },
+    "fill_source": {
+      "type": "string"
+    },
+    "fill_reason": {
+      "type": "string"
+    },
+    "execution_context": {
+      "type": "object"
+    }
+  }
+}

@@ -1,7 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://tradetower.local/schemas/risk_approval_v2.schema.json",
-  "title": "RiskApprovalV2",
+  "title": "RiskApprovalV2Deprecated",
+  "description": "Deprecated early Phase 5 risk approval contract. Use schemas/risk_approval_payload_v2.schema.json instead.",
+  "deprecated": true,
+  "replaced_by": "risk_approval_payload_v2.schema.json",
+  "replacement_payload_version": "phase5_step10_risk_approval_payload_v2",
   "type": "object",
   "required": [
     "ok",
