@@ -6,6 +6,11 @@ import os
 
 import requests
 
+from btc_macro_policy import (
+    BTC_MACRO_POLICY_VERSION,
+    build_btc_macro_policy_contract,
+    evaluate_btc_macro_risk_adjustment,
+)
 from correlation_policy import (
     CORRELATION_POLICY_VERSION,
     build_correlation_policy_contract,
@@ -61,7 +66,7 @@ TP1_CLOSE_PERCENT = 50
 TP2_CLOSE_PERCENT = 30
 TP3_CLOSE_PERCENT = 20
 
-RUNTIME_VERSION = "phase5_step8_weekly_drawdown_threshold_penalty"
+RUNTIME_VERSION = "phase5_step9_btc_macro_risk_adjustment"
 
 WEEKLY_DRAWDOWN_THRESHOLD_PCT = float(os.getenv("WEEKLY_DRAWDOWN_THRESHOLD_PCT", "3.0"))
 WEEKLY_DRAWDOWN_SCORE_PENALTY = int(os.getenv("WEEKLY_DRAWDOWN_SCORE_PENALTY", "15"))
@@ -387,6 +392,8 @@ def build_position_sizing(
     side: str,
     entry: float,
     stop: float,
+    risk_amount_multiplier: float = 1.0,
+    risk_adjustment_context: dict | None = None,
 ) -> dict:
     base_risk = calculate_base_risk_amount(
         equity,
@@ -402,7 +409,10 @@ def build_position_sizing(
             "stop_distance": stop_distance,
         }
 
-    risk_amount = float(base_risk["risk_amount"])
+    base_risk_amount = float(base_risk["risk_amount"])
+    risk_amount_multiplier = max(0.0, min(2.0, float(risk_amount_multiplier)))
+    risk_amount = base_risk_amount * risk_amount_multiplier
+
     size = risk_amount / stop_distance
     notional = size * entry
 
@@ -412,6 +422,9 @@ def build_position_sizing(
         "risk_policy_version": RISK_POLICY_VERSION,
         "runtime_version": RUNTIME_VERSION,
         "dynamic_risk": base_risk,
+        "risk_adjustment_context": risk_adjustment_context or {},
+        "risk_amount_multiplier": round(risk_amount_multiplier, 8),
+        "base_risk_amount": round(base_risk_amount, 8),
         "risk_pct": base_risk["risk_pct"],
         "risk_amount": round(risk_amount, 8),
         "stop_distance": round(stop_distance, 8),
@@ -532,11 +545,23 @@ def plan_trade(payload: dict):
     equity = float(guardian_status["equity"])
     cash_balance = float(guardian_status["cash_balance"])
 
+    btc_macro_result = evaluate_btc_macro_risk_adjustment(
+        payload=working_payload,
+        base_risk_amount=calculate_base_risk_amount(
+            equity,
+            max_risk_pct_ceiling=MAX_RISK_PCT,
+        )["risk_amount"],
+    )
+
     sizing = build_position_sizing(
         equity=equity,
         side=side,
         entry=entry,
         stop=stop,
+        risk_amount_multiplier=btc_macro_result["position_size_mult"],
+        risk_adjustment_context={
+            "btc_macro": btc_macro_result,
+        },
     )
     if not sizing.get("ok"):
         return build_rejection(
@@ -648,6 +673,7 @@ def plan_trade(payload: dict):
             correlation_result.get("reason_codes", ["CORRELATION_GROUP_LIMIT_REACHED"]),
             context={
                 "runtime_version": RUNTIME_VERSION,
+                "btc_macro_policy_version": BTC_MACRO_POLICY_VERSION,
                 "correlation_policy_version": CORRELATION_POLICY_VERSION,
                 "correlation_result": correlation_result,
                 "portfolio_result": portfolio_result,
@@ -694,6 +720,7 @@ def plan_trade(payload: dict):
         "liquidation_buffer_pct": round(leverage_result["liquidation_buffer_pct"], 6),
         "dynamic_risk": sizing["dynamic_risk"],
         "weekly_drawdown_context": weekly_drawdown_result,
+        "btc_macro_context": btc_macro_result,
         "leverage_context": {
             "candidates": leverage_result.get("candidates", []),
             "candidate_notes": leverage_result.get("candidate_notes", []),
@@ -742,6 +769,7 @@ class Handler(BaseHTTPRequestHandler):
                 "max_risk_pct_ceiling": MAX_RISK_PCT,
                 "leverage_policy": build_leverage_policy_contract(),
                 "portfolio_policy": build_portfolio_policy_contract(),
+                "btc_macro_policy": build_btc_macro_policy_contract(),
                 "correlation_policy": build_correlation_policy_contract(),
                 "weekly_drawdown_policy": build_weekly_drawdown_policy_contract(),
                 "phase4_step12_tp_policy": {
