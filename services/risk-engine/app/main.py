@@ -31,6 +31,12 @@ from weekly_drawdown_policy import (
     build_weekly_drawdown_policy_contract,
     evaluate_weekly_drawdown_threshold,
 )
+from risk_approval_payload import (
+    RISK_APPROVAL_PAYLOAD_VERSION,
+    build_risk_approval_payload_contract,
+    build_risk_approval_payload_v2,
+    build_risk_rejection_payload_v2,
+)
 from risk_policy import (
     RISK_ENGINE_VERSION,
     RISK_POLICY_VERSION,
@@ -66,7 +72,7 @@ TP1_CLOSE_PERCENT = 50
 TP2_CLOSE_PERCENT = 30
 TP3_CLOSE_PERCENT = 20
 
-RUNTIME_VERSION = "phase5_step9_btc_macro_risk_adjustment"
+RUNTIME_VERSION = "phase5_step10_risk_approval_payload_v2"
 
 WEEKLY_DRAWDOWN_THRESHOLD_PCT = float(os.getenv("WEEKLY_DRAWDOWN_THRESHOLD_PCT", "3.0"))
 WEEKLY_DRAWDOWN_SCORE_PENALTY = int(os.getenv("WEEKLY_DRAWDOWN_SCORE_PENALTY", "15"))
@@ -120,9 +126,6 @@ def fetch_guardian_status(account_id: int):
     return payload, None
 
 
-
-
-
 def fetch_open_positions(account_id: int):
     try:
         r = requests.get(
@@ -157,8 +160,6 @@ def fetch_pending_entry_orders(account_id: int):
     return payload.get("items", []), None
 
 
-
-
 def fetch_guardian_risk_state(account_id: int, guardian_status: dict | None = None):
     """
     Trade Guardian owns risk/account state.
@@ -189,6 +190,40 @@ def fetch_guardian_risk_state(account_id: int, guardian_status: dict | None = No
         }, None
 
     return None, "TRADE_GUARDIAN_RISK_STATE_UNAVAILABLE"
+
+
+def build_policy_versions() -> dict:
+    return {
+        "risk_policy": RISK_POLICY_VERSION,
+        "leverage_policy": LEVERAGE_POLICY_VERSION,
+        "portfolio_policy": PORTFOLIO_POLICY_VERSION,
+        "correlation_policy": CORRELATION_POLICY_VERSION,
+        "weekly_drawdown_policy": WEEKLY_DRAWDOWN_POLICY_VERSION,
+        "btc_macro_policy": BTC_MACRO_POLICY_VERSION,
+        "risk_approval_payload": RISK_APPROVAL_PAYLOAD_VERSION,
+    }
+
+
+def reject_v2(symbol: str, reason_codes: list[str], context: dict | None = None) -> dict:
+    # Preserve the existing risk_policy rejection details while adding the v2
+    # payload contract fields in a stable shape.
+    legacy = build_rejection(
+        symbol,
+        reason_codes,
+        context=context,
+    )
+    v2 = build_risk_rejection_payload_v2(
+        symbol=symbol,
+        reason_codes=reason_codes,
+        context=legacy.get("risk_context", context or {}),
+        risk_engine_version=RISK_ENGINE_VERSION,
+        risk_policy_version=RISK_POLICY_VERSION,
+        runtime_version=RUNTIME_VERSION,
+        policy_versions=build_policy_versions(),
+    )
+    if legacy.get("reason_details"):
+        v2["reason_details"] = legacy["reason_details"]
+    return v2
 
 
 def safe_float(value, default: float | None = None):
@@ -465,7 +500,7 @@ def plan_trade(payload: dict):
 
     guardian_status, g_error = fetch_guardian_status(account_id)
     if g_error:
-        return build_rejection(
+        return reject_v2(
             symbol,
             [g_error],
             context={"runtime_version": RUNTIME_VERSION},
@@ -473,7 +508,7 @@ def plan_trade(payload: dict):
 
     open_positions, open_positions_error = fetch_open_positions(account_id)
     if open_positions_error:
-        return build_rejection(
+        return reject_v2(
             symbol,
             [open_positions_error],
             context={"runtime_version": RUNTIME_VERSION},
@@ -481,7 +516,7 @@ def plan_trade(payload: dict):
 
     pending_entries, pending_entries_error = fetch_pending_entry_orders(account_id)
     if pending_entries_error:
-        return build_rejection(
+        return reject_v2(
             symbol,
             [pending_entries_error],
             context={"runtime_version": RUNTIME_VERSION},
@@ -489,7 +524,7 @@ def plan_trade(payload: dict):
 
     validation_errors = validate_signal_intake(working_payload)
     if validation_errors:
-        return build_rejection(
+        return reject_v2(
             symbol,
             validation_errors,
             context={
@@ -506,7 +541,7 @@ def plan_trade(payload: dict):
         guardian_status=guardian_status,
     )
     if guardian_risk_state_error:
-        return build_rejection(
+        return reject_v2(
             symbol,
             [guardian_risk_state_error],
             context={"runtime_version": RUNTIME_VERSION},
@@ -522,7 +557,7 @@ def plan_trade(payload: dict):
     )
 
     if not weekly_drawdown_result.get("ok"):
-        return build_rejection(
+        return reject_v2(
             symbol,
             weekly_drawdown_result.get("reason_codes", ["SCORE_BELOW_WEEKLY_DRAWDOWN_THRESHOLD"]),
             context={
@@ -564,7 +599,7 @@ def plan_trade(payload: dict):
         },
     )
     if not sizing.get("ok"):
-        return build_rejection(
+        return reject_v2(
             symbol,
             sizing.get("reason_codes", ["INVALID_POSITION_SIZING"]),
             context={"runtime_version": RUNTIME_VERSION, "sizing": sizing},
@@ -576,7 +611,7 @@ def plan_trade(payload: dict):
     stop_distance = sizing["stop_distance"]
 
     if size <= 0:
-        return build_rejection(
+        return reject_v2(
             symbol,
             ["SIZE_NON_POSITIVE"],
             context={"runtime_version": RUNTIME_VERSION, "sizing": sizing},
@@ -584,7 +619,7 @@ def plan_trade(payload: dict):
 
     minimum_notional_required = get_minimum_notional_required(equity)
     if notional < minimum_notional_required:
-        return build_rejection(
+        return reject_v2(
             symbol,
             ["NOTIONAL_BELOW_MINIMUM"],
             context={
@@ -597,7 +632,7 @@ def plan_trade(payload: dict):
 
     tp_ladder = build_tp_ladder(side, entry, stop, working_payload)
     if tp_ladder is None:
-        return build_rejection(
+        return reject_v2(
             symbol,
             ["MISSING_TAKE_PROFITS"],
             context={"runtime_version": RUNTIME_VERSION},
@@ -616,7 +651,7 @@ def plan_trade(payload: dict):
     )
 
     if not leverage_result.get("ok"):
-        return build_rejection(
+        return reject_v2(
             symbol,
             [leverage_result.get("reason", "NO_VALID_LEVERAGE_FOUND")],
             context={
@@ -645,7 +680,7 @@ def plan_trade(payload: dict):
     )
 
     if not portfolio_result.get("ok"):
-        return build_rejection(
+        return reject_v2(
             symbol,
             portfolio_result.get("reason_codes", ["PORTFOLIO_CONSTRAINT_REJECTED"]),
             context={
@@ -668,7 +703,7 @@ def plan_trade(payload: dict):
     )
 
     if not correlation_result.get("ok"):
-        return build_rejection(
+        return reject_v2(
             symbol,
             correlation_result.get("reason_codes", ["CORRELATION_GROUP_LIMIT_REACHED"]),
             context={
@@ -684,63 +719,31 @@ def plan_trade(payload: dict):
 
     take_profits = tp_ladder["take_profits"]
 
-    return {
-        "ok": True,
-        "approved": True,
-        "risk_engine_version": RISK_ENGINE_VERSION,
-        "risk_policy_version": RISK_POLICY_VERSION,
-        "leverage_policy_version": LEVERAGE_POLICY_VERSION,
-        "runtime_version": RUNTIME_VERSION,
-        "account_id": account_id,
-        "symbol": symbol,
-        "position_side": side,
-        "entry_order_type": entry_order_type,
-        "entry_price": round(entry, 8),
-        "stop_loss": round(stop, 8),
-        "tp1_price": round(tp_ladder["tp1_price"], 8),
-        "tp2_price": round(tp_ladder["tp2_price"], 8),
-        "tp3_price": round(tp_ladder["tp3_price"], 8),
-        "tp1_close_percent": round(float(tp_ladder["tp1_close_percent"]), 8),
-        "tp2_close_percent": round(float(tp_ladder["tp2_close_percent"]), 8),
-        "tp3_close_percent": round(float(tp_ladder["tp3_close_percent"]), 8),
-        "tp1_ratio": round(float(tp_ladder["tp1_ratio"]), 8),
-        "tp2_ratio": round(float(tp_ladder["tp2_ratio"]), 8),
-        "tp3_ratio": round(float(tp_ladder["tp3_ratio"]), 8),
-        "take_profits": take_profits,
-        "tp_ladder_source": tp_ladder.get("source"),
-        "risk_amount": round(risk_amount, 8),
-        "risk_pct": sizing["risk_pct"],
-        "stop_distance": round(stop_distance, 8),
-        "size": round(size, 8),
-        "notional": round(notional, 8),
-        "leverage": round(leverage_result["chosen_leverage"], 8),
-        "margin_required": round(leverage_result["margin_required"], 8),
-        "minimum_notional_required": round(minimum_notional_required, 8),
-        "liquidation_price_estimate": round(leverage_result["liquidation_price_estimate"], 8),
-        "liquidation_buffer_pct": round(leverage_result["liquidation_buffer_pct"], 6),
-        "dynamic_risk": sizing["dynamic_risk"],
-        "weekly_drawdown_context": weekly_drawdown_result,
-        "btc_macro_context": btc_macro_result,
-        "leverage_context": {
-            "candidates": leverage_result.get("candidates", []),
-            "candidate_notes": leverage_result.get("candidate_notes", []),
-            "leverage_rejections": leverage_result.get("leverage_rejections", []),
-            "max_leverage": MAX_LEVERAGE,
-            "min_liquidation_buffer_pct": MIN_LIQUIDATION_BUFFER_PCT,
-        },
-        "portfolio_context": portfolio_result,
-        "correlation_context": correlation_result,
-        "strategy_signal_context": {
-            "schema_version": normalized_signal.get("schema_version"),
-            "v2_decision": normalized_signal.get("v2_decision"),
-            "legacy_decision": normalized_signal.get("legacy_decision"),
-            "selected_strategy": normalized_signal.get("selected_strategy"),
-            "regime": normalized_signal.get("regime"),
-            "score": normalized_signal.get("score"),
-            "reason_tags": normalized_signal.get("reason_tags", []),
-        },
-        "reason_codes": []
-    }
+    return build_risk_approval_payload_v2(
+        account_id=account_id,
+        symbol=symbol,
+        position_side=side,
+        entry_order_type=entry_order_type,
+        entry_price=entry,
+        stop_loss=stop,
+        tp_ladder=tp_ladder,
+        sizing=sizing,
+        leverage_result=leverage_result,
+        portfolio_result=portfolio_result,
+        correlation_result=correlation_result,
+        weekly_drawdown_result=weekly_drawdown_result,
+        btc_macro_result=btc_macro_result,
+        normalized_signal=normalized_signal,
+        risk_engine_version=RISK_ENGINE_VERSION,
+        risk_policy_version=RISK_POLICY_VERSION,
+        runtime_version=RUNTIME_VERSION,
+        leverage_policy_version=LEVERAGE_POLICY_VERSION,
+        portfolio_policy_version=PORTFOLIO_POLICY_VERSION,
+        correlation_policy_version=CORRELATION_POLICY_VERSION,
+        weekly_drawdown_policy_version=WEEKLY_DRAWDOWN_POLICY_VERSION,
+        btc_macro_policy_version=BTC_MACRO_POLICY_VERSION,
+        minimum_notional_required=minimum_notional_required,
+    )
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -759,6 +762,7 @@ class Handler(BaseHTTPRequestHandler):
                 "service": SERVICE_NAME,
                 "timestamp": iso_now(),
                 "risk_engine_version": RISK_ENGINE_VERSION,
+                "risk_approval_payload_version": RISK_APPROVAL_PAYLOAD_VERSION,
                 "risk_policy_version": RISK_POLICY_VERSION,
                 "leverage_policy_version": LEVERAGE_POLICY_VERSION,
                 "portfolio_policy_version": PORTFOLIO_POLICY_VERSION,
@@ -770,6 +774,7 @@ class Handler(BaseHTTPRequestHandler):
                 "leverage_policy": build_leverage_policy_contract(),
                 "portfolio_policy": build_portfolio_policy_contract(),
                 "btc_macro_policy": build_btc_macro_policy_contract(),
+                "risk_approval_payload_contract": build_risk_approval_payload_contract(),
                 "correlation_policy": build_correlation_policy_contract(),
                 "weekly_drawdown_policy": build_weekly_drawdown_policy_contract(),
                 "phase4_step12_tp_policy": {

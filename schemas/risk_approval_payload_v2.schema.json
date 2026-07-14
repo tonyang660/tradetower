@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tradetower.local/schemas/risk_approval_payload_v2.schema.json",
+  "title": "RiskApprovalPayloadV2",
+  "type": "object",
+  "required": [
+    "ok",
+    "approved",
+    "risk_decision",
+    "risk_approval_payload_version",
+    "risk_engine_version",
+    "risk_policy_version",
+    "runtime_version",
+    "policy_versions",
+    "symbol",
+    "reason_codes",
+    "risk_context"
+  ],
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "approved": {
+      "type": "boolean"
+    },
+    "risk_decision": {
+      "enum": [
+        "approved",
+        "rejected"
+      ]
+    },
+    "risk_approval_payload_version": {
+      "const": "phase5_step10_risk_approval_payload_v2"
+    },
+    "risk_engine_version": {
+      "type": "string"
+    },
+    "risk_policy_version": {
+      "type": "string"
+    },
+    "runtime_version": {
+      "type": "string"
+    },
+    "policy_versions": {
+      "type": "object"
+    },
+    "account_id": {
+      "type": "integer"
+    },
+    "symbol": {
+      "type": "string"
+    },
+    "position_side": {
+      "enum": [
+        "long",
+        "short"
+      ]
+    },
+    "entry_order_type": {
+      "enum": [
+        "limit",
+        "market"
+      ]
+    },
+    "entry_price": {
+      "type": "number"
+    },
+    "stop_loss": {
+      "type": "number"
+    },
+    "take_profits": {
+      "type": "object"
+    },
+    "tp1_price": {
+      "type": "number"
+    },
+    "tp2_price": {
+      "type": "number"
+    },
+    "tp3_price": {
+      "type": "number"
+    },
+    "tp1_close_percent": {
+      "type": "number"
+    },
+    "tp2_close_percent": {
+      "type": "number"
+    },
+    "tp3_close_percent": {
+      "type": "number"
+    },
+    "risk_pct": {
+      "type": "number"
+    },
+    "base_risk_amount": {
+      "type": "number"
+    },
+    "risk_amount_multiplier": {
+      "type": "number"
+    },
+    "risk_amount": {
+      "type": "number"
+    },
+    "stop_distance": {
+      "type": "number"
+    },
+    "size": {
+      "type": "number"
+    },
+    "notional": {
+      "type": "number"
+    },
+    "leverage": {
+      "type": "number"
+    },
+    "margin_required": {
+      "type": "number"
+    },
+    "liquidation_price_estimate": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "liquidation_buffer_pct": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "risk_context": {
+      "type": "object"
+    },
+    "reason_details": {
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "approved": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "account_id",
+          "position_side",
+          "entry_order_type",
+          "entry_price",
+          "stop_loss",
+          "take_profits",
+          "risk_pct",
+          "base_risk_amount",
+          "risk_amount_multiplier",
+          "risk_amount",
+          "stop_distance",
+          "size",
+          "notional",
+          "leverage",
+          "margin_required"
+        ]
+      }
+    }
+  ]
+}
