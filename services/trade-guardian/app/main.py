@@ -31,6 +31,15 @@ from near_tp_reversal_manager import (
     evaluate_near_tp_reversal_for_position,
     apply_near_tp_reversal_for_position,
 )
+from regime_change_stop_manager import (
+    build_regime_change_stop_manager_contract,
+    evaluate_regime_change_stop_for_position,
+    apply_regime_change_stop_for_position,
+)
+from position_management_api import (
+    position_management_health_payload,
+    handle_position_management_post,
+)
 from positions import fetch_all_open_positions, fetch_open_position_for_api
 from time_utils import iso_now
 
@@ -54,6 +63,8 @@ class Handler(BaseHTTPRequestHandler):
                 "adaptive_stop_manager_version": ADAPTIVE_STOP_MANAGER_VERSION,
                 "adaptive_stop_manager": build_adaptive_stop_manager_contract(),
                 "near_tp_reversal": build_near_tp_reversal_manager_contract(),
+                "regime_change_stop": build_regime_change_stop_manager_contract(),
+                **position_management_health_payload(),
             })
             return
 
@@ -251,6 +262,9 @@ class Handler(BaseHTTPRequestHandler):
         }, status=404)
 
     def do_POST(self):
+        if handle_position_management_post(self, self.path):
+            return
+
         if self.path == "/guard/check-entry":
             try:
                 content_length = int(self.headers.get("Content-Length", "0"))
@@ -529,6 +543,106 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({
                     "ok": False,
                     "error": "near_tp_reversal_management_failed",
+                    "details": str(e),
+                }, status=400)
+                return
+
+        if self.path == "/position/evaluate-regime-change-stop":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+
+                account_id = int(payload.get("account_id", 1))
+                symbol = payload.get("symbol")
+
+                if not symbol:
+                    self._send_json({
+                        "ok": False,
+                        "error": "missing_parameters",
+                        "required": ["symbol"],
+                    }, status=400)
+                    return
+
+                required = ["current_price", "entry_regime", "current_regime"]
+                missing = [key for key in required if payload.get(key) is None]
+                if missing:
+                    self._send_json({
+                        "ok": False,
+                        "error": "missing_parameters",
+                        "required": missing,
+                    }, status=400)
+                    return
+
+                result = evaluate_regime_change_stop_for_position(
+                    account_id=account_id,
+                    symbol=str(symbol).upper(),
+                    current_price=float(payload["current_price"]),
+                    entry_regime=str(payload["entry_regime"]),
+                    current_regime=str(payload["current_regime"]),
+                    min_profit_r=float(payload.get("min_profit_r", 0.4)),
+                    breakeven_buffer_pct=float(payload.get("breakeven_buffer_pct", 0.0015)),
+                    already_triggered=bool(payload.get("already_triggered", False)),
+                )
+
+                self._send_json(result, status=200 if result.get("ok") else 400)
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "regime_change_stop_evaluation_failed",
+                    "details": str(e),
+                }, status=400)
+                return
+
+        if self.path == "/position/manage-regime-change-stop":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+
+                account_id = int(payload.get("account_id", 1))
+                symbol = payload.get("symbol")
+                dry_run = bool(payload.get("dry_run", False))
+
+                if not symbol:
+                    self._send_json({
+                        "ok": False,
+                        "error": "missing_parameters",
+                        "required": ["symbol"],
+                    }, status=400)
+                    return
+
+                required = ["current_price", "entry_regime", "current_regime"]
+                missing = [key for key in required if payload.get(key) is None]
+                if missing:
+                    self._send_json({
+                        "ok": False,
+                        "error": "missing_parameters",
+                        "required": missing,
+                    }, status=400)
+                    return
+
+                result = apply_regime_change_stop_for_position(
+                    account_id=account_id,
+                    symbol=str(symbol).upper(),
+                    current_price=float(payload["current_price"]),
+                    entry_regime=str(payload["entry_regime"]),
+                    current_regime=str(payload["current_regime"]),
+                    min_profit_r=float(payload.get("min_profit_r", 0.4)),
+                    breakeven_buffer_pct=float(payload.get("breakeven_buffer_pct", 0.0015)),
+                    already_triggered=bool(payload.get("already_triggered", False)),
+                    dry_run=dry_run,
+                )
+
+                self._send_json(result, status=200 if result.get("ok") else 400)
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "regime_change_stop_management_failed",
                     "details": str(e),
                 }, status=400)
                 return
