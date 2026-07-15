@@ -20,6 +20,12 @@ from reconciliation import (
     fetch_reconciliation_state,
     update_reconciliation_state,
 )
+from adaptive_stop_manager import (
+    ADAPTIVE_STOP_MANAGER_VERSION,
+    apply_adaptive_stop_for_position,
+    build_adaptive_stop_manager_contract,
+    evaluate_adaptive_stop_for_position,
+)
 from positions import fetch_all_open_positions, fetch_open_position_for_api
 from time_utils import iso_now
 
@@ -40,6 +46,8 @@ class Handler(BaseHTTPRequestHandler):
                 "service": SERVICE_NAME,
                 "env": APP_ENV,
                 "timestamp": iso_now(),
+                "adaptive_stop_manager_version": ADAPTIVE_STOP_MANAGER_VERSION,
+                "adaptive_stop_manager": build_adaptive_stop_manager_contract(),
             })
             return
 
@@ -347,6 +355,74 @@ class Handler(BaseHTTPRequestHandler):
                     "error": "internal_error",
                     "details": str(e),
                 }, status=500)
+                return
+            
+        if self.path == "/position/evaluate-adaptive-stop":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+
+                account_id = int(payload.get("account_id", 1))
+                symbol = payload.get("symbol")
+
+                if not symbol:
+                    self._send_json({
+                        "ok": False,
+                        "error": "missing_parameters",
+                        "required": ["symbol"],
+                    }, status=400)
+                    return
+
+                result = evaluate_adaptive_stop_for_position(
+                    account_id=account_id,
+                    symbol=str(symbol).upper(),
+                )
+
+                self._send_json(result, status=200 if result.get("ok") else 400)
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "adaptive_stop_evaluation_failed",
+                    "details": str(e),
+                }, status=400)
+                return
+            
+        if self.path == "/position/manage-adaptive-stop":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+
+                account_id = int(payload.get("account_id", 1))
+                symbol = payload.get("symbol")
+                dry_run = bool(payload.get("dry_run", False))
+
+                if not symbol:
+                    self._send_json({
+                        "ok": False,
+                        "error": "missing_parameters",
+                        "required": ["symbol"],
+                    }, status=400)
+                    return
+
+                result = apply_adaptive_stop_for_position(
+                    account_id=account_id,
+                    symbol=str(symbol).upper(),
+                    dry_run=dry_run,
+                )
+
+                self._send_json(result, status=200 if result.get("ok") else 400)
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "adaptive_stop_management_failed",
+                    "details": str(e),
+                }, status=400)
                 return
 
         if self.path == "/orders/entry/ensure":
