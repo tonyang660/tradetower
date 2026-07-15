@@ -26,6 +26,11 @@ from adaptive_stop_manager import (
     build_adaptive_stop_manager_contract,
     evaluate_adaptive_stop_for_position,
 )
+from near_tp_reversal_manager import (
+    build_near_tp_reversal_manager_contract,
+    evaluate_near_tp_reversal_for_position,
+    apply_near_tp_reversal_for_position,
+)
 from positions import fetch_all_open_positions, fetch_open_position_for_api
 from time_utils import iso_now
 
@@ -48,6 +53,7 @@ class Handler(BaseHTTPRequestHandler):
                 "timestamp": iso_now(),
                 "adaptive_stop_manager_version": ADAPTIVE_STOP_MANAGER_VERSION,
                 "adaptive_stop_manager": build_adaptive_stop_manager_contract(),
+                "near_tp_reversal": build_near_tp_reversal_manager_contract(),
             })
             return
 
@@ -421,6 +427,108 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({
                     "ok": False,
                     "error": "adaptive_stop_management_failed",
+                    "details": str(e),
+                }, status=400)
+                return
+            
+        if self.path == "/position/evaluate-near-tp-reversal":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+
+                account_id = int(payload.get("account_id", 1))
+                symbol = payload.get("symbol")
+
+                if not symbol:
+                    self._send_json({
+                        "ok": False,
+                        "error": "missing_parameters",
+                        "required": ["symbol"],
+                    }, status=400)
+                    return
+
+                if payload.get("current_price") is None:
+                    self._send_json({
+                        "ok": False,
+                        "error": "missing_parameters",
+                        "required": ["current_price"],
+                    }, status=400)
+                    return
+
+                result = evaluate_near_tp_reversal_for_position(
+                    account_id=account_id,
+                    symbol=str(symbol).upper(),
+                    current_price=float(payload["current_price"]),
+                    previous_best_price=(
+                        float(payload["previous_best_price"])
+                        if payload.get("previous_best_price") is not None
+                        else None
+                    ),
+                    near_tp_progress_threshold=float(payload.get("near_tp_progress_threshold", 0.92)),
+                    pullback_threshold_pct=float(payload.get("pullback_threshold_pct", 0.005)),
+                    breakeven_buffer_pct=float(payload.get("breakeven_buffer_pct", 0.0)),
+                )
+
+                self._send_json(result, status=200 if result.get("ok") else 400)
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "near_tp_reversal_evaluation_failed",
+                    "details": str(e),
+                }, status=400)
+                return
+            
+        if self.path == "/position/manage-near-tp-reversal":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+
+                account_id = int(payload.get("account_id", 1))
+                symbol = payload.get("symbol")
+                dry_run = bool(payload.get("dry_run", False))
+
+                if not symbol:
+                    self._send_json({
+                        "ok": False,
+                        "error": "missing_parameters",
+                        "required": ["symbol"],
+                    }, status=400)
+                    return
+
+                if payload.get("current_price") is None:
+                    self._send_json({
+                        "ok": False,
+                        "error": "missing_parameters",
+                        "required": ["current_price"],
+                    }, status=400)
+                    return
+
+                result = apply_near_tp_reversal_for_position(
+                    account_id=account_id,
+                    symbol=str(symbol).upper(),
+                    current_price=float(payload["current_price"]),
+                    previous_best_price=(
+                        float(payload["previous_best_price"])
+                        if payload.get("previous_best_price") is not None
+                        else None
+                    ),
+                    near_tp_progress_threshold=float(payload.get("near_tp_progress_threshold", 0.92)),
+                    pullback_threshold_pct=float(payload.get("pullback_threshold_pct", 0.005)),
+                    breakeven_buffer_pct=float(payload.get("breakeven_buffer_pct", 0.0)),
+                    dry_run=dry_run,
+                )
+
+                self._send_json(result, status=200 if result.get("ok") else 400)
+                return
+
+            except Exception as e:
+                self._send_json({
+                    "ok": False,
+                    "error": "near_tp_reversal_management_failed",
                     "details": str(e),
                 }, status=400)
                 return
