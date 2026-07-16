@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "evaluator_event_v2.schema.json",
+  "title": "EvaluatorEventV2",
+  "type": "object",
+  "required": [
+    "event_version",
+    "event_family",
+    "event_type",
+    "event_time",
+    "ingested_at",
+    "payload"
+  ],
+  "properties": {
+    "event_version": {
+      "const": "phase7_step1_evaluator_event_model_v2"
+    },
+    "event_family": {
+      "enum": [
+        "cycle",
+        "signal",
+        "risk",
+        "order",
+        "execution",
+        "position",
+        "position_management",
+        "trade",
+        "account"
+      ]
+    },
+    "event_type": {
+      "type": "string"
+    },
+    "event_time": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ingested_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "account_id": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "symbol": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "position_id": {
+      "type": [
+        "integer",
+        "string",
+        "null"
+      ]
+    },
+    "order_id": {
+      "type": [
+        "integer",
+        "string",
+        "null"
+      ]
+    },
+    "cycle_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_service": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "strategy_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "strategy_side": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "regime": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "execution_mode": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "payload": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}

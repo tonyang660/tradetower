@@ -33,6 +33,7 @@ from market_data import refresh_symbol_candles
 from symbol_universe import load_symbol_universe_report
 from time_utils import iso_now
 
+from position_management_cycle import run_position_management_for_open_positions
 
 def run_one_cycle():
     started_at = iso_now()
@@ -57,6 +58,15 @@ def run_one_cycle():
             "no_action": 0,
             "errors": 0,
             "results": [],
+        },
+        "position_management": {
+            "checked": 0,
+            "actions_triggered": 0,
+            "no_action": 0,
+            "errors": 0,
+            "skipped": 0,
+            "results": [],
+            "compatibility_version": "phase6_step11_scheduler_position_management",
         },
         "entry_gate": None,
         "entry_eligible_symbols": [],
@@ -144,6 +154,15 @@ def run_one_cycle():
         summary["open_positions_count"] = len(open_positions)
 
         current_open_symbols = [p["symbol"] for p in open_positions]
+
+        position_management_summary = run_position_management_for_open_positions(
+            account_id=ACCOUNT_ID,
+            open_positions=open_positions,
+            dry_run=False,
+        )
+        summary["position_management"] = position_management_summary
+        if position_management_summary.get("errors", 0) > 0:
+            summary["errors"].append("position_management_errors_detected")
 
         entry_gate, entry_error = check_entry_gate(ACCOUNT_ID)
         if entry_error:

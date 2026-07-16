@@ -4,6 +4,9 @@ from db import get_conn
 from json_utils import json_dumps
 from time_utils import parse_ts
 
+from cycle_summary_v2 import normalize_cycle_summary_events
+from event_store import store_evaluator_events
+
 
 def upsert_decision_row(cur, row: dict):
     cur.execute(
@@ -180,6 +183,9 @@ def ingest_cycle_summary(payload: dict):
                 ),
             )
 
+            normalized_events = normalize_cycle_summary_events(payload)
+            normalized_event_count = store_evaluator_events(cur, normalized_events)
+
             # Start a symbol map from candidate-filter outputs
             symbol_rows = {}
 
@@ -329,7 +335,14 @@ def ingest_cycle_summary(payload: dict):
             for row in symbol_rows.values():
                 upsert_decision_row(cur, row)
 
-    return {"ok": True, "cycle_id": cycle_id, "account_id": account_id}
+    return {
+        "ok": True,
+        "cycle_id": cycle_id,
+        "account_id": account_id,
+        "event_model_version": "phase7_step1_evaluator_event_model_v2",
+        "cycle_summary_ingestion_version": "phase7_step2_cycle_summary_ingestion_v2",
+        "normalized_event_count": normalized_event_count,
+    }
 
 
 def ingest_equity_snapshot(payload: dict):
