@@ -37,6 +37,7 @@ from trade_guardian_client import (
     refresh_trade_guardian_mark_to_market,
 )
 from position_lifecycle_routes import handle_position_lifecycle_get
+from tp_leg_analytics_routes import handle_tp_leg_analytics_get
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -61,6 +62,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         
         if handle_position_lifecycle_get(self, parsed): return
+        if handle_tp_leg_analytics_get(self, parsed):return
 
         if parsed.path == "/overview":
             account_id = int(query.get("account_id", ["1"])[0])
