@@ -10,8 +10,13 @@ import LatestCycleDetails from "../components/live-cycle/LatestCycleDetails";
 import RecentCycleList from "../components/live-cycle/RecentCycleList";
 import CycleTrendPanel from "../components/live-cycle/CycleTrendPanel";
 
+import { fetchDashboardV2Live } from "../lib/dashboardV2";
+import type { DashboardV2LiveResponse } from "../types/dashboardLiveV2";
+import LiveCycleV2Panels from "../components/live-cycle-v2/LiveCycleV2Panels";
+
 export default function LiveCycleMonitorPage() {
   const [data, setData] = useState<LiveCycleMonitorBootstrap | null>(null);
+  const [dataV2, setDataV2] = useState<DashboardV2LiveResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -23,8 +28,16 @@ export default function LiveCycleMonitorPage() {
       if (showLoading) setLoading(true);
       if (showRefreshing) setRefreshing(true);
 
-      const payload = await fetchLiveCycleMonitor(1, 15);
+      const [payload, payloadV2] = await Promise.all([
+        fetchLiveCycleMonitor(1, 15),
+        fetchDashboardV2Live(1, 50).catch((err) => {
+          console.warn("Dashboard V2 live monitor failed", err);
+          return null;
+        }),
+      ]);
+
       setData(payload);
+      setDataV2(payloadV2);
       setError(null);
       setLastUpdated(new Date());
     } catch (err) {
@@ -99,6 +112,8 @@ export default function LiveCycleMonitorPage() {
           </div>
         </GlassCard>
       </div>
+
+      <LiveCycleV2Panels data={dataV2} />
 
       {data.summary_strip ? <CycleSummaryStrip summary={data.summary_strip} /> : null}
 

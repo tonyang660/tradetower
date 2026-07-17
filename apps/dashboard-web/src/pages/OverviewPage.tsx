@@ -9,10 +9,6 @@ import EquityChart from "../components/charts/EquityChart";
 import TradingStatusCard from "../components/overview/TradingStatusCard";
 import MarketSessionsCard from "../components/overview/MarketSessionsCard";
 
-import { fetchDashboardV2Overview } from "../lib/dashboardV2";
-import type { DashboardV2Overview } from "../types/dashboardV2";
-import OverviewV2Panels from "../components/overviewV2/OverviewV2Panels";
-
 function formatMoney(value: number) {
   return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
@@ -74,7 +70,6 @@ function ActionButton({
 
 export default function OverviewPage() {
   const [data, setData] = useState<BootstrapOverview | null>(null);
-  const [dataV2, setDataV2] = useState<DashboardV2Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,16 +86,8 @@ export default function OverviewPage() {
       if (showLoading) setLoading(true);
       if (showRefreshing) setRefreshing(true);
 
-      const [payload, payloadV2] = await Promise.all([
-        fetchBootstrapOverview(1),
-        fetchDashboardV2Overview(1).catch((err) => {
-          console.warn("Dashboard V2 overview failed", err);
-          return null;
-        }),
-      ]);
-
+      const payload = await fetchBootstrapOverview(1);
       setData(payload);
-      setDataV2(payloadV2);
       setError(null);
       setLastUpdated(new Date());
 
@@ -543,7 +530,6 @@ export default function OverviewPage() {
         </div>
       </GlassCard>
 
-      <OverviewV2Panels data={dataV2} />
     </div>
   );
 }

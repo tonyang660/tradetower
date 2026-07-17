@@ -1,4 +1,5 @@
 import type { DashboardV2Overview } from "../types/dashboardV2";
+import type { DashboardV2LiveResponse } from "../types/dashboardLiveV2";
 
 const BASE_URL = import.meta.env.VITE_DASHBOARD_API_BASE_URL;
 
@@ -23,4 +24,8 @@ async function getJson<T>(path: string): Promise<T> {
 
 export function fetchDashboardV2Overview(accountId = 1) {
   return getJson<DashboardV2Overview>(`/dashboard/v2/overview?account_id=${accountId}`);
+}
+
+export function fetchDashboardV2Live(accountId = 1, limit = 50) {
+  return getJson<DashboardV2LiveResponse>(`/dashboard/v2/live?account_id=${accountId}&limit=${limit}`);
 }
