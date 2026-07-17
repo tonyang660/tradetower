@@ -29,6 +29,7 @@ from time_utils import iso_now
 from dashboard_aggregation_v2_routes import handle_dashboard_aggregation_v2_get
 from positions_orders_v2_routes import handle_positions_orders_v2_get
 from performance_page_v2_routes import handle_performance_page_v2_get
+from strategy_analytics_page_v2_routes import handle_strategy_analytics_page_v2_get
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -184,6 +185,7 @@ class Handler(BaseHTTPRequestHandler):
         if handle_dashboard_aggregation_v2_get(self, parsed): return
         if handle_positions_orders_v2_get(self, parsed): return
         if handle_performance_page_v2_get(self, parsed): return
+        if handle_strategy_analytics_page_v2_get(self, parsed): return
 
         if parsed.path == "/market/banner":
             self._send_json(get_market_session_banner())

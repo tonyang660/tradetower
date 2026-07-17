@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchStrategyAnalyticsBootstrap } from "../lib/api";
+import { fetchStrategyAnalyticsPageV2 } from "../lib/dashboardV2";
 import {
   buildStrategyAnalyticsViewModel,
   type StrategyAnalyticsViewModel,
 } from "../lib/strategyAnalytics";
-import type { StrategyAnalyticsBootstrapResponse } from "../types/strategyAnalytics";
+import type { StrategyAnalyticsPageV2Response } from "../types/strategyAnalyticsV2";
 
 import StrategyAnalyticsSummaryStrip from "../components/strategy-analytics/StrategyAnalyticsSummaryStrip";
 import ScoreBucketTable from "../components/strategy-analytics/ScoreBucketTable";
@@ -14,7 +14,7 @@ import ExitOutcomePanel from "../components/strategy-analytics/ExitOutcomePanel"
 import FeePressurePanel from "../components/strategy-analytics/FeePressurePanel";
 
 export default function StrategyAnalyticsPage() {
-  const [payload, setPayload] = useState<StrategyAnalyticsBootstrapResponse | null>(null);
+  const [payload, setPayload] = useState<StrategyAnalyticsPageV2Response | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -22,7 +22,7 @@ export default function StrategyAnalyticsPage() {
     try {
       setLoading(true);
       setError(null);
-      const result = await fetchStrategyAnalyticsBootstrap(1);
+      const result = await fetchStrategyAnalyticsPageV2(1, 500, 100);
       setPayload(result);
     } catch (err) {
       const message =
@@ -101,9 +101,9 @@ export default function StrategyAnalyticsPage() {
         </div>
       </header>
 
-      {model.hasErrors ? (
+      {payload?.partial ? (
         <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
-          Some analytics sections may be incomplete. Partial data is being shown.
+          Strategy Analytics V2 loaded with partial data. Core V2 decision analytics are shown; older trade-outcome sections may be unavailable until their V2 equivalents are added.
         </div>
       ) : null}
 
