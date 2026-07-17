@@ -27,6 +27,7 @@ from symbol_config import (
 from time_utils import iso_now
 
 from dashboard_aggregation_v2_routes import handle_dashboard_aggregation_v2_get
+from positions_orders_v2_routes import handle_positions_orders_v2_get
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -180,6 +181,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         
         if handle_dashboard_aggregation_v2_get(self, parsed): return
+        if handle_positions_orders_v2_get(self, parsed): return
 
         if parsed.path == "/market/banner":
             self._send_json(get_market_session_banner())

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCcw } from "lucide-react";
 import { buildPositionsOrdersViewModel } from "../lib/positionsOrders";
-import { fetchOpenPositions, fetchRecentClosedPositions, fetchOpenOrders, fetchExecutedOrders, fetchConfigurationBootstrap } from "../lib/api";
+import { fetchPositionsOrdersV2 } from "../lib/dashboardV2";
+import { fetchConfigurationBootstrap } from "../lib/api";
 import type { ConfigurationBootstrapResponse } from "../types/configuration";
+import type { PositionsOrdersV2Response } from "../types/positionsOrdersV2";
 
 import {
   type OpenPositionsResponse,
@@ -32,6 +34,7 @@ export default function PositionsOrdersPage() {
   const [recentPayload, setRecentPayload] = useState<RecentClosedPositionsResponse | null>(null);
   const [executedPayload, setExecutedPayload] = useState<ExecutedOrdersResponse | null>(null);
   const [ordersPayload, setOrdersPayload] = useState<OpenOrdersResponse | null>(null);
+  const [positionsOrdersV2, setPositionsOrdersV2] = useState<PositionsOrdersV2Response | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -61,18 +64,39 @@ export default function PositionsOrdersPage() {
         return;
       }
 
-      const [openRes, recentRes, ordersRes, executedRes, configurationRes] = await Promise.all([
-        fetchOpenPositions(1, true),
-        fetchRecentClosedPositions(1, 20),
-        fetchOpenOrders(1),
-        fetchExecutedOrders(1, 50),
+      const [positionsOrdersRes, configurationRes] = await Promise.all([
+        fetchPositionsOrdersV2(1, 20, 50, 10),
         fetchConfigurationBootstrap(),
       ]);
 
-      setOpenPayload(openRes);
-      setRecentPayload(recentRes);
-      setOrdersPayload(ordersRes);
-      setExecutedPayload(executedRes);
+      setPositionsOrdersV2(positionsOrdersRes);
+      setOpenPayload({
+        ok: positionsOrdersRes.services?.open_positions?.ok ?? positionsOrdersRes.partial === false,
+        account_id: positionsOrdersRes.account_id,
+        count: positionsOrdersRes.counts.open_positions,
+        items: positionsOrdersRes.open_positions,
+        positions: positionsOrdersRes.open_positions,
+        account_status: positionsOrdersRes.raw?.open_positions?.account_status,
+        pricing_errors: positionsOrdersRes.raw?.open_positions?.pricing_errors,
+      });
+      setRecentPayload({
+        ok: positionsOrdersRes.services?.recent_positions?.ok ?? positionsOrdersRes.partial === false,
+        account_id: positionsOrdersRes.account_id,
+        count: positionsOrdersRes.counts.recent_closed_positions,
+        items: positionsOrdersRes.recent_closed_positions,
+      });
+      setOrdersPayload({
+        ok: positionsOrdersRes.services?.open_orders?.ok ?? positionsOrdersRes.partial === false,
+        account_id: positionsOrdersRes.account_id,
+        count: positionsOrdersRes.counts.open_orders,
+        items: positionsOrdersRes.open_orders,
+      });
+      setExecutedPayload({
+        ok: positionsOrdersRes.services?.executed_orders?.ok ?? positionsOrdersRes.partial === false,
+        account_id: positionsOrdersRes.account_id,
+        count: positionsOrdersRes.counts.executed_orders,
+        items: positionsOrdersRes.executed_orders,
+      });
       setConfigurationBootstrap(configurationRes);
 
       setError(null);
@@ -162,6 +186,12 @@ export default function PositionsOrdersPage() {
           </div>
         </GlassCard>
       </div>
+
+      {positionsOrdersV2?.partial ? (
+        <div className="rounded-3xl border border-amber-400/20 bg-amber-500/10 p-4 text-sm text-amber-100/80">
+          Positions & Orders V2 loaded with partial data. Available panels are still shown; failed sources are logged in the V2 payload.
+        </div>
+      ) : null}
 
       <PositionAnalyticsStrip analytics={model.analytics} />
 

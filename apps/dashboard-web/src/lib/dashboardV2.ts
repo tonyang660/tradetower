@@ -1,3 +1,4 @@
+import type { PositionsOrdersV2Response, PositionLifecycleV2Response } from "../types/positionsOrdersV2";
 import type { DashboardV2Overview } from "../types/dashboardV2";
 import type { DashboardV2LiveResponse } from "../types/dashboardLiveV2";
 
@@ -28,4 +29,16 @@ export function fetchDashboardV2Overview(accountId = 1) {
 
 export function fetchDashboardV2Live(accountId = 1, limit = 50) {
   return getJson<DashboardV2LiveResponse>(`/dashboard/v2/live?account_id=${accountId}&limit=${limit}`);
+}
+
+export function fetchPositionsOrdersV2(accountId = 1, recentLimit = 20, executedLimit = 50, lifecycleLimit = 10) {
+  return getJson<PositionsOrdersV2Response>(
+    `/dashboard/v2/positions-orders?account_id=${accountId}&recent_limit=${recentLimit}&executed_limit=${executedLimit}&lifecycle_limit=${lifecycleLimit}`
+  );
+}
+
+export function fetchPositionLifecycleV2(accountId = 1, positionId: number) {
+  return getJson<PositionLifecycleV2Response>(
+    `/dashboard/v2/positions-orders/lifecycle?account_id=${accountId}&position_id=${positionId}`
+  );
 }
