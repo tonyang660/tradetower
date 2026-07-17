@@ -9,11 +9,11 @@ import TradeQualityPanel from "../components/performance/TradeQualityPanel";
 import DirectionalBreakdownPanel from "../components/performance/DirectionalBreakdownPanel";
 import MetricBarChartPanel from "../components/performance/MetricBarChartPanel";
 import TradingCalendarPanel from "../components/performance/TradingCalendarPanel";
-import { fetchPerformanceBootstrap } from "../lib/api";
-import type { PerformanceBootstrapResponse } from "../types/performance";
+import { fetchPerformancePageV2 } from "../lib/dashboardV2";
+import type { PerformancePageV2Response } from "../types/performanceV2";
 
 export default function PerformancePage() {
-  const [data, setData] = useState<PerformanceBootstrapResponse | null>(null);
+  const [data, setData] = useState<PerformancePageV2Response | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -25,7 +25,7 @@ export default function PerformancePage() {
       if (showLoading) setLoading(true);
       if (showRefreshing) setRefreshing(true);
 
-      const payload = await fetchPerformanceBootstrap(1);
+      const payload = await fetchPerformancePageV2(1, 500, 1000);
       setData(payload);
       setError(null);
       setLastUpdated(new Date());
@@ -103,6 +103,12 @@ export default function PerformancePage() {
           </div>
         </GlassCard>
       </div>
+
+      {data.partial ? (
+        <div className="rounded-3xl border border-amber-400/20 bg-amber-500/10 p-4 text-sm text-amber-100/80">
+          Performance V2 loaded with partial data. Core Performance V2 metrics are shown; older time-based diagnostics may be unavailable until their V2 equivalents are added.
+        </div>
+      ) : null}
 
       <PerformanceSummaryStrip summary={data.summary} />
 

@@ -1,3 +1,4 @@
+import type { PerformancePageV2Response } from "../types/performanceV2";
 import type { PositionsOrdersV2Response, PositionLifecycleV2Response } from "../types/positionsOrdersV2";
 import type { DashboardV2Overview } from "../types/dashboardV2";
 import type { DashboardV2LiveResponse } from "../types/dashboardLiveV2";
@@ -40,5 +41,11 @@ export function fetchPositionsOrdersV2(accountId = 1, recentLimit = 20, executed
 export function fetchPositionLifecycleV2(accountId = 1, positionId: number) {
   return getJson<PositionLifecycleV2Response>(
     `/dashboard/v2/positions-orders/lifecycle?account_id=${accountId}&position_id=${positionId}`
+  );
+}
+
+export function fetchPerformancePageV2(accountId = 1, limit = 500, equityLimit = 1000) {
+  return getJson<PerformancePageV2Response>(
+    `/dashboard/v2/performance-page?account_id=${accountId}&limit=${limit}&equity_limit=${equityLimit}`
   );
 }
