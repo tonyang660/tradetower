@@ -10,7 +10,7 @@ import {
   Settings,
   GrapeIcon,
 } from "lucide-react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import clsx from "clsx";
 
 const items = [
@@ -31,6 +31,11 @@ export default function Sidebar({
   collapsed: boolean;
   onToggle: () => void;
 }) {
+  const location = useLocation();
+
+  const activeItem = items.find(item => item.to === location.pathname);
+  const activeLabel = activeItem ? activeItem.label : "Control Center";
+
   return (
     <aside
       className={clsx(
@@ -43,7 +48,7 @@ export default function Sidebar({
           {!collapsed ? (
             <div>
               <div className="text-[11px] uppercase tracking-[0.28em] text-white/40">TradeTower</div>
-              <div className="mt-2 text-2xl font-semibold tracking-tight text-white">Control Center</div>
+              <div className="mt-2 text-2xl font-semibold tracking-tight text-white">{activeLabel}</div>
               <div className="mt-2 text-sm text-white/50">
                 Live strategy telemetry.
               </div>

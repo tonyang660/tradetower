@@ -25,10 +25,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
             <header className="mb-6 flex items-center justify-between rounded-[28px] border border-white/10 bg-white/5 px-5 py-4 shadow-glass backdrop-blur-xl">
               <div>
                 <div className="text-[11px] uppercase tracking-[0.28em] text-white/40">
-                  TradeTower
+                  TradeTower BETA
                 </div>
                 <div className="mt-1 text-2xl font-semibold tracking-tight text-white">
-                  Home Lab Control Center
+                  Trading Control Center
                 </div>
                 <div className="mt-1 text-sm text-white/45">
                   Autonomous Paper Trading Algorithm
@@ -39,7 +39,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 <div className="rounded-2xl border border-emerald-400/15 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
                   <span className="inline-flex items-center gap-2">
                     <ShieldCheck size={15} />
-                    Auth reserved
+                    No Authentification
                   </span>
                 </div>
 
