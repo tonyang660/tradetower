@@ -26,6 +26,8 @@ from symbol_config import (
 )
 from time_utils import iso_now
 
+from dashboard_aggregation_v2_routes import handle_dashboard_aggregation_v2_get
+
 
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, payload: dict, status: int = 200):
@@ -176,6 +178,8 @@ class Handler(BaseHTTPRequestHandler):
                 "timestamp": iso_now(),
             })
             return
+        
+        if handle_dashboard_aggregation_v2_get(self, parsed): return
 
         if parsed.path == "/market/banner":
             self._send_json(get_market_session_banner())
