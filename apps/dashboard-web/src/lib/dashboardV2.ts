@@ -1,3 +1,4 @@
+import type { SystemHealthPageV2Response, ConfigurationPageV2Response } from "../types/systemConfigurationV2";
 import type { StrategyAnalyticsPageV2Response } from "../types/strategyAnalyticsV2";
 import type { PerformancePageV2Response } from "../types/performanceV2";
 import type { PositionsOrdersV2Response, PositionLifecycleV2Response } from "../types/positionsOrdersV2";
@@ -55,4 +56,12 @@ export function fetchStrategyAnalyticsPageV2(accountId = 1, limit = 500, cycleLi
   return getJson<StrategyAnalyticsPageV2Response>(
     `/dashboard/v2/strategy-analytics-page?account_id=${accountId}&limit=${limit}&cycle_limit=${cycleLimit}`
   );
+}
+
+export function fetchSystemHealthPageV2(accountId = 1) {
+  return getJson<SystemHealthPageV2Response>(`/dashboard/v2/system-health-page?account_id=${accountId}`);
+}
+
+export function fetchConfigurationPageV2() {
+  return getJson<ConfigurationPageV2Response>("/dashboard/v2/configuration-page");
 }

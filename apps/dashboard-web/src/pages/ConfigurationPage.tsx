@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import { fetchConfigurationPageV2 } from "../lib/dashboardV2";
 import type {
-  ConfigurationBootstrapResponse,
   ConfigurationSettings,
   SymbolUniverseItem,
 } from "../types/configuration";
+import type { ConfigurationPageV2Response } from "../types/systemConfigurationV2";
 import {
-  fetchConfigurationBootstrap,
   saveConfigurationSymbolUniverse,
   setConfigurationAutoLoop,
   validateConfigurationSymbol,
@@ -48,7 +48,7 @@ function universeEqual(a?: SymbolUniverseItem[] | null, b?: SymbolUniverseItem[]
 }
 
 export default function ConfigurationPage() {
-  const [bootstrap, setBootstrap] = useState<ConfigurationBootstrapResponse | null>(null);
+  const [bootstrap, setBootstrap] = useState<ConfigurationPageV2Response | null>(null);
   const [originalSettings, setOriginalSettings] = useState<ConfigurationSettings | null>(null);
   const [settings, setSettings] = useState<ConfigurationSettings | null>(null);
   const [validationMap, setValidationMap] = useState<ValidationMap>({});
@@ -71,7 +71,7 @@ export default function ConfigurationPage() {
       if (showLoading) setLoading(true);
       if (showRefreshing) setRefreshing(true);
 
-      const payload = await fetchConfigurationBootstrap();
+      const payload = await fetchConfigurationPageV2();
       const normalizedSettings = {
         ...payload.settings,
         symbol_universe:
@@ -291,6 +291,12 @@ export default function ConfigurationPage() {
 
   return (
     <div className="space-y-6">
+      {bootstrap.partial ? (
+        <div className="rounded-3xl border border-amber-400/20 bg-amber-500/10 p-4 text-amber-200">
+          Configuration V2 loaded with partial data. Existing controls remain available where their runtime owners are reachable.
+        </div>
+      ) : null}
+
       {error ? (
         <div className="rounded-3xl border border-amber-400/20 bg-amber-500/10 p-4 text-amber-200">
           {error}

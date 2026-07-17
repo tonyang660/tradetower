@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import type { SystemHealthBootstrapResponse } from "../types/systemHealth";
-import { fetchSystemHealthBootstrap } from "../lib/api";
+import { fetchSystemHealthPageV2 } from "../lib/dashboardV2";
+import type { SystemHealthPageV2Response } from "../types/systemConfigurationV2";
 import PlatformStatusHero from "../components/system-health/PlatformStatusHero";
 import SystemHealthControls from "../components/system-health/SystemHealthControls";
 import SystemHealthSummaryStrip from "../components/system-health/SystemHealthSummaryStrip";
@@ -12,7 +12,7 @@ import IssuesPanel from "../components/system-health/IssuesPanel";
 import OrderCycleStatusCard from "../components/positions-orders/OrderCycleStatusCard";
 
 export default function SystemHealthPage() {
-  const [data, setData] = useState<SystemHealthBootstrapResponse | null>(null);
+  const [data, setData] = useState<SystemHealthPageV2Response | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -23,7 +23,7 @@ export default function SystemHealthPage() {
       if (showLoading) setLoading(true);
       if (showRefreshing) setRefreshing(true);
 
-      const payload = await fetchSystemHealthBootstrap(1);
+      const payload = await fetchSystemHealthPageV2(1);
       setData(payload);
       setError(null);
     } catch (err) {
@@ -67,6 +67,12 @@ export default function SystemHealthPage() {
           onToggleAutoRefresh={() => setAutoRefresh((v) => !v)}
         />
       </div>
+
+      {data.partial ? (
+        <div className="rounded-3xl border border-amber-400/20 bg-amber-500/10 p-4 text-sm text-amber-100/80">
+          System Health V2 loaded with partial data. Available service and freshness panels are still shown.
+        </div>
+      ) : null}
 
       <SystemHealthSummaryStrip summary={data.summary_strip} />
 
