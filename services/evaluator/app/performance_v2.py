@@ -309,16 +309,27 @@ def fetch_equity_series(account_id: int, limit: int = 1000) -> list[dict[str, An
 
 def _event_type_level(event_type: str) -> str | None:
     upper = str(event_type or "").upper()
-    if upper in ("TP1_HIT", "TP1_FILLED"):
-        return "tp1"
-    if upper in ("TP2_HIT", "TP2_FILLED"):
-        return "tp2"
-    if upper in ("TP3_HIT", "TP3_FILLED"):
-        return "tp3"
-    if upper in ("STOP_LOSS_HIT", "STOP_LOSS_FILLED", "SL_HIT"):
-        return "stop_loss"
-    return None
 
+    if upper in ("TP1_HIT", "TP1_FILLED", "TAKE_PROFIT_1", "TAKE_PROFIT_1_FILLED"):
+        return "tp1"
+
+    if upper in ("TP2_HIT", "TP2_FILLED", "TAKE_PROFIT_2", "TAKE_PROFIT_2_FILLED"):
+        return "tp2"
+
+    if upper in ("TP3_HIT", "TP3_FILLED", "TAKE_PROFIT_3", "TAKE_PROFIT_3_FILLED"):
+        return "tp3"
+
+    if upper in (
+        "STOP_FILLED",
+        "STOP_LOSS_HIT",
+        "STOP_LOSS_FILLED",
+        "STOP_LOSS_EXECUTED",
+        "SL_HIT",
+        "SL_FILLED",
+    ):
+        return "stop_loss"
+
+    return None
 
 def build_position_performance_item(
     position: dict[str, Any],
