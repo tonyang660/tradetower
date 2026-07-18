@@ -41,8 +41,26 @@ def safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
-def extract_weekly_pnl(account_state: dict[str, Any] | None) -> float:
+def extract_weekly_pnl(
+    account_state: dict[str, Any] | None,
+    *,
+    _depth: int = 0,
+    _seen: set[int] | None = None,
+) -> float:
+    if _seen is None:
+        _seen = set()
+
+    if _depth > 8:
+        return 0.0
+
     state = account_state or {}
+    if not isinstance(state, dict):
+        return 0.0
+
+    object_id = id(state)
+    if object_id in _seen:
+        return 0.0
+    _seen.add(object_id)
 
     for key in (
         "weekly_pnl",
@@ -55,22 +73,50 @@ def extract_weekly_pnl(account_state: dict[str, Any] | None) -> float:
             return safe_float(state.get(key))
 
     risk_state = state.get("risk_state") or {}
-    if isinstance(risk_state, dict):
-        return extract_weekly_pnl(risk_state)
+    if isinstance(risk_state, dict) and risk_state:
+        return extract_weekly_pnl(
+            risk_state,
+            _depth=_depth + 1,
+            _seen=_seen,
+        )
 
     return 0.0
 
 
-def extract_equity(account_state: dict[str, Any] | None, fallback_equity: float = 0.0) -> float:
+def extract_equity(
+    account_state: dict[str, Any] | None,
+    fallback_equity: float = 0.0,
+    *,
+    _depth: int = 0,
+    _seen: set[int] | None = None,
+) -> float:
+    if _seen is None:
+        _seen = set()
+
+    if _depth > 8:
+        return safe_float(fallback_equity)
+
     state = account_state or {}
+    if not isinstance(state, dict):
+        return safe_float(fallback_equity)
+
+    object_id = id(state)
+    if object_id in _seen:
+        return safe_float(fallback_equity)
+    _seen.add(object_id)
 
     for key in ("equity", "account_equity", "current_equity", "balance_equity"):
         if state.get(key) is not None:
             return safe_float(state.get(key), fallback_equity)
 
     risk_state = state.get("risk_state") or {}
-    if isinstance(risk_state, dict):
-        return extract_equity(risk_state, fallback_equity)
+    if isinstance(risk_state, dict) and risk_state:
+        return extract_equity(
+            risk_state,
+            fallback_equity,
+            _depth=_depth + 1,
+            _seen=_seen,
+        )
 
     return safe_float(fallback_equity)
 

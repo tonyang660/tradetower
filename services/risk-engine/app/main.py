@@ -473,6 +473,7 @@ def plan_trade(payload: dict):
 
     signal_payload = extract_v2_signal_payload(payload)
     normalized_signal = extract_strategy_trade_candidate(signal_payload)
+    normalized_signal.pop("raw_signal", None)
 
     # Merge normalized signal back into payload for compatibility with existing
     # leverage/margin code.
