@@ -801,10 +801,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(result, status=200 if result.get("ok") else 400)
                 return
             except Exception as e:
+                symbol = None
+                try:
+                    symbol = (
+                        payload.get("symbol")
+                        or (payload.get("strategy_signal") or {}).get("symbol")
+                    )
+                except Exception:
+                    symbol = None
+
                 self._send_json({
                     "ok": False,
+                    "approved": False,
+                    "risk_decision": "error",
+                    "symbol": str(symbol or "").upper(),
+                    "reason_codes": ["RISK_ENGINE_INTERNAL_ERROR"],
                     "error": "internal_error",
-                    "details": str(e)
+                    "details": str(e),
                 }, status=500)
                 return
 

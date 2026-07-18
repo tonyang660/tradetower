@@ -25,9 +25,79 @@ def safe_float(value: Any, default: float = 0.0) -> float:
     return result
 
 
-def compact_context(context: dict[str, Any] | None) -> dict[str, Any]:
-    return context or {}
+def make_json_safe(value: Any, *, max_depth: int = 8, _depth: int = 0, _seen: set[int] | None = None) -> Any:
+    """
+    Defensive serializer guard for Risk Engine responses.
 
+    Prevents recursive / oversized context objects from crashing /plan with:
+        maximum recursion depth exceeded
+
+    Also removes raw strategy payload copies that are useful for local debugging
+    but unsafe for API response contracts.
+    """
+    if _seen is None:
+        _seen = set()
+
+    if _depth > max_depth:
+        return "[max_depth_exceeded]"
+
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    if isinstance(value, dict):
+        object_id = id(value)
+        if object_id in _seen:
+            return "[circular_reference]"
+
+        _seen.add(object_id)
+        result = {}
+
+        for key, item in value.items():
+            key = str(key)
+
+            if key in {
+                "raw_signal",
+                "raw_payload",
+                "raw_context",
+                "raw_response",
+                "traceback",
+            }:
+                continue
+
+            result[key] = make_json_safe(
+                item,
+                max_depth=max_depth,
+                _depth=_depth + 1,
+                _seen=_seen,
+            )
+
+        _seen.remove(object_id)
+        return result
+
+    if isinstance(value, (list, tuple, set)):
+        object_id = id(value)
+        if object_id in _seen:
+            return "[circular_reference]"
+
+        _seen.add(object_id)
+        result = [
+            make_json_safe(
+                item,
+                max_depth=max_depth,
+                _depth=_depth + 1,
+                _seen=_seen,
+            )
+            for item in list(value)[:100]
+        ]
+        _seen.remove(object_id)
+        return result
+
+    return str(value)
+
+
+def compact_context(context: dict[str, Any] | None) -> dict[str, Any]:
+    safe = make_json_safe(context or {}, max_depth=8)
+    return safe if isinstance(safe, dict) else {}
 
 def build_risk_approval_payload_v2(
     *,
@@ -56,6 +126,7 @@ def build_risk_approval_payload_v2(
     minimum_notional_required: float,
 ) -> dict[str, Any]:
     take_profits = tp_ladder["take_profits"]
+    safe_normalized_signal = compact_context(normalized_signal)
 
     risk_context = {
         "dynamic_risk": sizing.get("dynamic_risk", {}),
@@ -70,13 +141,13 @@ def build_risk_approval_payload_v2(
         "portfolio": compact_context(portfolio_result),
         "correlation": compact_context(correlation_result),
         "strategy_signal": {
-            "schema_version": normalized_signal.get("schema_version"),
-            "v2_decision": normalized_signal.get("v2_decision"),
-            "legacy_decision": normalized_signal.get("legacy_decision"),
-            "selected_strategy": normalized_signal.get("selected_strategy"),
-            "regime": normalized_signal.get("regime"),
-            "score": normalized_signal.get("score"),
-            "reason_tags": normalized_signal.get("reason_tags", []),
+            "schema_version": safe_normalized_signal.get("schema_version"),
+            "v2_decision": safe_normalized_signal.get("v2_decision"),
+            "legacy_decision": safe_normalized_signal.get("legacy_decision"),
+            "selected_strategy": safe_normalized_signal.get("selected_strategy"),
+            "regime": safe_normalized_signal.get("regime"),
+            "score": safe_normalized_signal.get("score"),
+            "reason_tags": safe_normalized_signal.get("reason_tags", []),
         },
     }
 
@@ -130,17 +201,17 @@ def build_risk_approval_payload_v2(
 
         # Backward-compatible top-level context fields for current dashboard /
         # scheduler diagnostics.
-        "dynamic_risk": sizing.get("dynamic_risk", {}),
-        "weekly_drawdown_context": weekly_drawdown_result,
-        "btc_macro_context": btc_macro_result,
-        "leverage_context": {
+        "dynamic_risk": compact_context(sizing.get("dynamic_risk", {})),
+        "weekly_drawdown_context": compact_context(weekly_drawdown_result),
+        "btc_macro_context": compact_context(btc_macro_result),
+        "leverage_context": compact_context({
             "candidates": leverage_result.get("candidates", []),
             "candidate_notes": leverage_result.get("candidate_notes", []),
             "leverage_rejections": leverage_result.get("leverage_rejections", []),
-        },
-        "portfolio_context": portfolio_result,
-        "correlation_context": correlation_result,
-        "strategy_signal_context": risk_context["strategy_signal"],
+        }),
+        "portfolio_context": compact_context(portfolio_result),
+        "correlation_context": compact_context(correlation_result),
+        "strategy_signal_context": compact_context(risk_context["strategy_signal"]),
     }
 
     return payload
@@ -167,7 +238,7 @@ def build_risk_rejection_payload_v2(
         "policy_versions": policy_versions or {},
         "symbol": str(symbol or "").upper(),
         "reason_codes": reason_codes,
-        "risk_context": context or {},
+        "risk_context": compact_context(context),
     }
 
 
