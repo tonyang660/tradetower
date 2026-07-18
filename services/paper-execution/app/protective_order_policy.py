@@ -117,8 +117,27 @@ def validate_protective_order_set(
     protective_orders: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
     roles = group_protective_orders(protective_orders)
-    missing_roles = [role for role in PROTECTIVE_ROLES if role not in roles]
-    duplicate_roles = []
+
+    remaining_size = safe_float(position.get("remaining_size", position.get("size", 0.0)))
+    position_status = str(position.get("status") or "").lower()
+    tp1_hit = bool(position.get("tp1_hit"))
+    tp2_hit = bool(position.get("tp2_hit"))
+    tp3_hit = bool(position.get("tp3_hit"))
+
+    # State-aware required roles:
+    # - A filled TP order should no longer be required as an open working order.
+    # - After TP1, TP1 can be missing; after TP2, TP1/TP2 can be missing.
+    # - If TP3 or remaining_size <= 0, the position should no longer be open.
+    if position_status == "closed" or tp3_hit or remaining_size <= 0:
+        required_roles: list[str] = []
+    elif tp2_hit:
+        required_roles = ["stop_loss", "tp3"]
+    elif tp1_hit:
+        required_roles = ["stop_loss", "tp2", "tp3"]
+    else:
+        required_roles = list(PROTECTIVE_ROLES)
+
+    missing_roles = [role for role in required_roles if role not in roles]
 
     role_counts = {}
     for order in protective_orders or []:
@@ -141,13 +160,13 @@ def validate_protective_order_set(
     missing_prices = [
         role
         for role, order in roles.items()
-        if order_price_for_role(order, role) is None
+        if role in required_roles and order_price_for_role(order, role) is None
     ]
 
     non_working_roles = [
         role
         for role, order in roles.items()
-        if not is_working_order(order)
+        if role in required_roles and not is_working_order(order)
     ]
 
     original_size = safe_float(
@@ -163,7 +182,7 @@ def validate_protective_order_set(
 
     reason_codes: list[str] = []
     if missing_roles:
-        reason_codes.append("PROTECTIVE_ORDERS_MISSING_ROLES")
+        reason_codes.append("PROTECTIVE_ORDERS_MISSING_REQUIRED_ROLES")
     if duplicate_roles:
         reason_codes.append("PROTECTIVE_ORDERS_DUPLICATE_ROLES")
     if side_mismatches:
@@ -176,7 +195,16 @@ def validate_protective_order_set(
     return {
         "ok": not reason_codes,
         "protective_order_policy_version": PROTECTIVE_ORDER_POLICY_VERSION,
-        "required_roles": list(PROTECTIVE_ROLES),
+        "required_roles": required_roles,
+        "legacy_required_roles": list(PROTECTIVE_ROLES),
+        "state_aware_validation": True,
+        "position_state": {
+            "status": position_status,
+            "remaining_size": remaining_size,
+            "tp1_hit": tp1_hit,
+            "tp2_hit": tp2_hit,
+            "tp3_hit": tp3_hit,
+        },
         "missing_roles": missing_roles,
         "duplicate_roles": duplicate_roles,
         "side_mismatches": side_mismatches,
@@ -189,7 +217,6 @@ def validate_protective_order_set(
         "reason_codes": reason_codes,
         "orders_by_role": roles,
     }
-
 
 def should_trigger_for_order(
     *,

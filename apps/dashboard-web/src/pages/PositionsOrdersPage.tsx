@@ -28,6 +28,7 @@ import WorkingOrdersPanel from "../components/positions-orders/WorkingOrdersPane
 import RecentClosedPositionsPanel from "../components/positions-orders/RecentClosedPositionsPanel";
 import OrderCycleStatusCard from "../components/positions-orders/OrderCycleStatusCard";
 import ExecutedOrdersPanel from "../components/positions-orders/ExecutedOrdersPanel";
+import PositionEventsPanel from "../components/positions-orders/PositionEventsPanel";
 
 export default function PositionsOrdersPage() {
   const [openPayload, setOpenPayload] = useState<OpenPositionsResponse | null>(null);
@@ -234,6 +235,8 @@ export default function PositionsOrdersPage() {
       ) : null}
 
       <OpenPositionsPanel positions={model.openPositions} />
+
+      <PositionEventsPanel lifecycles={positionsOrdersV2?.recent_position_lifecycles ?? []} />
 
       <WorkingOrdersPanel orders={model.workingOrders} />
 
