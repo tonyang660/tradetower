@@ -154,6 +154,7 @@ def fetch_position_events(account_id: int, position_ids: list[int]) -> dict[int,
 
 
 def fetch_execution_costs(account_id: int, position_ids: list[int]) -> dict[int, dict[str, Any]]:
+    # Fetch actual execution costs per position without double-counting executions.
     if not position_ids:
         return {}
 
@@ -176,33 +177,50 @@ def fetch_execution_costs(account_id: int, position_ids: list[int]) -> dict[int,
                 position_id_texts = [str(position_id) for position_id in position_ids]
                 cur.execute(
                     """
+                    WITH distinct_executions AS (
+                        SELECT DISTINCT
+                            details_json->>'position_id' AS position_id,
+                            execution_id,
+                            fee_paid,
+                            slippage_bps
+                        FROM execution_reports
+                        WHERE account_id = %s
+                          AND details_json->>'position_id' = ANY(%s)
+                    )
                     SELECT
-                        details_json->>'position_id' AS position_id,
+                        position_id,
                         COALESCE(SUM(fee_paid), 0) AS fees_paid,
                         COALESCE(AVG(slippage_bps), 0) AS avg_slippage_bps,
-                        COUNT(*) AS executions
-                    FROM execution_reports
-                    WHERE account_id = %s
-                      AND details_json->>'position_id' = ANY(%s)
-                    GROUP BY details_json->>'position_id'
+                        COUNT(execution_id) AS executions
+                    FROM distinct_executions
+                    GROUP BY position_id
                     """,
                     (account_id, position_id_texts),
                 )
             else:
                 cur.execute(
                     """
+                    WITH distinct_executions AS (
+                        SELECT DISTINCT
+                            pe.position_id,
+                            er.execution_id,
+                            er.fee_paid,
+                            er.slippage_bps
+                        FROM position_events pe
+                        JOIN execution_reports er
+                          ON er.execution_id = pe.execution_id
+                         AND er.account_id = pe.account_id
+                        WHERE pe.account_id = %s
+                          AND pe.position_id = ANY(%s)
+                          AND pe.execution_id IS NOT NULL
+                    )
                     SELECT
-                        pe.position_id,
-                        COALESCE(SUM(er.fee_paid), 0) AS fees_paid,
-                        COALESCE(AVG(er.slippage_bps), 0) AS avg_slippage_bps,
-                        COUNT(er.execution_id) AS executions
-                    FROM position_events pe
-                    JOIN execution_reports er
-                      ON er.execution_id = pe.execution_id
-                     AND er.account_id = pe.account_id
-                    WHERE pe.account_id = %s
-                      AND pe.position_id = ANY(%s)
-                    GROUP BY pe.position_id
+                        position_id,
+                        COALESCE(SUM(fee_paid), 0) AS fees_paid,
+                        COALESCE(AVG(slippage_bps), 0) AS avg_slippage_bps,
+                        COUNT(execution_id) AS executions
+                    FROM distinct_executions
+                    GROUP BY position_id
                     """,
                     (account_id, position_ids),
                 )
@@ -315,27 +333,60 @@ def build_position_performance_item(
     tp_hits = {"tp1": bool(position.get("tp1_hit")), "tp2": bool(position.get("tp2_hit")), "tp3": bool(position.get("tp3_hit"))}
     leg_pnl = {"tp1": 0.0, "tp2": 0.0, "tp3": 0.0, "stop_loss": 0.0}
 
+    counted_execution_ids: set[int] = set()
+
     for event in events:
         details = event.get("details") or {}
-        event_type = event.get("event_type")
+        event_type = str(event.get("event_type") or "").upper()
         level = _event_type_level(event_type)
+
+        execution_id = event.get("execution_id")
+        execution_key = None
+        try:
+            if execution_id is not None:
+                execution_key = int(execution_id)
+        except Exception:
+            execution_key = None
 
         pnl = _to_float(details.get("realized_pnl"), 0.0)
         fee = _to_float(details.get("fee_paid"), 0.0)
         slippage = _to_float(details.get("slippage_bps"), None)
 
-        gross_realized_pnl += pnl
-        fees_from_events += fee
-        if slippage is not None:
-            slippage_values.append(float(slippage))
+        # POSITION_CLOSED is an audit/lifecycle marker. For TP3 and STOP_LOSS,
+        # Trade Guardian records both the fill event and POSITION_CLOSED with
+        # the same realized_pnl and fee_paid. Counting both doubles PnL/fees.
+        is_close_audit_event = event_type == "POSITION_CLOSED"
+        is_realization_event = level is not None and not is_close_audit_event
 
-        if level:
+        if is_realization_event:
+            if execution_key is None or execution_key not in counted_execution_ids:
+                gross_realized_pnl += pnl
+                fees_from_events += fee
+                if execution_key is not None:
+                    counted_execution_ids.add(execution_key)
+
+            if slippage is not None:
+                slippage_values.append(float(slippage))
+
             leg_pnl[level] += pnl
             if level in tp_hits:
                 tp_hits[level] = True
             if level == "stop_loss":
                 exit_reason = "stop_loss"
             elif level == "tp3":
+                exit_reason = "tp3_full_completion"
+
+        elif event_type == "POSITION_OPENED":
+            if execution_key is None or execution_key not in counted_execution_ids:
+                fees_from_events += fee
+                if execution_key is not None:
+                    counted_execution_ids.add(execution_key)
+
+        elif is_close_audit_event:
+            close_reason = str(details.get("close_reason") or "").upper()
+            if close_reason == "STOP_LOSS":
+                exit_reason = "stop_loss"
+            elif close_reason == "TP3":
                 exit_reason = "tp3_full_completion"
 
     if position.get("status") == "closed" and exit_reason == "closed_unknown":
@@ -349,8 +400,6 @@ def build_position_performance_item(
     cost_fees = _to_float((costs or {}).get("fees_paid"), 0.0)
     total_fees = fees_from_events if fees_from_events else cost_fees
 
-    # Performance V2 convention:
-    # closed-position realized PnL is net after actual fees.
     net_realized_pnl = gross_realized_pnl - total_fees
 
     risk_amount = _to_float(position.get("risk_amount"))
@@ -372,12 +421,11 @@ def build_position_performance_item(
         "net_realized_pnl": round(net_realized_pnl, 8),
         "realized_r": round(realized_r, 8) if realized_r is not None else None,
         "avg_slippage_bps": (costs or {}).get("avg_slippage_bps") if costs else (_avg(slippage_values) if slippage_values else None),
-        "executions": int((costs or {}).get("executions", 0)),
+        "executions": int((costs or {}).get("executions", len(counted_execution_ids))),
         "tp_hits": tp_hits,
         "leg_gross_pnl": {key: round(value, 8) for key, value in leg_pnl.items()},
         "exit_reason": exit_reason,
     }
-
 
 def build_position_performance(account_id: int, limit: int | None = None) -> dict[str, Any]:
     positions = fetch_positions(account_id, limit)
