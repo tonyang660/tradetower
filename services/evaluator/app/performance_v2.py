@@ -152,28 +152,61 @@ def fetch_position_events(account_id: int, position_ids: list[int]) -> dict[int,
     return grouped
 
 
+
 def fetch_execution_costs(account_id: int, position_ids: list[int]) -> dict[int, dict[str, Any]]:
     if not position_ids:
         return {}
-
-    position_id_texts = [str(position_id) for position_id in position_ids]
 
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT
-                    details_json->>'position_id' AS position_id,
-                    COALESCE(SUM(fee_paid), 0) AS fees_paid,
-                    COALESCE(AVG(slippage_bps), 0) AS avg_slippage_bps,
-                    COUNT(*) AS executions
-                FROM execution_reports
-                WHERE account_id = %s
-                  AND details_json->>'position_id' = ANY(%s)
-                GROUP BY details_json->>'position_id'
-                """,
-                (account_id, position_id_texts),
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'execution_reports'
+                      AND column_name = 'details_json'
+                )
+                """
             )
+            has_execution_details_json = bool(cur.fetchone()[0])
+
+            if has_execution_details_json:
+                position_id_texts = [str(position_id) for position_id in position_ids]
+                cur.execute(
+                    """
+                    SELECT
+                        details_json->>'position_id' AS position_id,
+                        COALESCE(SUM(fee_paid), 0) AS fees_paid,
+                        COALESCE(AVG(slippage_bps), 0) AS avg_slippage_bps,
+                        COUNT(*) AS executions
+                    FROM execution_reports
+                    WHERE account_id = %s
+                      AND details_json->>'position_id' = ANY(%s)
+                    GROUP BY details_json->>'position_id'
+                    """,
+                    (account_id, position_id_texts),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT
+                        pe.position_id,
+                        COALESCE(SUM(er.fee_paid), 0) AS fees_paid,
+                        COALESCE(AVG(er.slippage_bps), 0) AS avg_slippage_bps,
+                        COUNT(er.execution_id) AS executions
+                    FROM position_events pe
+                    JOIN execution_reports er
+                      ON er.execution_id = pe.execution_id
+                     AND er.account_id = pe.account_id
+                    WHERE pe.account_id = %s
+                      AND pe.position_id = ANY(%s)
+                    GROUP BY pe.position_id
+                    """,
+                    (account_id, position_ids),
+                )
+
             rows = cur.fetchall()
 
     result = {}
@@ -186,7 +219,6 @@ def fetch_execution_costs(account_id: int, position_ids: list[int]) -> dict[int,
             "executions": int(row[3]),
         }
     return result
-
 
 def fetch_latest_equity(account_id: int) -> dict[str, Any] | None:
     with get_conn() as conn:
@@ -371,25 +403,49 @@ def build_position_performance(account_id: int, limit: int | None = None) -> dic
     }
 
 
+
 def summarize_position_performance(items: list[dict[str, Any]]) -> dict[str, Any]:
     closed = [item for item in items if item.get("status") == "closed"]
     open_items = [item for item in items if item.get("status") == "open"]
 
+    closed_pnls = [_to_float(item.get("net_realized_pnl")) for item in closed]
     winners = [item for item in closed if _to_float(item.get("net_realized_pnl")) > 0]
     losers = [item for item in closed if _to_float(item.get("net_realized_pnl")) < 0]
     breakeven = [item for item in closed if _to_float(item.get("net_realized_pnl")) == 0]
 
+    win_pnls = [_to_float(item.get("net_realized_pnl")) for item in winners]
+    loss_pnls = [_to_float(item.get("net_realized_pnl")) for item in losers]
+
     gross_realized = sum(_to_float(item.get("gross_realized_pnl")) for item in closed)
     fees = sum(_to_float(item.get("fees_paid")) for item in closed)
-    net_realized = sum(_to_float(item.get("net_realized_pnl")) for item in closed)
+    net_realized = sum(closed_pnls)
 
-    gross_wins = sum(_to_float(item.get("net_realized_pnl")) for item in winners)
-    gross_losses_abs = abs(sum(_to_float(item.get("net_realized_pnl")) for item in losers))
+    gross_wins = sum(win_pnls)
+    gross_losses_abs = abs(sum(loss_pnls))
     profit_factor = gross_wins / gross_losses_abs if gross_losses_abs > 0 else None
+
+    average_win_pnl = _avg(win_pnls) or 0.0
+    average_loss_pnl = _avg(loss_pnls) or 0.0
 
     realized_rs = [_to_float(item.get("realized_r"), None) for item in closed if item.get("realized_r") is not None]
     win_rs = [_to_float(item.get("realized_r"), None) for item in winners if item.get("realized_r") is not None]
     loss_rs = [_to_float(item.get("realized_r"), None) for item in losers if item.get("realized_r") is not None]
+
+    average_win_r = _avg([float(value) for value in win_rs if value is not None])
+    average_loss_r = _avg([float(value) for value in loss_rs if value is not None])
+    average_rr = None
+    if average_win_pnl > 0 and average_loss_pnl < 0:
+        average_rr = average_win_pnl / abs(average_loss_pnl)
+    elif average_win_r is not None and average_loss_r is not None and average_loss_r < 0:
+        average_rr = average_win_r / abs(average_loss_r)
+
+    sharpe_ratio = None
+    if len(closed_pnls) > 1:
+        mean_val = sum(closed_pnls) / len(closed_pnls)
+        variance = sum((value - mean_val) ** 2 for value in closed_pnls) / (len(closed_pnls) - 1)
+        std_dev = variance ** 0.5
+        if std_dev > 0:
+            sharpe_ratio = mean_val / std_dev
 
     by_exit_reason: dict[str, int] = defaultdict(int)
     for item in closed:
@@ -409,12 +465,17 @@ def summarize_position_performance(items: list[dict[str, Any]]) -> dict[str, Any
         "fee_to_gross_realized_ratio": round(fees / abs(gross_realized), 8) if gross_realized else None,
         "expectancy_net_pnl": round(net_realized / len(closed), 8) if closed else 0.0,
         "profit_factor": round(profit_factor, 8) if profit_factor is not None else None,
+        "average_win_pnl": round(average_win_pnl, 8),
+        "average_loss_pnl": round(average_loss_pnl, 8),
         "average_realized_r": _avg([float(value) for value in realized_rs if value is not None]),
-        "average_win_r": _avg([float(value) for value in win_rs if value is not None]),
-        "average_loss_r": _avg([float(value) for value in loss_rs if value is not None]),
+        "average_win_r": average_win_r,
+        "average_loss_r": average_loss_r,
+        "average_rr": round(average_rr, 8) if average_rr is not None else None,
+        "best_trade": round(max(closed_pnls), 8) if closed_pnls else 0.0,
+        "worst_trade": round(min(closed_pnls), 8) if closed_pnls else 0.0,
+        "sharpe_ratio": round(sharpe_ratio, 8) if sharpe_ratio is not None else None,
         "by_exit_reason": dict(by_exit_reason),
     }
-
 
 def build_leg_performance(items: list[dict[str, Any]]) -> dict[str, Any]:
     levels = {}
@@ -515,11 +576,190 @@ def build_equity_drawdown_v2(account_id: int, limit: int = 1000) -> dict[str, An
     }
 
 
+
+def _parse_dt(value: Any):
+    if value is None:
+        return None
+    if hasattr(value, "hour") and hasattr(value, "date"):
+        return value
+    try:
+        from datetime import datetime
+        text = str(value)
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def _session_name_from_hour(hour: int) -> str:
+    if 0 <= hour < 8:
+        return "Asia"
+    if 8 <= hour < 13:
+        return "London"
+    if 13 <= hour < 21:
+        return "New York"
+    return "Late"
+
+
+def _closed_v2_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [item for item in items if item.get("status") == "closed"]
+
+
+def _side_stats(items: list[dict[str, Any]]) -> dict[str, Any]:
+    trades = len(items)
+    pnl_values = [_to_float(item.get("net_realized_pnl")) for item in items]
+    pnl = sum(pnl_values)
+    wins = sum(1 for value in pnl_values if value > 0)
+    return {
+        "trades": trades,
+        "pnl": round(pnl, 8),
+        "win_rate": _rate(wins, trades),
+        "expectancy": round(pnl / trades, 8) if trades else 0.0,
+    }
+
+
+def build_directional_breakdown_v2(items: list[dict[str, Any]]) -> dict[str, Any]:
+    closed = _closed_v2_items(items)
+    long_items = [item for item in closed if str(item.get("side") or "").lower() == "long"]
+    short_items = [item for item in closed if str(item.get("side") or "").lower() == "short"]
+    return {
+        "long": _side_stats(long_items),
+        "short": _side_stats(short_items),
+    }
+
+
+def build_hourly_performance_v2(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    buckets: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for item in _closed_v2_items(items):
+        closed_at = _parse_dt(item.get("closed_at"))
+        if closed_at is None:
+            continue
+        buckets[int(closed_at.hour)].append(item)
+
+    rows = []
+    for hour in sorted(buckets):
+        stats = _side_stats(buckets[hour])
+        rows.append({
+            "hour": hour,
+            "pnl": stats["pnl"],
+            "trades": stats["trades"],
+            "win_rate": stats["win_rate"],
+        })
+    return rows
+
+
+def build_weekday_performance_v2(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    buckets: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for item in _closed_v2_items(items):
+        closed_at = _parse_dt(item.get("closed_at"))
+        if closed_at is None:
+            continue
+        buckets[int(closed_at.weekday())].append(item)
+
+    rows = []
+    for weekday_index in sorted(buckets):
+        stats = _side_stats(buckets[weekday_index])
+        rows.append({
+            "weekday": weekday_names[weekday_index],
+            "pnl": stats["pnl"],
+            "trades": stats["trades"],
+            "win_rate": stats["win_rate"],
+        })
+    return rows
+
+
+def build_session_performance_v2(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    order = ["Asia", "London", "New York", "Late"]
+    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in _closed_v2_items(items):
+        closed_at = _parse_dt(item.get("closed_at"))
+        if closed_at is None:
+            continue
+        buckets[_session_name_from_hour(int(closed_at.hour))].append(item)
+
+    rows = []
+    for session in order:
+        if session not in buckets:
+            continue
+        stats = _side_stats(buckets[session])
+        rows.append({
+            "session": session,
+            "pnl": stats["pnl"],
+            "trades": stats["trades"],
+            "win_rate": stats["win_rate"],
+        })
+    return rows
+
+
+def build_calendar_performance_v2(items: list[dict[str, Any]], limit_days: int = 120) -> list[dict[str, Any]]:
+    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in _closed_v2_items(items):
+        closed_at = _parse_dt(item.get("closed_at"))
+        if closed_at is None:
+            continue
+        buckets[closed_at.date().isoformat()].append(item)
+
+    dates = sorted(buckets.keys())
+    if limit_days and limit_days > 0:
+        dates = dates[-limit_days:]
+
+    rows = []
+    for date in dates:
+        stats = _side_stats(buckets[date])
+        rows.append({
+            "date": date,
+            "pnl": stats["pnl"],
+            "trades": stats["trades"],
+            "win_rate": stats["win_rate"],
+        })
+    return rows
+
+
+def build_monthly_summary_v2(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    calendar_days = build_calendar_performance_v2(items, limit_days=370)
+    if not calendar_days:
+        return None
+
+    latest_month = max(str(day["date"])[:7] for day in calendar_days)
+    month_days = [day for day in calendar_days if str(day["date"]).startswith(latest_month)]
+
+    pnl = sum(_to_float(day.get("pnl")) for day in month_days)
+    winning_days = sum(1 for day in month_days if _to_float(day.get("pnl")) > 0)
+    losing_days = sum(1 for day in month_days if _to_float(day.get("pnl")) < 0)
+    flat_days = sum(1 for day in month_days if _to_float(day.get("pnl")) == 0)
+    pnl_values = [_to_float(day.get("pnl")) for day in month_days]
+
+    return {
+        "month": latest_month,
+        "pnl": round(pnl, 8),
+        "pnl_pct": 0.0,
+        "winning_days": winning_days,
+        "losing_days": losing_days,
+        "flat_days": flat_days,
+        "best_day": round(max(pnl_values), 8) if pnl_values else None,
+        "worst_day": round(min(pnl_values), 8) if pnl_values else None,
+    }
+
+
+def build_time_analytics_v2(items: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "directional_breakdown": build_directional_breakdown_v2(items),
+        "hourly_performance": build_hourly_performance_v2(items),
+        "weekday_performance": build_weekday_performance_v2(items),
+        "session_performance": build_session_performance_v2(items),
+        "calendar_days": build_calendar_performance_v2(items, limit_days=120),
+        "monthly_summary": build_monthly_summary_v2(items),
+    }
+
+
 def get_performance_v2(account_id: int, limit: int | None = None, equity_limit: int = 1000) -> dict[str, Any]:
     position_payload = build_position_performance(account_id, limit)
     items = position_payload["items"]
     latest_equity = fetch_latest_equity(account_id)
     equity = build_equity_drawdown_v2(account_id, equity_limit)
+    time_analytics = build_time_analytics_v2(items)
 
     return {
         "ok": True,
@@ -531,12 +771,12 @@ def get_performance_v2(account_id: int, limit: int | None = None, equity_limit: 
         "leg_summary": build_leg_performance(items),
         "cost_breakdown": build_cost_breakdown(items),
         "equity": equity,
+        "time_analytics": time_analytics,
         "positions": {
             "count": len(items),
             "items": items,
         },
     }
-
 
 def get_performance_v2_summary(account_id: int, limit: int | None = None) -> dict[str, Any]:
     position_payload = build_position_performance(account_id, limit)

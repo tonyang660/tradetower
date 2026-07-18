@@ -6,7 +6,7 @@ from config import EVALUATOR_BASE_URL
 from http_client import get_json
 from time_utils import iso_now
 
-PERFORMANCE_PAGE_V2_VERSION = "phase7_step12_performance_page_v2"
+PERFORMANCE_PAGE_V2_VERSION = "phase7_step12_performance_page_v2_hotfix6_7_v2_only"
 
 
 def _safe_get(source: str, path: str, params: dict[str, Any] | None = None, timeout: int = 30):
@@ -46,14 +46,12 @@ def _safe_get(source: str, path: str, params: dict[str, Any] | None = None, time
 def _num(value: Any, fallback: float = 0.0) -> float:
     if isinstance(value, (int, float)):
         return float(value)
+    if isinstance(value, str) and value.strip() != "":
+        try:
+            return float(value)
+        except Exception:
+            return fallback
     return fallback
-
-
-def _items(payload: dict[str, Any] | None, key: str = "items") -> list[Any]:
-    if not isinstance(payload, dict):
-        return []
-    value = payload.get(key)
-    return value if isinstance(value, list) else []
 
 
 def _service_block(payload: dict[str, Any] | None, error: dict[str, Any] | None) -> dict[str, Any]:
@@ -136,15 +134,22 @@ def _map_summary(performance_v2: dict[str, Any] | None) -> dict[str, Any] | None
         "win_rate": _num(position_summary.get("position_win_rate")),
         "expectancy": _num(position_summary.get("expectancy_net_pnl")),
         "profit_factor": position_summary.get("profit_factor"),
-        "average_win": _num(position_summary.get("average_win_pnl")),
-        "average_loss": _num(position_summary.get("average_loss_pnl")),
-        "average_rr": position_summary.get("average_realized_r"),
+        "average_win": _num(position_summary.get("average_win_pnl"), _num(position_summary.get("average_win"))),
+        "average_loss": _num(position_summary.get("average_loss_pnl"), _num(position_summary.get("average_loss"))),
+        "average_rr": position_summary.get("average_rr", position_summary.get("average_realized_r")),
         "sharpe_ratio": position_summary.get("sharpe_ratio"),
         "best_trade": _num(position_summary.get("best_trade")),
         "worst_trade": _num(position_summary.get("worst_trade")),
         "wins": wins,
         "losses": losses,
     }
+
+
+def _time_analytics(performance_v2: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(performance_v2, dict):
+        return {}
+    value = performance_v2.get("time_analytics")
+    return value if isinstance(value, dict) else {}
 
 
 def get_performance_page_v2(account_id: int, limit: int = 500, equity_limit: int = 1000) -> dict[str, Any]:
@@ -163,65 +168,7 @@ def get_performance_page_v2(account_id: int, limit: int = 500, equity_limit: int
     if performance_error:
         errors.append(performance_error)
 
-    # Existing time/bucket diagnostics may still be available from the older
-    # evaluator performance endpoints. They are additive and should not block
-    # the page if missing after the V2 overhaul.
-    directional_payload, directional_error = _safe_get(
-        "directional_breakdown",
-        "/performance/directional-breakdown",
-        {"account_id": account_id},
-        timeout=20,
-    )
-    if directional_error:
-        errors.append(directional_error)
-
-    hourly_payload, hourly_error = _safe_get(
-        "hourly_performance",
-        "/performance/hourly",
-        {"account_id": account_id},
-        timeout=20,
-    )
-    if hourly_error:
-        errors.append(hourly_error)
-
-    weekday_payload, weekday_error = _safe_get(
-        "weekday_performance",
-        "/performance/weekday",
-        {"account_id": account_id},
-        timeout=20,
-    )
-    if weekday_error:
-        errors.append(weekday_error)
-
-    session_payload, session_error = _safe_get(
-        "session_performance",
-        "/performance/session",
-        {"account_id": account_id},
-        timeout=20,
-    )
-    if session_error:
-        errors.append(session_error)
-
-    calendar_payload, calendar_error = _safe_get(
-        "calendar",
-        "/performance/calendar",
-        {
-            "account_id": account_id,
-            "limit_days": 120,
-        },
-        timeout=20,
-    )
-    if calendar_error:
-        errors.append(calendar_error)
-
-    monthly_payload, monthly_error = _safe_get(
-        "monthly_summary",
-        "/performance/monthly-summary",
-        {"account_id": account_id},
-        timeout=20,
-    )
-    if monthly_error:
-        errors.append(monthly_error)
+    analytics = _time_analytics(performance_v2)
 
     return {
         "ok": performance_error is None,
@@ -232,27 +179,22 @@ def get_performance_page_v2(account_id: int, limit: int = 500, equity_limit: int
         "summary": _map_summary(performance_v2),
         "equity_curve": _map_equity_curve(performance_v2),
         "drawdown_curve": _map_drawdown_curve(performance_v2),
-        "directional_breakdown": directional_payload.get("directional_breakdown") if isinstance(directional_payload, dict) else None,
-        "hourly_performance": _items(hourly_payload),
-        "weekday_performance": _items(weekday_payload),
-        "session_performance": _items(session_payload),
-        "calendar_days": _items(calendar_payload),
-        "monthly_summary": monthly_payload.get("monthly_summary") if isinstance(monthly_payload, dict) else None,
+        "directional_breakdown": analytics.get("directional_breakdown"),
+        "hourly_performance": analytics.get("hourly_performance") or [],
+        "weekday_performance": analytics.get("weekday_performance") or [],
+        "session_performance": analytics.get("session_performance") or [],
+        "calendar_days": analytics.get("calendar_days") or [],
+        "monthly_summary": analytics.get("monthly_summary"),
         "v2": {
             "performance": performance_v2,
             "pnl_convention": performance_v2.get("pnl_convention") if isinstance(performance_v2, dict) else None,
             "cost_breakdown": performance_v2.get("cost_breakdown") if isinstance(performance_v2, dict) else None,
             "leg_summary": performance_v2.get("leg_summary") if isinstance(performance_v2, dict) else None,
             "latest_equity": performance_v2.get("latest_equity") if isinstance(performance_v2, dict) else None,
+            "time_analytics": analytics,
         },
         "services": {
             "performance_v2": _service_block(performance_v2, performance_error),
-            "directional_breakdown": _service_block(directional_payload, directional_error),
-            "hourly_performance": _service_block(hourly_payload, hourly_error),
-            "weekday_performance": _service_block(weekday_payload, weekday_error),
-            "session_performance": _service_block(session_payload, session_error),
-            "calendar": _service_block(calendar_payload, calendar_error),
-            "monthly_summary": _service_block(monthly_payload, monthly_error),
         },
         "errors": errors,
     }
