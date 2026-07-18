@@ -8,6 +8,69 @@ from cycle_summary_v2 import normalize_cycle_summary_events
 from event_store import store_evaluator_events
 
 
+
+def first_present(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def derive_strategy_candidate(item: dict):
+    return first_present(
+        item.get("best_strategy_candidate"),
+        item.get("selected_strategy"),
+        item.get("strategy"),
+        item.get("regime_strategy"),
+    )
+
+
+def derive_strategy_score(item: dict):
+    selected_strategy = derive_strategy_candidate(item)
+
+    score = first_present(
+        item.get("best_strategy_score"),
+        item.get("score"),
+        item.get("confidence"),
+        item.get("setup_confidence"),
+        item.get("decision_confidence"),
+    )
+
+    if score is not None:
+        return score
+
+    strategy_scores = item.get("strategy_scores")
+    if isinstance(strategy_scores, dict):
+        if selected_strategy and strategy_scores.get(selected_strategy) is not None:
+            return strategy_scores.get(selected_strategy)
+
+        numeric_scores = [
+            value
+            for value in strategy_scores.values()
+            if isinstance(value, (int, float))
+        ]
+        if numeric_scores:
+            return max(numeric_scores)
+
+    return None
+
+
+def derive_setup_confidence(item: dict):
+    return first_present(
+        item.get("setup_confidence"),
+        item.get("confidence"),
+        item.get("score"),
+    )
+
+
+def derive_decision_confidence(item: dict):
+    return first_present(
+        item.get("decision_confidence"),
+        item.get("confidence"),
+        item.get("score"),
+    )
+
+
 def upsert_decision_row(cur, row: dict):
     cur.execute(
         """
@@ -270,11 +333,15 @@ def ingest_cycle_summary(payload: dict):
 
                 symbol_rows[symbol]["strategy_regime"] = item.get("regime")
                 symbol_rows[symbol]["strategy_macro_bias"] = item.get("macro_bias")
-                symbol_rows[symbol]["strategy_setup_confidence"] = item.get("setup_confidence")
-                symbol_rows[symbol]["strategy_decision_confidence"] = item.get("decision_confidence")
-                symbol_rows[symbol]["best_strategy_candidate"] = item.get("best_strategy_candidate")
-                symbol_rows[symbol]["best_strategy_score"] = item.get("best_strategy_score")
-                symbol_rows[symbol]["strategy_reason_tags_json"] = json_dumps(item.get("reason_tags", []))
+                symbol_rows[symbol]["strategy_setup_confidence"] = derive_setup_confidence(item)
+                symbol_rows[symbol]["strategy_decision_confidence"] = derive_decision_confidence(item)
+                symbol_rows[symbol]["best_strategy_candidate"] = derive_strategy_candidate(item)
+                symbol_rows[symbol]["best_strategy_score"] = derive_strategy_score(item)
+                symbol_rows[symbol]["strategy_reason_tags_json"] = json_dumps(
+                    item.get("reason_tags")
+                    or item.get("strategy_reason_tags")
+                    or []
+                )
                 symbol_rows[symbol]["final_decision"] = item.get("decision")
 
             # Merge risk engine results
