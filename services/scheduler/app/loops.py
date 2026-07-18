@@ -18,7 +18,7 @@ from time_utils import iso_now
 def pending_entry_loop():
     while True:
         try:
-            if state.AUTO_LOOP_ENABLED_STATE and len(state.PENDING_ENTRY_ORDERS) > 0:
+            if state.AUTO_LOOP_ENABLED_STATE:
                 result = process_pending_entries_once()
                 print(json.dumps({
                     "event": "PENDING_ENTRY_LOOP_COMPLETED",
@@ -38,7 +38,7 @@ def pending_entry_loop():
 def pending_exit_loop():
     while True:
         try:
-            if state.AUTO_LOOP_ENABLED_STATE and len(state.PENDING_EXIT_ORDERS) > 0:
+            if state.AUTO_LOOP_ENABLED_STATE:
                 result = process_pending_exits_once()
                 print(json.dumps({
                     "event": "PENDING_EXIT_LOOP_COMPLETED",
