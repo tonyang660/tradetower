@@ -336,7 +336,7 @@ def build_position_performance_item(
     events: list[dict[str, Any]],
     costs: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    gross_realized_pnl = 0.0
+    realized_pnl = 0.0
     fees_from_events = 0.0
     slippage_values = []
     exit_reason = "open" if position.get("status") == "open" else "closed_unknown"
@@ -363,15 +363,14 @@ def build_position_performance_item(
         fee = _to_float(details.get("fee_paid"), 0.0)
         slippage = _to_float(details.get("slippage_bps"), None)
 
-        # POSITION_CLOSED is an audit/lifecycle marker. For TP3 and STOP_LOSS,
-        # Trade Guardian records both the fill event and POSITION_CLOSED with
-        # the same realized_pnl and fee_paid. Counting both doubles PnL/fees.
+        # POSITION_CLOSED is an audit/lifecycle marker. Real realized PnL comes
+        # from fill events only.
         is_close_audit_event = event_type == "POSITION_CLOSED"
         is_realization_event = level is not None and not is_close_audit_event
 
         if is_realization_event:
             if execution_key is None or execution_key not in counted_execution_ids:
-                gross_realized_pnl += pnl
+                realized_pnl += pnl
                 fees_from_events += fee
                 if execution_key is not None:
                     counted_execution_ids.add(execution_key)
@@ -411,7 +410,12 @@ def build_position_performance_item(
     cost_fees = _to_float((costs or {}).get("fees_paid"), 0.0)
     total_fees = fees_from_events if fees_from_events else cost_fees
 
-    net_realized_pnl = gross_realized_pnl - total_fees
+    # V2 page convention after Hotfix 10:
+    # - event realized_pnl is the canonical realized PnL used by Overview/equity
+    # - Performance panels should sum that value as net/account realized PnL
+    # - Gross before fees is derived as net + fees
+    net_realized_pnl = realized_pnl
+    gross_realized_pnl = realized_pnl + total_fees
 
     risk_amount = _to_float(position.get("risk_amount"))
     realized_r = (net_realized_pnl / risk_amount) if risk_amount and risk_amount > 0 else None
