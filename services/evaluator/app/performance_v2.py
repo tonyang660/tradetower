@@ -818,15 +818,64 @@ def get_performance_v2(account_id: int, limit: int | None = None, equity_limit: 
     items = position_payload["items"]
     latest_equity = fetch_latest_equity(account_id)
     equity = build_equity_drawdown_v2(account_id, equity_limit)
+
+    position_summary = summarize_position_performance(items)
+
+    # Align Performance V2 with the account/equity convention used by Overview.
+    #
+    # In the live paper account, evaluator_equity_history.realized_pnl is the
+    # canonical realized PnL shown by Overview. Treat it as net realized PnL for
+    # the Performance page, and derive gross as net + fees.
+    #
+    # This avoids subtracting fees a second time from event-level realized_pnl
+    # and also makes the fee total match the account/equity snapshot instead of
+    # relying on partial reconstruction from position_events.
+    if isinstance(latest_equity, dict):
+        canonical_net = latest_equity.get("realized_pnl")
+        canonical_fees = latest_equity.get("fees_paid_total")
+
+        if canonical_net is not None:
+            net_value = _to_float(canonical_net)
+            fee_value = _to_float(canonical_fees, _to_float(position_summary.get("fees_paid")))
+            gross_value = net_value + fee_value
+
+            closed = int(position_summary.get("positions_closed") or 0)
+            wins = int(position_summary.get("wins") or 0)
+            losses = int(position_summary.get("losses") or 0)
+
+            # Rebuild aggregate PnL fields using the canonical account totals.
+            position_summary["net_realized_pnl"] = round(net_value, 8)
+            position_summary["fees_paid"] = round(fee_value, 8)
+            position_summary["gross_realized_pnl"] = round(gross_value, 8)
+            position_summary["expectancy_net_pnl"] = round(net_value / closed, 8) if closed else 0.0
+
+            # If all closed trades are losers, use canonical net/closed as the
+            # average loss. This keeps Trade Quality consistent with the summary.
+            if wins == 0 and losses == closed and closed > 0:
+                position_summary["average_win_pnl"] = 0.0
+                position_summary["average_loss_pnl"] = round(net_value / closed, 8)
+                position_summary["best_trade"] = max(_to_float(item.get("net_realized_pnl")) for item in items if item.get("status") == "closed") if closed else 0.0
+                position_summary["worst_trade"] = min(_to_float(item.get("net_realized_pnl")) for item in items if item.get("status") == "closed") if closed else 0.0
+
+            position_summary["fee_to_gross_realized_ratio"] = (
+                round(fee_value / abs(gross_value), 8) if gross_value else None
+            )
+
     time_analytics = build_time_analytics_v2(items)
 
     return {
         "ok": True,
         "performance_v2_version": PERFORMANCE_V2_VERSION,
         "account_id": account_id,
-        "pnl_convention": PNL_CONVENTION,
+        "pnl_convention": {
+            **PNL_CONVENTION,
+            "realized_pnl_source": "evaluator_equity_history.realized_pnl",
+            "realized_pnl_interpretation": "net_realized_pnl",
+            "gross_realized_pnl_formula": "net_realized_pnl + fees_paid_total",
+            "fees_source": "evaluator_equity_history.fees_paid_total",
+        },
         "latest_equity": latest_equity,
-        "position_summary": summarize_position_performance(items),
+        "position_summary": position_summary,
         "leg_summary": build_leg_performance(items),
         "cost_breakdown": build_cost_breakdown(items),
         "equity": equity,
