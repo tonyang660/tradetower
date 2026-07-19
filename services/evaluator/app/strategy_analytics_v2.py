@@ -69,10 +69,208 @@ def _score_bucket(score: Any) -> str:
     return "unknown"
 
 
+
+
+from datetime import datetime
+
+def _parse_dt(value: Any):
+    if value is None:
+        return None
+    if hasattr(value, "timestamp"):
+        return value
+    try:
+        text = str(value)
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+def _hold_minutes(item: dict[str, Any]) -> float | None:
+    opened = _parse_dt(item.get("opened_at"))
+    closed = _parse_dt(item.get("closed_at"))
+    if opened is None or closed is None:
+        return None
+    return max((closed - opened).total_seconds() / 60.0, 0.0)
+
+def _closed_position_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [item for item in items if str(item.get("status") or "").lower() == "closed"]
+
+def _avg(values: list[float]) -> float | None:
+    clean = [float(v) for v in values if v is not None]
+    return round(sum(clean) / len(clean), 8) if clean else None
+
+def _trade_score_for_item(item: dict[str, Any], decisions: list[dict[str, Any]]) -> float | None:
+    symbol = str(item.get("symbol") or "").upper()
+    opened_at = _parse_dt(item.get("opened_at"))
+    candidates = []
+    for row in decisions:
+        if str(row.get("symbol") or "").upper() != symbol:
+            continue
+        if row.get("paper_submitted") is not True and row.get("filled") is not True:
+            continue
+        decision_time = _parse_dt(row.get("decision_timestamp"))
+        if opened_at is not None and decision_time is not None and decision_time > opened_at:
+            continue
+        candidates.append((decision_time, row))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda pair: pair[0] or datetime.min, reverse=True)
+    row = candidates[0][1]
+    return _to_float(row.get("best_strategy_score"), _to_float(row.get("candidate_score"), None))
+
+def _trade_stats(items: list[dict[str, Any]]) -> dict[str, Any]:
+    trades = len(items)
+    gross = sum(_to_float(item.get("gross_realized_pnl")) for item in items)
+    net = sum(_to_float(item.get("net_realized_pnl")) for item in items)
+    fees = sum(_to_float(item.get("fees_paid")) for item in items)
+    wins = sum(1 for item in items if _to_float(item.get("net_realized_pnl")) > 0)
+    hold_values = [value for value in (_hold_minutes(item) for item in items) if value is not None]
+    return {
+        "trades": trades,
+        "gross_pnl": round(gross, 8),
+        "net_pnl": round(net, 8),
+        "total_fees": round(fees, 8),
+        "win_rate": _rate(wins, trades),
+        "expectancy": round(net / trades, 8) if trades else 0.0,
+        "avg_hold_minutes": round(sum(hold_values) / len(hold_values), 4) if hold_values else 0.0,
+    }
+
+def build_strategy_trade_summary_v2(items: list[dict[str, Any]], decisions: list[dict[str, Any]]) -> dict[str, Any]:
+    closed = _closed_position_items(items)
+    stats = _trade_stats(closed)
+    scores = [score for score in (_trade_score_for_item(item, decisions) for item in closed) if score is not None]
+    by_symbol: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in closed:
+        by_symbol[str(item.get("symbol") or "unknown").upper()].append(item)
+    symbol_pnls = [(symbol, sum(_to_float(item.get("net_realized_pnl")) for item in rows)) for symbol, rows in by_symbol.items()]
+    symbol_pnls.sort(key=lambda pair: pair[1], reverse=True)
+    gross = stats["gross_pnl"]
+    fees = stats["total_fees"]
+    return {
+        "total_closed_trades": stats["trades"],
+        "gross_pnl": stats["gross_pnl"],
+        "net_pnl": stats["net_pnl"],
+        "total_fees": stats["total_fees"],
+        "avg_trade_score": round(sum(scores) / len(scores), 4) if scores else 0.0,
+        "avg_hold_minutes": stats["avg_hold_minutes"],
+        "best_symbol": symbol_pnls[0][0] if symbol_pnls else None,
+        "worst_symbol": symbol_pnls[-1][0] if symbol_pnls else None,
+        "fee_to_gross_ratio": round(fees / abs(gross), 6) if gross else None,
+    }
+
+def build_strategy_score_buckets_v2(items: list[dict[str, Any]], decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in _closed_position_items(items):
+        grouped[_score_bucket(_trade_score_for_item(item, decisions))].append(item)
+    order = {"unknown": -1, "<60": 0, "60-69": 1, "70-74": 2, "75-79": 3, "80-84": 4, "85-89": 5, "90+": 6}
+    return sorted([{"bucket_label": bucket, **_trade_stats(bucket_items)} for bucket, bucket_items in grouped.items()], key=lambda row: order.get(row["bucket_label"], -1))
+
+def build_strategy_symbols_v2(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in _closed_position_items(items):
+        grouped[str(item.get("symbol") or "unknown").upper()].append(item)
+    rows = []
+    for symbol, symbol_items in grouped.items():
+        stats = _trade_stats(symbol_items)
+        stop_hits = tp1_hits = tp2_hits = tp3_hits = 0
+        for item in symbol_items:
+            exit_reason = str(item.get("exit_reason") or "").lower()
+            tp_hits = item.get("tp_hits") or {}
+            if "stop" in exit_reason:
+                stop_hits += 1
+            if bool(tp_hits.get("tp1")):
+                tp1_hits += 1
+            if bool(tp_hits.get("tp2")):
+                tp2_hits += 1
+            if bool(tp_hits.get("tp3")):
+                tp3_hits += 1
+        trades = stats["trades"]
+        gross = stats["gross_pnl"]
+        fees = stats["total_fees"]
+        rows.append({"symbol": symbol, **stats, "stop_out_rate": _rate(stop_hits, trades), "tp1_rate": _rate(tp1_hits, trades), "tp2_rate": _rate(tp2_hits, trades), "tp3_rate": _rate(tp3_hits, trades), "fee_to_gross_ratio": round(fees / abs(gross), 6) if gross else None})
+    return sorted(rows, key=lambda row: row["net_pnl"], reverse=True)
+
+def build_holding_times_v2(items: list[dict[str, Any]]) -> dict[str, Any]:
+    closed = _closed_position_items(items)
+    hold_values = [value for value in (_hold_minutes(item) for item in closed) if value is not None]
+    winner_holds = []
+    loser_holds = []
+    for item in closed:
+        hold = _hold_minutes(item)
+        if hold is None:
+            continue
+        if _to_float(item.get("net_realized_pnl")) > 0:
+            winner_holds.append(hold)
+        elif _to_float(item.get("net_realized_pnl")) < 0:
+            loser_holds.append(hold)
+    median = 0.0
+    if hold_values:
+        ordered = sorted(hold_values)
+        mid = len(ordered) // 2
+        median = ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in closed:
+        hold = _hold_minutes(item)
+        if hold is None:
+            continue
+        label = "<5m" if hold < 5 else "5-15m" if hold < 15 else "15-30m" if hold < 30 else "30-60m" if hold < 60 else "1-4h" if hold < 240 else "4h+"
+        buckets[label].append(item)
+    order = {"<5m": 0, "5-15m": 1, "15-30m": 2, "30-60m": 3, "1-4h": 4, "4h+": 5}
+    bucket_rows = []
+    for label, bucket_items in buckets.items():
+        bucket_rows.append({"bucket_label": label, "trades": len(bucket_items), "winners": sum(1 for item in bucket_items if _to_float(item.get("net_realized_pnl")) > 0), "losers": sum(1 for item in bucket_items if _to_float(item.get("net_realized_pnl")) < 0), "gross_pnl": round(sum(_to_float(item.get("gross_realized_pnl")) for item in bucket_items), 8), "net_pnl": round(sum(_to_float(item.get("net_realized_pnl")) for item in bucket_items), 8)})
+    return {"summary": {"avg_hold_minutes": _avg(hold_values) or 0.0, "median_hold_minutes": round(median, 4), "avg_winner_hold_minutes": _avg(winner_holds) or 0.0, "avg_loser_hold_minutes": _avg(loser_holds) or 0.0, "immediate_stopouts_count": sum(1 for item in closed if _to_float(item.get("net_realized_pnl")) < 0 and (_hold_minutes(item) is not None and _hold_minutes(item) < 5)), "fast_winners_count": sum(1 for item in closed if _to_float(item.get("net_realized_pnl")) > 0 and (_hold_minutes(item) is not None and _hold_minutes(item) < 15))}, "items": sorted(bucket_rows, key=lambda row: order.get(row["bucket_label"], 99))}
+
+def build_exit_outcomes_v2(items: list[dict[str, Any]]) -> dict[str, Any]:
+    closed = _closed_position_items(items)
+    total = len(closed)
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    stop_count = tp1_count = tp2_count = tp3_count = 0
+    for item in closed:
+        exit_reason = str(item.get("exit_reason") or "").lower()
+        tp_hits = item.get("tp_hits") or {}
+        if "stop" in exit_reason:
+            exit_type = "STOP_LOSS"
+            stop_count += 1
+        elif bool(tp_hits.get("tp3")):
+            exit_type = "TP3"
+        elif bool(tp_hits.get("tp2")):
+            exit_type = "TP2"
+        elif bool(tp_hits.get("tp1")):
+            exit_type = "TP1"
+        else:
+            exit_type = "UNKNOWN"
+        if bool(tp_hits.get("tp1")): tp1_count += 1
+        if bool(tp_hits.get("tp2")): tp2_count += 1
+        if bool(tp_hits.get("tp3")): tp3_count += 1
+        groups[exit_type].append(item)
+    order = {"STOP_LOSS": 0, "TP1": 1, "TP2": 2, "TP3": 3, "UNKNOWN": 4}
+    rows = []
+    for exit_type, group_items in groups.items():
+        net_values = [_to_float(item.get("net_realized_pnl")) for item in group_items]
+        rows.append({"exit_type": exit_type, "executions": len(group_items), "avg_realized_pnl": round(sum(net_values)/len(net_values), 8) if net_values else None, "total_realized_pnl": round(sum(net_values), 8), "total_fees": round(sum(_to_float(item.get("fees_paid")) for item in group_items), 8)})
+    return {"summary": {"stop_loss_rate": _rate(stop_count, total), "tp1_rate": _rate(tp1_count, total), "tp2_rate": _rate(tp2_count, total), "tp3_rate": _rate(tp3_count, total)}, "items": sorted(rows, key=lambda row: order.get(row["exit_type"], 99))}
+
+def build_fee_pressure_v2(items: list[dict[str, Any]]) -> dict[str, Any]:
+    symbols = build_strategy_symbols_v2(items)
+    total_fees = sum(_to_float(row.get("total_fees")) for row in symbols)
+    gross = sum(_to_float(row.get("gross_pnl")) for row in symbols)
+    trades = sum(int(row.get("trades") or 0) for row in symbols)
+    worst_fee_symbol = max(symbols, key=lambda row: _to_float(row.get("total_fees")))["symbol"] if symbols else None
+    efficient = [row for row in symbols if row.get("fee_to_gross_ratio") is not None]
+    best_fee_efficiency_symbol = min(efficient, key=lambda row: _to_float(row.get("fee_to_gross_ratio")))["symbol"] if efficient else None
+    rows = [{"symbol": row["symbol"], "gross_pnl": row["gross_pnl"], "total_fees": row["total_fees"], "net_pnl": row["net_pnl"], "avg_fees_per_trade": round(_to_float(row.get("total_fees")) / int(row.get("trades") or 1), 8), "fee_to_gross_ratio": row.get("fee_to_gross_ratio")} for row in symbols]
+    return {"summary": {"total_fees": round(total_fees, 8), "fee_to_gross_ratio": round(total_fees / abs(gross), 6) if gross else None, "avg_fees_per_trade": round(total_fees / trades, 8) if trades else 0.0, "worst_fee_symbol": worst_fee_symbol, "best_fee_efficiency_symbol": best_fee_efficiency_symbol}, "items": sorted(rows, key=lambda row: _to_float(row.get("fee_to_gross_ratio"), -1), reverse=True)}
+
+
+
+
 def fetch_decision_rows(account_id: int, limit: int | None = None) -> list[dict[str, Any]]:
-    sql = '''
+    sql = """
         SELECT
             cycle_id,
+            decision_timestamp,
             account_id,
             symbol,
             candidate_score,
@@ -94,42 +292,29 @@ def fetch_decision_rows(account_id: int, limit: int | None = None) -> list[dict[
         FROM evaluator_decision_history
         WHERE account_id = %s
         ORDER BY id DESC
-    '''
+    """
     params: list[Any] = [account_id]
     if limit is not None:
         sql += " LIMIT %s"
         params.append(limit)
-
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
-
     items = []
     for row in rows:
         items.append({
-            "cycle_id": row[0],
-            "account_id": int(row[1]),
-            "symbol": row[2],
-            "candidate_score": _to_float(row[3], None),
-            "candidate_bias": row[4],
-            "candidate_reasons": row[5] or [],
-            "candidate_sub_scores": row[6] or {},
-            "strategy_regime": row[7],
-            "strategy_macro_bias": row[8],
-            "strategy_setup_confidence": _to_float(row[9], None),
-            "strategy_decision_confidence": _to_float(row[10], None),
-            "best_strategy_candidate": row[11],
-            "best_strategy_score": _to_float(row[12], None),
-            "strategy_reason_tags": row[13] or [],
-            "final_decision": row[14],
-            "risk_approved": row[15],
-            "guardian_allowed": row[16],
-            "paper_submitted": row[17],
-            "filled": row[18],
+            "cycle_id": row[0], "decision_timestamp": row[1], "account_id": int(row[2]),
+            "symbol": row[3], "candidate_score": _to_float(row[4], None), "candidate_bias": row[5],
+            "candidate_reasons": row[6] or [], "candidate_sub_scores": row[7] or {},
+            "strategy_regime": row[8], "strategy_macro_bias": row[9],
+            "strategy_setup_confidence": _to_float(row[10], None),
+            "strategy_decision_confidence": _to_float(row[11], None),
+            "best_strategy_candidate": row[12], "best_strategy_score": _to_float(row[13], None),
+            "strategy_reason_tags": row[14] or [], "final_decision": row[15],
+            "risk_approved": row[16], "guardian_allowed": row[17], "paper_submitted": row[18], "filled": row[19],
         })
     return items
-
 
 def fetch_cycle_summaries(account_id: int, limit: int = 100) -> list[dict[str, Any]]:
     with get_conn() as conn:
@@ -370,16 +555,36 @@ def get_strategy_analytics_v2_risk_rejections(account_id: int, cycle_limit: int 
     }
 
 
+
 def get_strategy_analytics_v2_bundle(account_id: int, limit: int | None = None, cycle_limit: int = 100) -> dict[str, Any]:
+    from performance_v2 import build_position_performance
+    decisions = fetch_decision_rows(account_id, limit)
+    position_payload = build_position_performance(account_id, limit)
+    position_items = position_payload.get("items", [])
+    decision_summary = summarize_decision_rows(decisions)
+    trade_summary = build_strategy_trade_summary_v2(position_items, decisions)
     return {
         "ok": True,
-        "strategy_analytics_v2_version": STRATEGY_ANALYTICS_V2_VERSION,
+        "strategy_analytics_v2_version": STRATEGY_ANALYTICS_V2_VERSION + "_hotfix13_trade_outcomes",
         "account_id": account_id,
-        "summary": get_strategy_analytics_v2_summary(account_id, limit)["summary"],
+        "summary": trade_summary,
+        "trade_summary": trade_summary,
+        "decision_summary": decision_summary,
         "regimes": get_strategy_analytics_v2_regimes(account_id, limit)["items"],
         "setups": get_strategy_analytics_v2_setups(account_id, limit)["items"],
-        "score_buckets": get_strategy_analytics_v2_score_buckets(account_id, limit)["items"],
-        "symbols": get_strategy_analytics_v2_symbols(account_id, limit)["items"],
+        "score_buckets": build_strategy_score_buckets_v2(position_items, decisions),
+        "symbols": build_strategy_symbols_v2(position_items),
+        "holding_times": build_holding_times_v2(position_items),
+        "exit_outcomes": build_exit_outcomes_v2(position_items),
+        "fee_pressure": build_fee_pressure_v2(position_items),
         "score_components": get_strategy_analytics_v2_score_components(account_id, cycle_limit)["score_components"],
         "risk_rejections": get_strategy_analytics_v2_risk_rejections(account_id, cycle_limit)["risk_rejections"],
+        "positions": {"count": len(position_items), "closed_count": len(_closed_position_items(position_items))},
+        "pnl_convention": {
+            "source": "Performance V2 position items",
+            "net_realized_pnl": "account/equity realized pnl convention",
+            "gross_realized_pnl": "net_realized_pnl + fees_paid",
+            "fees": "actual execution fees counted once",
+        },
     }
+
