@@ -344,12 +344,14 @@ def _hold_minutes(item: dict[str, Any]) -> float | None:
 
 
 def _score_from_decision(row: dict[str, Any]) -> float | None:
-    # Prefer actual strategy-engine score, then confidence fields, then raw candidate score.
+    # Strategy Analytics score buckets must represent the actual strategy trade
+    # score, not the earlier candidate/filter score. candidate_score can be below
+    # the trade threshold because it is used to decide whether a symbol should be
+    # preserved for strategy review.
     for key in (
         "best_strategy_score",
         "strategy_decision_confidence",
         "strategy_setup_confidence",
-        "candidate_score",
     ):
         value = _to_float(row.get(key), None)
         if value is not None:
@@ -357,15 +359,25 @@ def _score_from_decision(row: dict[str, Any]) -> float | None:
     return None
 
 
+def _is_trade_like_decision(row: dict[str, Any]) -> bool:
+    final_decision = str(row.get("final_decision") or "").strip().lower()
+    return (
+        row.get("paper_submitted") is True
+        or row.get("filled") is True
+        or final_decision in {"trade", "paper_submitted", "submitted", "approved"}
+    )
+
+
 def _trade_score_for_item(item: dict[str, Any], decisions: list[dict[str, Any]]) -> float | None:
     symbol = str(item.get("symbol") or "").upper()
     opened_at = _parse_dt(item.get("opened_at"))
 
-    before_or_at_open = []
-    same_symbol_any_time = []
+    candidates = []
 
     for index, row in enumerate(decisions):
         if str(row.get("symbol") or "").upper() != symbol:
+            continue
+        if not _is_trade_like_decision(row):
             continue
 
         score = _score_from_decision(row)
@@ -373,40 +385,26 @@ def _trade_score_for_item(item: dict[str, Any], decisions: list[dict[str, Any]])
             continue
 
         decision_time = _parse_dt(row.get("decision_timestamp"))
-        same_symbol_any_time.append((decision_time, -index, row))
 
-        if opened_at is None:
-            before_or_at_open.append((decision_time, -index, row))
+        # If we have both timestamps, only use decisions at/before position open.
+        # Do not use future same-symbol rows; they are unrelated later decisions.
+        if opened_at is not None and decision_time is not None and decision_time > opened_at:
             continue
 
-        if decision_time is not None and decision_time <= opened_at:
-            before_or_at_open.append((decision_time, -index, row))
+        candidates.append((decision_time, -index, row))
 
-    # Best path: score from latest same-symbol decision at/before the position open.
-    if before_or_at_open:
-        before_or_at_open.sort(
-            key=lambda pair: (
-                pair[0] is not None,
-                pair[0] or datetime.min,
-                pair[1],
-            ),
-            reverse=True,
-        )
-        return _score_from_decision(before_or_at_open[0][2])
+    if not candidates:
+        return None
 
-    # Fallback: if timestamps are imperfect, use latest same-symbol scored decision.
-    if same_symbol_any_time:
-        same_symbol_any_time.sort(
-            key=lambda pair: (
-                pair[0] is not None,
-                pair[0] or datetime.min,
-                pair[1],
-            ),
-            reverse=True,
-        )
-        return _score_from_decision(same_symbol_any_time[0][2])
-
-    return None
+    candidates.sort(
+        key=lambda pair: (
+            pair[0] is not None,
+            pair[0] or datetime.min,
+            pair[1],
+        ),
+        reverse=True,
+    )
+    return _score_from_decision(candidates[0][2])
 
 def _trade_stats(items: list[dict[str, Any]]) -> dict[str, Any]:
     trades = len(items)
