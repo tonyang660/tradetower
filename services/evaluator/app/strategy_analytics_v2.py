@@ -90,10 +90,11 @@ def _score_bucket(score: Any) -> str:
 
 
 def fetch_decision_rows(account_id: int, limit: int | None = None) -> list[dict[str, Any]]:
+    # The deployed schema has no decision_timestamp column.
+    # cycle_id is an ISO timestamp string, e.g. 2026-07-19T05:25:08.064634Z.
     sql = """
         SELECT
             cycle_id,
-            decision_timestamp,
             account_id,
             symbol,
             candidate_score,
@@ -128,30 +129,30 @@ def fetch_decision_rows(account_id: int, limit: int | None = None) -> list[dict[
 
     items = []
     for row in rows:
+        cycle_id = row[0]
         items.append({
-            "cycle_id": row[0],
-            "decision_timestamp": row[1],
-            "account_id": int(row[2]),
-            "symbol": row[3],
-            "candidate_score": _to_float(row[4], None),
-            "candidate_bias": row[5],
-            "candidate_reasons": row[6] or [],
-            "candidate_sub_scores": row[7] or {},
-            "strategy_regime": row[8],
-            "strategy_macro_bias": row[9],
-            "strategy_setup_confidence": _to_float(row[10], None),
-            "strategy_decision_confidence": _to_float(row[11], None),
-            "best_strategy_candidate": row[12],
-            "best_strategy_score": _to_float(row[13], None),
-            "strategy_reason_tags": row[14] or [],
-            "final_decision": row[15],
-            "risk_approved": row[16],
-            "guardian_allowed": row[17],
-            "paper_submitted": row[18],
-            "filled": row[19],
+            "cycle_id": cycle_id,
+            "decision_timestamp": cycle_id,
+            "account_id": int(row[1]),
+            "symbol": row[2],
+            "candidate_score": _to_float(row[3], None),
+            "candidate_bias": row[4],
+            "candidate_reasons": row[5] or [],
+            "candidate_sub_scores": row[6] or {},
+            "strategy_regime": row[7],
+            "strategy_macro_bias": row[8],
+            "strategy_setup_confidence": _to_float(row[9], None),
+            "strategy_decision_confidence": _to_float(row[10], None),
+            "best_strategy_candidate": row[11],
+            "best_strategy_score": _to_float(row[12], None),
+            "strategy_reason_tags": row[13] or [],
+            "final_decision": row[14],
+            "risk_approved": row[15],
+            "guardian_allowed": row[16],
+            "paper_submitted": row[17],
+            "filled": row[18],
         })
     return items
-
 
 def fetch_cycle_summaries(account_id: int, limit: int = 100) -> list[dict[str, Any]]:
     with get_conn() as conn:
@@ -173,30 +174,22 @@ def fetch_cycle_summaries(account_id: int, limit: int = 100) -> list[dict[str, A
 
 def fetch_position_items_from_performance_v2(account_id: int, limit: int | None = None) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     try:
-        from performance_v2 import get_performance_v2
+        from performance_v2 import build_position_performance
 
-        payload = get_performance_v2(
-            account_id=account_id,
-            limit=limit,
-            equity_limit=1000,
-        )
-
-        positions = payload.get("positions") if isinstance(payload, dict) else None
-        items = positions.get("items") if isinstance(positions, dict) else None
+        payload = build_position_performance(account_id, limit)
+        items = payload.get("items") if isinstance(payload, dict) else None
         if isinstance(items, list):
             return items, None
 
         return [], {
-            "error": "performance_v2_positions_items_missing",
+            "error": "performance_v2_items_missing",
             "payload_keys": list(payload.keys()) if isinstance(payload, dict) else None,
-            "positions_type": str(type(positions)),
         }
     except Exception as exc:
         return [], {
             "error": "performance_v2_position_items_failed",
             "details": str(exc),
         }
-
 
 def summarize_decision_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(rows)
