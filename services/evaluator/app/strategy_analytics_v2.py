@@ -692,17 +692,26 @@ def build_fee_pressure_v2(items: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def get_strategy_analytics_v2_summary(account_id: int, limit: int | None = None) -> dict[str, Any]:
-    rows = fetch_decision_rows(account_id, limit)
+    # Position limit controls closed trades included in analytics.
+    # Decision rows must not use that same limit, because the matching entry
+    # decision may be older than the newest N decision rows.
+    decision_rows_for_attribution = fetch_decision_rows(account_id, None)
+    decision_rows_for_funnel = fetch_decision_rows(account_id, limit)
+
     position_items, position_error = fetch_position_items_from_performance_v2(account_id, limit)
     return {
         "ok": position_error is None,
         "strategy_analytics_v2_version": STRATEGY_ANALYTICS_V2_VERSION,
         "account_id": account_id,
-        "summary": build_strategy_trade_summary_v2(position_items, rows),
-        "decision_summary": summarize_decision_rows(rows),
+        "summary": build_strategy_trade_summary_v2(position_items, decision_rows_for_attribution),
+        "decision_summary": summarize_decision_rows(decision_rows_for_funnel),
         "position_source_error": position_error,
+        "score_attribution": {
+            "decision_rows_scanned": len(decision_rows_for_attribution),
+            "position_limit": limit,
+            "note": "Decision history is uncapped for score attribution so older entry decisions can be matched to recent closed positions.",
+        },
     }
-
 
 def get_strategy_analytics_v2_regimes(account_id: int, limit: int | None = None) -> dict[str, Any]:
     rows = fetch_decision_rows(account_id, limit)
@@ -726,16 +735,20 @@ def get_strategy_analytics_v2_setups(account_id: int, limit: int | None = None) 
 
 
 def get_strategy_analytics_v2_score_buckets(account_id: int, limit: int | None = None) -> dict[str, Any]:
-    rows = fetch_decision_rows(account_id, limit)
+    # Do not cap decision rows for trade-score attribution.
+    decision_rows_for_attribution = fetch_decision_rows(account_id, None)
     position_items, position_error = fetch_position_items_from_performance_v2(account_id, limit)
     return {
         "ok": position_error is None,
         "strategy_analytics_v2_version": STRATEGY_ANALYTICS_V2_VERSION,
         "account_id": account_id,
-        "items": build_strategy_score_buckets_v2(position_items, rows),
+        "items": build_strategy_score_buckets_v2(position_items, decision_rows_for_attribution),
         "position_source_error": position_error,
+        "score_attribution": {
+            "decision_rows_scanned": len(decision_rows_for_attribution),
+            "position_limit": limit,
+        },
     }
-
 
 def get_strategy_analytics_v2_symbols(account_id: int, limit: int | None = None) -> dict[str, Any]:
     position_items, position_error = fetch_position_items_from_performance_v2(account_id, limit)
@@ -775,11 +788,21 @@ def get_strategy_analytics_v2_risk_rejections(account_id: int, cycle_limit: int 
 
 
 def get_strategy_analytics_v2_bundle(account_id: int, limit: int | None = None, cycle_limit: int = 100) -> dict[str, Any]:
-    decisions = fetch_decision_rows(account_id, limit)
+    # Use two decision sets:
+    # - limited decisions for decision/funnel analytics
+    # - uncapped decisions for score attribution to closed positions
+    #
+    # The dashboard passes limit=500. That is fine for the decision summary, but
+    # it can exclude the original trade decision row for a position if many
+    # evaluator rows were written after entry. Score matching must therefore be
+    # uncapped.
+    decision_rows_for_funnel = fetch_decision_rows(account_id, limit)
+    decision_rows_for_attribution = fetch_decision_rows(account_id, None)
+
     position_items, position_error = fetch_position_items_from_performance_v2(account_id, limit)
 
-    trade_summary = build_strategy_trade_summary_v2(position_items, decisions)
-    score_buckets = build_strategy_score_buckets_v2(position_items, decisions)
+    trade_summary = build_strategy_trade_summary_v2(position_items, decision_rows_for_attribution)
+    score_buckets = build_strategy_score_buckets_v2(position_items, decision_rows_for_attribution)
     symbols = build_strategy_symbols_v2(position_items)
     holding_times = build_holding_times_v2(position_items)
     exit_outcomes = build_exit_outcomes_v2(position_items)
@@ -791,7 +814,7 @@ def get_strategy_analytics_v2_bundle(account_id: int, limit: int | None = None, 
         "account_id": account_id,
         "summary": trade_summary,
         "trade_summary": trade_summary,
-        "decision_summary": summarize_decision_rows(decisions),
+        "decision_summary": summarize_decision_rows(decision_rows_for_funnel),
         "regimes": get_strategy_analytics_v2_regimes(account_id, limit)["items"],
         "setups": get_strategy_analytics_v2_setups(account_id, limit)["items"],
         "score_buckets": score_buckets,
@@ -806,6 +829,12 @@ def get_strategy_analytics_v2_bundle(account_id: int, limit: int | None = None, 
             "closed_count": len(_closed_position_items(position_items)),
         },
         "position_source_error": position_error,
+        "score_attribution": {
+            "decision_rows_scanned": len(decision_rows_for_attribution),
+            "decision_summary_rows_scanned": len(decision_rows_for_funnel),
+            "position_limit": limit,
+            "note": "Decision history is uncapped for trade-score attribution. The page limit only caps positions and decision-summary rows.",
+        },
         "pnl_convention": {
             "source": "Performance V2 position items",
             "net_realized_pnl": "account/equity realized pnl convention",
@@ -813,3 +842,4 @@ def get_strategy_analytics_v2_bundle(account_id: int, limit: int | None = None, 
             "fees": "actual execution fees counted once",
         },
     }
+
