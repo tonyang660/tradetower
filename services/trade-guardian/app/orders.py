@@ -714,6 +714,124 @@ def apply_order_fill(order_id: int, fill_size: float, fill_price: float):
     return result
 
 
+
+def resize_stop_order_for_position(position_id: int, new_size: float):
+    # After TP1/TP2 partially reduce a position, the reduce-only stop should
+    # protect only the remaining position size. Otherwise a later stop fill
+    # closes the remaining position but leaves the original full-size stop order
+    # marked partially_filled.
+    query = f"""
+    UPDATE orders
+    SET requested_size = %s,
+        remaining_size = GREATEST(%s - filled_size, 0),
+        status = CASE
+            WHEN %s <= 0 THEN 'cancelled'
+            WHEN filled_size >= %s THEN 'filled'
+            ELSE status
+        END,
+        filled_at = CASE
+            WHEN filled_size >= %s THEN COALESCE(filled_at, NOW())
+            ELSE filled_at
+        END,
+        cancelled_at = CASE
+            WHEN %s <= 0 THEN COALESCE(cancelled_at, NOW())
+            ELSE cancelled_at
+        END,
+        updated_at = NOW()
+    WHERE linked_position_id = %s
+      AND role = 'stop_loss'
+      AND status IN ({_active_status_sql()})
+    RETURNING order_id, requested_size, filled_size, remaining_size, status
+    """
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                query,
+                (
+                    new_size,
+                    new_size,
+                    new_size,
+                    new_size,
+                    new_size,
+                    new_size,
+                    position_id,
+                    *ACTIVE_ORDER_STATUSES,
+                ),
+            )
+            rows = cur.fetchall()
+        conn.commit()
+
+    return [
+        {
+            "order_id": int(row[0]),
+            "requested_size": float(row[1]),
+            "filled_size": float(row[2] or 0),
+            "remaining_size": float(row[3] or 0),
+            "status": row[4],
+        }
+        for row in rows
+    ]
+
+
+def finalize_position_closing_order(order_id: int, fill_size: float, fill_price: float):
+    # A position-closing stop/exit can close the remaining position even when the
+    # historical protective order requested_size still reflects the original
+    # position size. In that case normal apply_order_fill() would leave the order
+    # partially_filled forever. Normalize the closing order to the actual final
+    # filled size and mark it filled.
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            result = finalize_position_closing_order_tx(
+                cur=cur,
+                order_id=order_id,
+                fill_size=fill_size,
+                fill_price=fill_price,
+            )
+        conn.commit()
+    return result
+
+
+def finalize_position_closing_order_tx(cur, order_id: int, fill_size: float, fill_price: float):
+    cur.execute(
+        """
+        UPDATE orders
+        SET average_fill_price = CASE
+                WHEN filled_size <= 0 OR average_fill_price IS NULL THEN %s
+                ELSE ((average_fill_price * filled_size) + (%s * %s))
+                     / NULLIF(filled_size + %s, 0)
+            END,
+            requested_size = filled_size + %s,
+            filled_size = filled_size + %s,
+            remaining_size = 0,
+            status = 'filled',
+            filled_at = COALESCE(filled_at, NOW()),
+            updated_at = NOW()
+        WHERE order_id = %s
+        RETURNING status, requested_size, filled_size, remaining_size, average_fill_price
+        """,
+        (
+            fill_price,
+            fill_price,
+            fill_size,
+            fill_size,
+            fill_size,
+            fill_size,
+            order_id,
+        ),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+
+    return {
+        "status": row[0],
+        "requested_size": float(row[1]),
+        "filled_size": float(row[2]),
+        "remaining_size": float(row[3]),
+        "average_fill_price": float(row[4]),
+    }
+
 def create_protective_orders_for_position(
     account_id: int,
     symbol: str,

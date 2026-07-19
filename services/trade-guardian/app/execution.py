@@ -6,6 +6,8 @@ from orders import (
     apply_order_fill,
     apply_order_fill_tx,
     create_protective_orders_for_position_tx,
+    finalize_position_closing_order,
+    resize_stop_order_for_position,
 )
 from position_events import (
     record_position_event,
@@ -277,6 +279,11 @@ def apply_execution_report(payload: dict):
                 fill_price=fill_price,
             )
 
+        resize_stop_order_for_position(
+            open_position["position_id"],
+            new_remaining,
+        )
+
         record_position_event(
             position_id=open_position["position_id"],
             account_id=account_id,
@@ -372,6 +379,11 @@ def apply_execution_report(payload: dict):
                 fill_size=close_size,
                 fill_price=fill_price,
             )
+
+        resize_stop_order_for_position(
+            open_position["position_id"],
+            new_remaining,
+        )
 
         record_position_event(
             position_id=open_position["position_id"],
@@ -576,7 +588,7 @@ def apply_execution_report(payload: dict):
         apply_exit_balance_update(account_id, released_margin, realized_pnl, fee_paid)
 
         if order_id is not None:
-            apply_order_fill(
+            finalize_position_closing_order(
                 order_id=int(order_id),
                 fill_size=close_size,
                 fill_price=fill_price,
