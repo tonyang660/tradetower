@@ -169,33 +169,80 @@ def fetch_position_events(account_id: int, position_id: int) -> list[dict[str, A
 
 
 def fetch_position_executions(account_id: int, position: dict[str, Any]) -> list[dict[str, Any]]:
-    position_id = str(position["position_id"])
-    symbol = position["symbol"]
+    position_id = int(position["position_id"])
 
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                '''
+                """
                 SELECT
-                    execution_id, account_id, order_id, symbol, side,
-                    execution_type, fill_price, filled_size, fee_paid,
-                    slippage_bps, executed_at, details_json
-                FROM execution_reports
-                WHERE account_id = %s
-                  AND symbol = %s
-                  AND (
-                        details_json->>'position_id' = %s
-                     OR details_json->'position'->>'position_id' = %s
-                     OR details_json->'execution_event'->>'position_id' = %s
-                  )
-                ORDER BY executed_at ASC, execution_id ASC
-                ''',
-                (account_id, symbol, position_id, position_id, position_id),
+                    column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'execution_reports'
+                """
+            )
+            columns = {str(row[0]) for row in cur.fetchall()}
+
+            side_expr = (
+                "er.side"
+                if "side" in columns
+                else "er.position_side"
+                if "position_side" in columns
+                else "NULL::text"
+            )
+
+            executed_at_expr = (
+                "er.executed_at"
+                if "executed_at" in columns
+                else "er.execution_timestamp"
+                if "execution_timestamp" in columns
+                else "NULL::timestamptz"
+            )
+
+            details_expr = (
+                "er.details_json"
+                if "details_json" in columns
+                else "jsonb_build_object('notes', er.notes)"
+                if "notes" in columns
+                else "NULL::jsonb"
+            )
+
+            # Prefer the normalized lifecycle link through position_events.
+            # This works with the deployed execution_reports schema, which has no details_json.
+            cur.execute(
+                f"""
+                WITH matched_executions AS (
+                    SELECT DISTINCT execution_id
+                    FROM position_events
+                    WHERE account_id = %s
+                      AND position_id = %s
+                      AND execution_id IS NOT NULL
+                )
+                SELECT
+                    er.execution_id,
+                    er.account_id,
+                    er.order_id,
+                    er.symbol,
+                    {side_expr} AS side,
+                    er.execution_type,
+                    er.fill_price,
+                    er.filled_size,
+                    er.fee_paid,
+                    er.slippage_bps,
+                    {executed_at_expr} AS executed_at,
+                    {details_expr} AS details_json
+                FROM execution_reports er
+                JOIN matched_executions me
+                  ON me.execution_id = er.execution_id
+                WHERE er.account_id = %s
+                ORDER BY executed_at ASC NULLS LAST, er.execution_id ASC
+                """,
+                (account_id, position_id, account_id),
             )
             rows = cur.fetchall()
 
     return [_execution_row_to_dict(row) for row in rows]
-
 
 def fetch_position_management_events(account_id: int, position_id: int, symbol: str) -> list[dict[str, Any]]:
     position_id_text = str(position_id)
