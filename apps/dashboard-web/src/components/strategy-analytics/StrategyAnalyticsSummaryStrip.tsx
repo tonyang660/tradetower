@@ -50,6 +50,7 @@ export default function StrategyAnalyticsSummaryStrip({
         label="Best / Worst Symbol"
         value={`${s?.best_symbol ?? "-"} / ${s?.worst_symbol ?? "-"}`}
         hint="By net pnl"
+        valueClassName="mt-4 break-words text-lg font-semibold tracking-tight text-white sm:text-xl"
       />
       <MetricCard
         label="Fee / Gross"

@@ -343,28 +343,70 @@ def _hold_minutes(item: dict[str, Any]) -> float | None:
         return None
 
 
+def _score_from_decision(row: dict[str, Any]) -> float | None:
+    # Prefer actual strategy-engine score, then confidence fields, then raw candidate score.
+    for key in (
+        "best_strategy_score",
+        "strategy_decision_confidence",
+        "strategy_setup_confidence",
+        "candidate_score",
+    ):
+        value = _to_float(row.get(key), None)
+        if value is not None:
+            return value
+    return None
+
+
 def _trade_score_for_item(item: dict[str, Any], decisions: list[dict[str, Any]]) -> float | None:
     symbol = str(item.get("symbol") or "").upper()
     opened_at = _parse_dt(item.get("opened_at"))
 
-    candidates = []
-    for row in decisions:
+    before_or_at_open = []
+    same_symbol_any_time = []
+
+    for index, row in enumerate(decisions):
         if str(row.get("symbol") or "").upper() != symbol:
             continue
-        if row.get("paper_submitted") is not True and row.get("filled") is not True:
-            continue
-        decision_time = _parse_dt(row.get("decision_timestamp"))
-        if opened_at is not None and decision_time is not None and decision_time > opened_at:
-            continue
-        candidates.append((decision_time, row))
 
-    if candidates:
-        candidates.sort(key=lambda pair: pair[0] or datetime.min, reverse=True)
-        row = candidates[0][1]
-        return _to_float(row.get("best_strategy_score"), _to_float(row.get("candidate_score"), None))
+        score = _score_from_decision(row)
+        if score is None:
+            continue
+
+        decision_time = _parse_dt(row.get("decision_timestamp"))
+        same_symbol_any_time.append((decision_time, -index, row))
+
+        if opened_at is None:
+            before_or_at_open.append((decision_time, -index, row))
+            continue
+
+        if decision_time is not None and decision_time <= opened_at:
+            before_or_at_open.append((decision_time, -index, row))
+
+    # Best path: score from latest same-symbol decision at/before the position open.
+    if before_or_at_open:
+        before_or_at_open.sort(
+            key=lambda pair: (
+                pair[0] is not None,
+                pair[0] or datetime.min,
+                pair[1],
+            ),
+            reverse=True,
+        )
+        return _score_from_decision(before_or_at_open[0][2])
+
+    # Fallback: if timestamps are imperfect, use latest same-symbol scored decision.
+    if same_symbol_any_time:
+        same_symbol_any_time.sort(
+            key=lambda pair: (
+                pair[0] is not None,
+                pair[0] or datetime.min,
+                pair[1],
+            ),
+            reverse=True,
+        )
+        return _score_from_decision(same_symbol_any_time[0][2])
 
     return None
-
 
 def _trade_stats(items: list[dict[str, Any]]) -> dict[str, Any]:
     trades = len(items)

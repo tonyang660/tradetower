@@ -53,14 +53,13 @@ function normalizeSummary(
     gross_pnl: numberOrZero(summary.gross_pnl),
     net_pnl: numberOrZero(summary.net_pnl),
     total_fees: numberOrZero(summary.total_fees),
-    avg_trade_score: numberOrZero(summary.avg_trade_score),
+    avg_trade_score: nullableNumber(summary.avg_trade_score) as number,
     avg_hold_minutes: numberOrZero(summary.avg_hold_minutes),
     best_symbol: summary.best_symbol ?? null,
     worst_symbol: summary.worst_symbol ?? null,
     fee_to_gross_ratio: nullableNumber(summary.fee_to_gross_ratio),
   };
 }
-
 function normalizeScoreBuckets(rows: ScoreBucketRow[]): ScoreBucketRow[] {
   const order = new Map<string, number>([
     ["<60", 0],
