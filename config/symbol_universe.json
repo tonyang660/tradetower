@@ -6,8 +6,7 @@
   "notes": [
     "Symbols are TradeTower internal symbols, e.g. BTCUSDT.",
     "Provider-specific symbols such as BTC-USDT are resolved by api-gateway.",
-    "Scheduler validates enabled symbols against /market/instruments before refresh.",
-    "correlation_group is consumed by Risk Engine Phase 5 Step 7 and is editable from dashboard configuration."
+    "correlation_group is user-editable and consumed by Risk Engine Step 7."
   ],
   "symbols": [
     {
@@ -117,6 +116,18 @@
       "enabled": true,
       "priority": 1,
       "correlation_group": "independent"
+    },
+    {
+      "symbol": "BTCUSDT",
+      "enabled": true,
+      "priority": 1,
+      "correlation_group": "btc_followers"
+    },
+    {
+      "symbol": "BNBUSDT",
+      "enabled": true,
+      "priority": 1,
+      "correlation_group": "major_alts"
     }
   ]
 }
