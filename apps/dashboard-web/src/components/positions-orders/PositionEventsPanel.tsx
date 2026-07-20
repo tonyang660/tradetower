@@ -7,6 +7,7 @@ type PositionEventLike = Record<string, any> & {
   _position_id: any;
   _symbol: any;
   position_event_id?: string | number | null;
+  execution_id?: string | number | null;
   event_timestamp?: string | null;
   created_at?: string | null;
   timestamp?: string | null;
@@ -73,7 +74,7 @@ function getEvents(item: PositionLifecycleLike): Record<string, any>[] {
   const direct = item.events ?? item.items;
   if (Array.isArray(direct)) return direct;
 
-  // Evaluator position_lifecycle.py returns these fields directly on each item:
+  // Evaluator lifecycle payloads are shaped like:
   // { position_events, executions, position_management_events, timeline }
   if (Array.isArray(item.position_events) && item.position_events.length > 0) {
     return item.position_events;
