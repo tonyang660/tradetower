@@ -34,15 +34,71 @@ def _account_ids_tuple(result, fallback_account_id):
         return result, None
     return [int(fallback_account_id)], f"invalid_account_id_result_shape: {type(result).__name__}"
 
+def _ids_from_loop_state(*loop_states):
+    ids = []
+    for loop_state in loop_states:
+        if not isinstance(loop_state, dict):
+            continue
+
+        for account_id in loop_state.get("account_ids") or []:
+            try:
+                account_id = int(account_id)
+            except Exception:
+                continue
+
+            if account_id not in ids:
+                ids.append(account_id)
+
+    return ids
+
+
+def _scheduler_health_account_snapshot():
+    # IMPORTANT:
+    # /health must not call dashboard-api /accounts.
+    #
+    # dashboard-api /bootstrap/overview calls scheduler /health.
+    # If scheduler /health calls dashboard-api /accounts, the two simple HTTP
+    # servers can wait on each other and cause timeout + BrokenPipeError.
+    enabled_ids = _ids_from_loop_state(
+        getattr(state, "LAST_PENDING_ENTRY_LOOP_RESULT", {}),
+    )
+
+    all_ids = _ids_from_loop_state(
+        getattr(state, "LAST_PENDING_EXIT_LOOP_RESULT", {}),
+        getattr(state, "LAST_MAINTENANCE_LOOP_RESULT", {}),
+        getattr(state, "LAST_PENDING_ENTRY_LOOP_RESULT", {}),
+    )
+
+    if not enabled_ids:
+        enabled_ids = [int(ACCOUNT_ID)]
+
+    if not all_ids:
+        all_ids = list(enabled_ids)
+
+    return {
+        "enabled_account_ids": enabled_ids,
+        "all_account_ids": all_ids,
+        "enabled_accounts_error": None,
+        "all_accounts_error": None,
+        "account_snapshot_source": "local_scheduler_loop_state",
+    }
+
 
 class Handler(BaseHTTPRequestHandler):
-    def _send_json(self, payload: dict, status: int = 200):
+    def _send_json(self, payload, status=200):
         body = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except BrokenPipeError:
+            print(json.dumps({
+                "event": "HTTP_CLIENT_DISCONNECTED",
+                "path": getattr(self, "path", None),
+                "timestamp": iso_now(),
+            }))
 
     def do_GET(self):
         if self.path.startswith("/health"):
@@ -50,7 +106,7 @@ class Handler(BaseHTTPRequestHandler):
                 fetch_pending_entry_orders(ACCOUNT_ID)
             )
 
-            enabled_ids, enabled_accounts_error = _account_ids_tuple(enabled_account_ids(ACCOUNT_ID), ACCOUNT_ID)
+            account_snapshot = _scheduler_health_account_snapshot()
 
             if pending_entries_error:
                 self._send_json({
@@ -71,8 +127,11 @@ class Handler(BaseHTTPRequestHandler):
                 "timestamp": iso_now(),
                 "auto_loop_enabled": state.AUTO_LOOP_ENABLED_STATE,
                 "phase8_scheduler_accounts_version": PHASE8_SCHEDULER_ACCOUNTS_VERSION,
-                "enabled_account_ids": enabled_ids,
-                "enabled_accounts_error": enabled_accounts_error,
+                "enabled_account_ids": account_snapshot["enabled_account_ids"],
+                "all_account_ids": account_snapshot["all_account_ids"],
+                "enabled_accounts_error": account_snapshot["enabled_accounts_error"],
+                "all_accounts_error": account_snapshot["all_accounts_error"],
+                "account_snapshot_source": account_snapshot["account_snapshot_source"],
                 "auto_loop_default": AUTO_LOOP_DEFAULT,
                 "loop_interval_seconds": LOOP_INTERVAL_SECONDS,
                 "paper_execution_entry_path": PAPER_EXECUTION_ENTRY_PATH,
