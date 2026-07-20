@@ -116,6 +116,30 @@ def insert_guardian_event_tx(cur, account_id: int, event_type: str, reason_code:
         ),
     )
 
+def fetch_account_operational_policy(account_id: int) -> dict:
+    query = """
+    SELECT
+        COALESCE(a.enabled, a.is_active, TRUE) AS enabled,
+        COALESCE(gs.max_account_exposure_pct, 50.0) AS max_account_exposure_pct,
+        COALESCE(gs.read_only_mode, FALSE) AS read_only_mode,
+        COALESCE(gs.maintenance_only_mode, FALSE) AS maintenance_only_mode
+    FROM accounts a
+    JOIN guardian_state gs ON gs.account_id = a.account_id
+    WHERE a.account_id = %s
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (account_id,))
+            row = cur.fetchone()
+    if not row:
+        return {"enabled": False, "max_account_exposure_pct": 0.0, "read_only_mode": True, "maintenance_only_mode": True}
+    return {
+        "enabled": bool(row[0]),
+        "max_account_exposure_pct": float(row[1]),
+        "read_only_mode": bool(row[2]),
+        "maintenance_only_mode": bool(row[3]),
+    }
+
 
 def fetch_guardian_status(account_id: int):
     query = """
@@ -234,6 +258,15 @@ def fetch_guardian_status(account_id: int):
 
     status["reconciliation"] = reconciliation_state
     status["reconciliation_gate"] = reconciliation_gate
+
+    status.update(fetch_account_operational_policy(status["account_id"]))
+    status["account_operational_state"] = {
+        "enabled": status.get("enabled"),
+        "read_only_mode": status.get("read_only_mode"),
+        "maintenance_only_mode": status.get("maintenance_only_mode"),
+        "max_account_exposure_pct": status.get("max_account_exposure_pct"),
+        "disabled_behavior": "no new entries/cycles; protective exits and maintenance remain active",
+    }
 
     return status
 

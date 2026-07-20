@@ -20,6 +20,7 @@ from reconciliation import (
     fetch_reconciliation_state,
     update_reconciliation_state,
 )
+from account_policy import fetch_guardian_account_policy, update_guardian_account_policy
 from adaptive_stop_manager import (
     ADAPTIVE_STOP_MANAGER_VERSION,
     apply_adaptive_stop_for_position,
@@ -67,6 +68,20 @@ class Handler(BaseHTTPRequestHandler):
                 **position_management_health_payload(),
             })
             return
+
+        if self.path.startswith("/guard/account-policy"):
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                account_id = int(query.get("account_id", ["1"])[0])
+                policy = fetch_guardian_account_policy(account_id)
+                if not policy:
+                    self._send_json({"ok": False, "error": "account_not_found", "account_id": account_id}, status=404)
+                    return
+                self._send_json({"ok": True, "policy": policy})
+                return
+            except Exception as e:
+                self._send_json({"ok": False, "error": "guardian_policy_fetch_failed", "details": str(e)}, status=400)
+                return
 
         if self.path.startswith("/status"):
             try:
@@ -264,6 +279,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if handle_position_management_post(self, self.path):
             return
+
+        if self.path == "/guard/account-policy/update":
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_length)
+                payload = json.loads(raw.decode("utf-8")) if raw else {}
+                account_id = int(payload.get("account_id", 1))
+                result, status = update_guardian_account_policy(account_id, payload)
+                self._send_json(result, status=status)
+                return
+            except Exception as e:
+                self._send_json({"ok": False, "error": "guardian_policy_update_failed", "details": str(e)}, status=400)
+                return
 
         if self.path == "/guard/check-entry":
             try:

@@ -26,6 +26,7 @@ from symbol_config import (
 )
 from time_utils import iso_now
 from account_manager import create_account, list_accounts, update_account
+from guardian_account_policy import fetch_guardian_account_policy, update_guardian_account_policy
 
 from dashboard_aggregation_v2_routes import handle_dashboard_aggregation_v2_get
 from positions_orders_v2_routes import handle_positions_orders_v2_get
@@ -67,6 +68,12 @@ class Handler(BaseHTTPRequestHandler):
             }, status=400)
             return
 
+
+        if parsed.path == "/accounts/guardian-policy/update":
+            account_id = int(payload.get("account_id", 1))
+            result, status = update_guardian_account_policy(account_id, payload)
+            self._send_json(result, status=status)
+            return
 
         if parsed.path == "/accounts/create":
             result, status = create_account(payload)
@@ -201,6 +208,12 @@ class Handler(BaseHTTPRequestHandler):
         if handle_strategy_analytics_page_v2_get(self, parsed): return
         if handle_system_configuration_page_v2_get(self, parsed): return
 
+
+        if parsed.path == "/accounts/guardian-policy":
+            account_id = int(query.get("account_id", ["1"])[0])
+            result, status = fetch_guardian_account_policy(account_id)
+            self._send_json(result, status=status)
+            return
 
         if parsed.path == "/accounts":
             self._send_json(list_accounts())
