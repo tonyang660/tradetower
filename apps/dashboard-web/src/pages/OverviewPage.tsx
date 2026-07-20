@@ -254,6 +254,8 @@ export default function OverviewPage() {
           entryAllowed={data.trading_banner.entry_allowed}
           entryReasonCodes={data.trading_banner.entry_reason_codes ?? []}
           entryGate={data.trading_banner.entry_gate ?? null}
+          weeklyPnlPenalty={data.trading_banner.weekly_pnl_penalty ?? null}
+          consecutiveLossCooldownUntil={data.trading_banner.consecutive_loss_cooldown_until ?? null}
         />
 
         <GlassCard className="h-full">

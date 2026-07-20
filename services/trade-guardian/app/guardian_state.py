@@ -30,6 +30,39 @@ def get_realized_pnl_for_period(account_id: int, start_ts: datetime, end_ts: dat
     return float(value or 0)
 
 
+def calculate_pnl_pct(pnl: float, basis_equity: float) -> float:
+    try:
+        basis = float(basis_equity)
+        if basis <= 0:
+            return 0.0
+        return (float(pnl) / basis) * 100.0
+    except Exception:
+        return 0.0
+
+
+def get_weekly_pnl_for_status(account_id: int, weekly_basis_start) -> float:
+    if weekly_basis_start is None:
+        return 0.0
+    try:
+        if isinstance(weekly_basis_start, str):
+            start_ts = datetime.fromisoformat(weekly_basis_start.replace("Z", "+00:00"))
+        else:
+            start_ts = weekly_basis_start
+        return get_realized_pnl_for_period(account_id, start_ts)
+    except Exception:
+        return 0.0
+
+
+def get_daily_pnl_for_status(account_id: int, daily_basis_date) -> float:
+    if daily_basis_date is None:
+        return 0.0
+    try:
+        start_ts = datetime.fromisoformat(str(daily_basis_date) + "T00:00:00+00:00")
+        return get_realized_pnl_for_period(account_id, start_ts)
+    except Exception:
+        return 0.0
+
+
 def update_guardian_state_fields(account_id: int, fields: dict):
     if not fields:
         return
@@ -141,6 +174,13 @@ def fetch_guardian_status(account_id: int):
     if not row:
         return None
 
+    daily_pnl = get_daily_pnl_for_status(int(row[0]), row[19])
+    weekly_pnl = get_weekly_pnl_for_status(int(row[0]), row[20])
+    daily_basis_equity = float(row[17])
+    weekly_basis_equity = float(row[18])
+    weekly_pnl_pct = calculate_pnl_pct(weekly_pnl, weekly_basis_equity)
+    daily_pnl_pct = calculate_pnl_pct(daily_pnl, daily_basis_equity)
+
     status = {
         "account_id": int(row[0]),
         "account_name": row[1],
@@ -159,8 +199,8 @@ def fetch_guardian_status(account_id: int):
         "max_concurrent_positions": row[14],
         "daily_loss_limit_pct": float(row[15]),
         "weekly_loss_limit_pct": float(row[16]),
-        "daily_basis_equity": float(row[17]),
-        "weekly_basis_equity": float(row[18]),
+        "daily_basis_equity": daily_basis_equity,
+        "weekly_basis_equity": weekly_basis_equity,
         "daily_basis_date": str(row[19]),
         "weekly_basis_start": str(row[20]),
         "weekly_kill_switch_expires_at": row[21].isoformat().replace("+00:00", "Z") if row[21] else None,
@@ -169,6 +209,11 @@ def fetch_guardian_status(account_id: int):
         "max_consecutive_losses": int(row[24]),
         "consecutive_loss_cooldown_hours": int(row[25]),
         "open_positions_count": int(row[26]),
+        "daily_pnl": round(float(daily_pnl), 8),
+        "daily_pnl_pct": round(float(daily_pnl_pct), 6),
+        "weekly_pnl": round(float(weekly_pnl), 8),
+        "weekly_pnl_pct": round(float(weekly_pnl_pct), 6),
+        "weekly_pnl_loss_pct": round(abs(float(weekly_pnl_pct)) if weekly_pnl_pct < 0 else 0.0, 6),
     }
 
     reconciliation_state = fetch_reconciliation_state(

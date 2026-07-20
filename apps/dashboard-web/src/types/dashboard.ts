@@ -27,6 +27,8 @@ export type BootstrapOverview = {
     reason_codes: string[];
     entry_reason_codes?: string[];
     entry_gate?: Record<string, any> | null;
+    weekly_pnl_penalty?: Record<string, any> | null;
+    consecutive_loss_cooldown_until?: string | null;
     message: string;
     maintenance_remains_active: boolean;
   };

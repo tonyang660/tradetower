@@ -1,32 +1,47 @@
 import GlassCard from "../ui/GlassCard";
 import SectionTitle from "../ui/SectionTitle";
 
+function formatCooldownRemaining(until?: string | null) {
+  if (!until) return null;
+  const target = new Date(until).getTime();
+  if (!Number.isFinite(target)) return null;
+  const remainingMs = Math.max(0, target - Date.now());
+  const totalMinutes = Math.ceil(remainingMs / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours <= 0 && minutes <= 0) return "clearing now";
+  if (hours <= 0) return `${minutes}m left`;
+  return `${hours}h ${minutes}m left`;
+}
+
 export default function TradingStatusCard({
   enabled,
   reasonCodes,
   entryAllowed = enabled,
   entryReasonCodes = [],
   entryGate = null,
+  weeklyPnlPenalty = null,
+  consecutiveLossCooldownUntil = null,
 }: {
   enabled: boolean;
   reasonCodes: string[];
   entryAllowed?: boolean;
   entryReasonCodes?: string[];
   entryGate?: Record<string, any> | null;
+  weeklyPnlPenalty?: Record<string, any> | null;
+  consecutiveLossCooldownUntil?: string | null;
 }) {
   const entryBlocked = enabled && entryAllowed === false;
+  const cooldownRemaining = formatCooldownRemaining(consecutiveLossCooldownUntil);
+  const hasConsecutiveLossCooldown = entryReasonCodes.includes("CONSECUTIVE_LOSS_COOLDOWN");
+
   const title = !enabled
     ? "Trading Disabled"
     : entryBlocked
     ? "Entry Blocked"
     : "Trading Enabled";
 
-  const titleClass = !enabled
-    ? "text-rose-200"
-    : entryBlocked
-    ? "text-amber-200"
-    : "text-emerald-200";
-
+  const titleClass = !enabled ? "text-rose-200" : entryBlocked ? "text-amber-200" : "text-emerald-200";
   const dotClass = !enabled
     ? "bg-rose-400 shadow-[0_0_18px_rgba(251,113,133,0.8)]"
     : entryBlocked
@@ -53,43 +68,48 @@ export default function TradingStatusCard({
 
       <div className="mt-4 text-sm text-white/55">{message}</div>
 
+      {weeklyPnlPenalty?.active ? (
+        <div className="mt-4 rounded-2xl border border-amber-300/20 bg-amber-500/10 p-3 text-sm text-amber-100">
+          <div className="font-medium">{weeklyPnlPenalty.label ?? "Weekly PnL penalty applied"}</div>
+          <div className="mt-1 text-xs text-amber-100/70">
+            Weekly PnL {Number(weeklyPnlPenalty.weekly_pnl_pct ?? 0).toFixed(2)}% · required score{" "}
+            {weeklyPnlPenalty.required_trade_score_threshold ?? 85}
+          </div>
+        </div>
+      ) : null}
+
+      {hasConsecutiveLossCooldown && consecutiveLossCooldownUntil ? (
+        <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 p-3 text-sm text-rose-100">
+          <div className="font-medium">
+            Consecutive loss cooldown active{cooldownRemaining ? ` · ${cooldownRemaining}` : ""}
+          </div>
+          <div className="mt-1 text-xs text-rose-100/70">
+            Cooldown until {new Date(consecutiveLossCooldownUntil).toLocaleString()}
+          </div>
+        </div>
+      ) : null}
+
       <div className="mt-4 flex flex-wrap gap-2">
         <div className="rounded-full border border-white/10 bg-white/6 px-3 py-1 text-xs text-white/70">
           Maintenance Active
         </div>
 
         {entryAllowed ? (
-          <div className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">
-            Entry Enabled
-          </div>
+          <div className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">Entry Enabled</div>
         ) : (
-          <div className="rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-200">
-            Entry Blocked
-          </div>
+          <div className="rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-200">Entry Blocked</div>
         )}
 
         {!enabled ? (
-          <div className="rounded-full border border-rose-400/20 bg-rose-500/10 px-3 py-1 text-xs text-rose-200">
-            Account Trading Disabled
-          </div>
+          <div className="rounded-full border border-rose-400/20 bg-rose-500/10 px-3 py-1 text-xs text-rose-200">Account Trading Disabled</div>
         ) : null}
 
         {uniqueTradingReasons.map((reason) => (
-          <div
-            key={`trading-${reason}`}
-            className="rounded-full border border-rose-300/20 bg-rose-500/10 px-3 py-1 text-xs text-rose-200"
-          >
-            {reason}
-          </div>
+          <div key={`trading-${reason}`} className="rounded-full border border-rose-300/20 bg-rose-500/10 px-3 py-1 text-xs text-rose-200">{reason}</div>
         ))}
 
         {uniqueEntryReasons.map((reason) => (
-          <div
-            key={`entry-${reason}`}
-            className="rounded-full border border-amber-300/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-200"
-          >
-            {reason}
-          </div>
+          <div key={`entry-${reason}`} className="rounded-full border border-amber-300/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-200">{reason}</div>
         ))}
       </div>
 

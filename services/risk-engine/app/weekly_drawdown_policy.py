@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-WEEKLY_DRAWDOWN_POLICY_VERSION = "phase5_step8_weekly_drawdown_threshold_penalty"
+WEEKLY_DRAWDOWN_POLICY_VERSION = "hotfix19_weekly_pnl_threshold_penalty"
 
 DEFAULT_WEEKLY_DRAWDOWN_THRESHOLD_PCT = 3.0
 DEFAULT_WEEKLY_DRAWDOWN_SCORE_PENALTY = 10
@@ -159,28 +159,37 @@ def evaluate_weekly_drawdown_threshold(
 
     reason_codes: list[str] = []
     if active:
-        reason_codes.append("WEEKLY_DRAWDOWN_THRESHOLD_PENALTY_ACTIVE")
+        reason_codes.append("WEEKLY_PNL_THRESHOLD_PENALTY_ACTIVE")
 
     allowed = True
     if active and strategy_score is not None and strategy_score < required_score:
         allowed = False
-        reason_codes.append("SCORE_BELOW_WEEKLY_DRAWDOWN_THRESHOLD")
+        reason_codes.append("SCORE_BELOW_WEEKLY_PNL_THRESHOLD")
 
     if active and strategy_score is None:
         allowed = False
-        reason_codes.append("MISSING_STRATEGY_SCORE_FOR_WEEKLY_DRAWDOWN_CHECK")
+        reason_codes.append("MISSING_STRATEGY_SCORE_FOR_WEEKLY_PNL_CHECK")
 
     return {
         "ok": allowed,
         "weekly_drawdown_policy_version": WEEKLY_DRAWDOWN_POLICY_VERSION,
+        "weekly_pnl_policy_version": WEEKLY_DRAWDOWN_POLICY_VERSION,
         "active": active,
+        "weekly_pnl_penalty_active": active,
         "weekly_pnl": round(weekly_pnl, 8),
         "equity": round(equity, 8),
         "weekly_pnl_pct": round(weekly_pnl_pct, 6),
+        "weekly_pnl_loss_pct": round(abs(weekly_pnl_pct) if weekly_pnl_pct < 0 else 0.0, 6),
         "weekly_drawdown_threshold_pct": threshold_pct,
+        "weekly_pnl_loss_threshold_pct": threshold_pct,
         "base_trade_score_threshold": base_threshold,
         "score_penalty": score_penalty if active else 0,
         "required_score": required_score,
+        "penalty_label": (
+            f"Penalty applied: +{score_penalty} weekly_pnl loss exceeds {threshold_pct}%"
+            if active
+            else "No weekly_pnl threshold penalty"
+        ),
         "strategy_score": strategy_score,
         "reason_codes": reason_codes,
         "clears_when": (
@@ -194,6 +203,7 @@ def build_weekly_drawdown_policy_contract() -> dict[str, Any]:
     return {
         "weekly_drawdown_policy_version": WEEKLY_DRAWDOWN_POLICY_VERSION,
         "default_weekly_drawdown_threshold_pct": DEFAULT_WEEKLY_DRAWDOWN_THRESHOLD_PCT,
+        "default_weekly_pnl_loss_threshold_pct": DEFAULT_WEEKLY_DRAWDOWN_THRESHOLD_PCT,
         "default_weekly_drawdown_score_penalty": DEFAULT_WEEKLY_DRAWDOWN_SCORE_PENALTY,
         "default_base_trade_score_threshold": DEFAULT_BASE_TRADE_SCORE_THRESHOLD,
         "owner_of_state": "trade_guardian",
@@ -211,8 +221,8 @@ def build_weekly_drawdown_policy_contract() -> dict[str, Any]:
             "BTC macro multiplier",
         ],
         "reason_codes": [
-            "WEEKLY_DRAWDOWN_THRESHOLD_PENALTY_ACTIVE",
-            "SCORE_BELOW_WEEKLY_DRAWDOWN_THRESHOLD",
-            "MISSING_STRATEGY_SCORE_FOR_WEEKLY_DRAWDOWN_CHECK",
+            "WEEKLY_PNL_THRESHOLD_PENALTY_ACTIVE",
+            "SCORE_BELOW_WEEKLY_PNL_THRESHOLD",
+            "MISSING_STRATEGY_SCORE_FOR_WEEKLY_PNL_CHECK",
         ],
     }

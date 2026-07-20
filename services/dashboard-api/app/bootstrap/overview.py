@@ -120,6 +120,31 @@ def get_bootstrap_overview(account_id: int):
     entry_allowed = bool(entry_gate.get("trade_allowed", False))
     entry_reason_codes = entry_gate.get("reason_codes", []) or []
 
+    weekly_pnl = float(account_status.get("weekly_pnl", 0.0) or 0.0)
+    weekly_pnl_pct = float(account_status.get("weekly_pnl_pct", 0.0) or 0.0)
+    weekly_pnl_loss_threshold_pct = 3.0
+    weekly_pnl_score_penalty = 10
+    weekly_pnl_base_threshold = 75
+    weekly_pnl_penalty_active = weekly_pnl_pct <= -weekly_pnl_loss_threshold_pct
+    weekly_pnl_penalty = {
+        "active": weekly_pnl_penalty_active,
+        "weekly_pnl": round(weekly_pnl, 8),
+        "weekly_pnl_pct": round(weekly_pnl_pct, 6),
+        "weekly_pnl_loss_pct": round(abs(weekly_pnl_pct) if weekly_pnl_pct < 0 else 0.0, 6),
+        "threshold_pct": weekly_pnl_loss_threshold_pct,
+        "score_penalty": weekly_pnl_score_penalty if weekly_pnl_penalty_active else 0,
+        "base_trade_score_threshold": weekly_pnl_base_threshold,
+        "required_trade_score_threshold": weekly_pnl_base_threshold + weekly_pnl_score_penalty if weekly_pnl_penalty_active else weekly_pnl_base_threshold,
+        "reason_code": "WEEKLY_PNL_THRESHOLD_PENALTY_ACTIVE" if weekly_pnl_penalty_active else None,
+        "label": (
+            f"Penalty applied: +{weekly_pnl_score_penalty} weekly_pnl loss exceeds {weekly_pnl_loss_threshold_pct}%"
+            if weekly_pnl_penalty_active
+            else "No weekly_pnl threshold penalty"
+        ),
+    }
+
+    consecutive_loss_cooldown_until = account_status.get("consecutive_loss_cooldown_until")
+
     trading_banner = {
         "trading_disabled": len(disable_reasons) > 0,
         "entry_blocked": not entry_allowed,
@@ -127,6 +152,8 @@ def get_bootstrap_overview(account_id: int):
         "reason_codes": disable_reasons,
         "entry_reason_codes": entry_reason_codes,
         "entry_gate": entry_gate,
+        "weekly_pnl_penalty": weekly_pnl_penalty,
+        "consecutive_loss_cooldown_until": consecutive_loss_cooldown_until,
         "message": (
             "Trading Suspended"
             if disable_reasons
