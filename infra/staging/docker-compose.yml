@@ -74,7 +74,6 @@ services:
     environment:
       - MTM_AUTO_REFRESH_ENABLED=true
       - MTM_AUTO_REFRESH_INTERVAL_SECONDS=30
-      - MTM_ACCOUNT_ID=1
     ports:
       - "8105:8080"
 
@@ -141,7 +140,6 @@ services:
       - SYMBOL_UNIVERSE_PATH=/app/config/symbol_universe.json
       - AUTO_LOOP_ENABLED=false
       - LOOP_INTERVAL_SECONDS=300
-      - ACCOUNT_ID=1
       - MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST=true
       - ENTRY_RETRY_MAX_ATTEMPTS=15
       - EXIT_RETRY_MAX_ATTEMPTS=5

@@ -1,3 +1,4 @@
+import { useSelectedAccount } from "../lib/accountContext";
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCcw } from "lucide-react";
 import { buildPositionsOrdersViewModel } from "../lib/positionsOrders";
@@ -31,6 +32,7 @@ import ExecutedOrdersPanel from "../components/positions-orders/ExecutedOrdersPa
 import PositionEventsPanel from "../components/positions-orders/PositionEventsPanel";
 
 export default function PositionsOrdersPage() {
+  const { selectedAccountId } = useSelectedAccount();
   const [openPayload, setOpenPayload] = useState<OpenPositionsResponse | null>(null);
   const [recentPayload, setRecentPayload] = useState<RecentClosedPositionsResponse | null>(null);
   const [executedPayload, setExecutedPayload] = useState<ExecutedOrdersResponse | null>(null);
@@ -66,7 +68,7 @@ export default function PositionsOrdersPage() {
       }
 
       const [positionsOrdersRes, configurationRes] = await Promise.all([
-        fetchPositionsOrdersV2(1, 20, 50, 10),
+        fetchPositionsOrdersV2(selectedAccountId, 20, 50, 10),
         fetchConfigurationBootstrap(),
       ]);
 
