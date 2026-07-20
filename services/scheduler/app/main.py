@@ -27,6 +27,14 @@ from loops import (
 from time_utils import iso_now
 
 
+def _account_ids_tuple(result, fallback_account_id):
+    if isinstance(result, tuple) and len(result) == 2:
+        return result
+    if isinstance(result, list):
+        return result, None
+    return [int(fallback_account_id)], f"invalid_account_id_result_shape: {type(result).__name__}"
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, payload: dict, status: int = 200):
         body = json.dumps(payload).encode("utf-8")
@@ -42,7 +50,7 @@ class Handler(BaseHTTPRequestHandler):
                 fetch_pending_entry_orders(ACCOUNT_ID)
             )
 
-            enabled_ids, enabled_accounts_error = enabled_account_ids(ACCOUNT_ID)
+            enabled_ids, enabled_accounts_error = _account_ids_tuple(enabled_account_ids(ACCOUNT_ID), ACCOUNT_ID)
 
             if pending_entries_error:
                 self._send_json({
@@ -130,7 +138,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             state.AUTO_LOOP_ENABLED_STATE = enabled
-            enabled_ids, enabled_accounts_error = enabled_account_ids(ACCOUNT_ID)
+            enabled_ids, enabled_accounts_error = _account_ids_tuple(enabled_account_ids(ACCOUNT_ID), ACCOUNT_ID)
 
             self._send_json({
                 "ok": True,

@@ -17,11 +17,19 @@ from accounts import account_ids_for_entry_work, account_ids_for_exit_and_mainte
 from time_utils import iso_now
 
 
+def _account_ids_tuple(result, fallback_account_id):
+    if isinstance(result, tuple) and len(result) == 2:
+        return result
+    if isinstance(result, list):
+        return result, None
+    return [int(fallback_account_id)], f"invalid_account_id_result_shape: {type(result).__name__}"
+
+
 def pending_entry_loop():
     while True:
         try:
             if state.AUTO_LOOP_ENABLED_STATE:
-                account_ids, accounts_error = account_ids_for_entry_work(ACCOUNT_ID)
+                account_ids, accounts_error = _account_ids_tuple(account_ids_for_entry_work(ACCOUNT_ID), ACCOUNT_ID)
                 aggregate = {
                     "ok": accounts_error is None,
                     "timestamp": iso_now(),
@@ -65,7 +73,7 @@ def pending_exit_loop():
     while True:
         try:
             if state.AUTO_LOOP_ENABLED_STATE:
-                account_ids, accounts_error = account_ids_for_exit_and_maintenance(ACCOUNT_ID)
+                account_ids, accounts_error = _account_ids_tuple(account_ids_for_exit_and_maintenance(ACCOUNT_ID), ACCOUNT_ID)
                 aggregate = {
                     "ok": accounts_error is None,
                     "timestamp": iso_now(),
@@ -108,7 +116,7 @@ def open_position_maintenance_loop():
     while True:
         try:
             if state.AUTO_LOOP_ENABLED_STATE:
-                account_ids, accounts_error = account_ids_for_exit_and_maintenance(ACCOUNT_ID)
+                account_ids, accounts_error = _account_ids_tuple(account_ids_for_exit_and_maintenance(ACCOUNT_ID), ACCOUNT_ID)
                 aggregate = {
                     "ok": accounts_error is None,
                     "timestamp": iso_now(),
@@ -151,7 +159,7 @@ def scheduler_loop():
     while True:
         if state.AUTO_LOOP_ENABLED_STATE:
             try:
-                account_ids, accounts_error = account_ids_for_entry_work(ACCOUNT_ID)
+                account_ids, accounts_error = _account_ids_tuple(account_ids_for_entry_work(ACCOUNT_ID), ACCOUNT_ID)
                 for account_id in account_ids:
                     result = run_one_cycle(account_id=account_id)
                     print(json.dumps({
