@@ -38,6 +38,42 @@ def _fetch_current_entry_gate(account_id: int, cycle_latest):
     return payload, None
 
 
+def _normalize_account_pnl_fields(account_status: dict) -> dict:
+    if not isinstance(account_status, dict):
+        return {}
+
+    normalized = dict(account_status)
+
+    fees_paid_total = float(
+        normalized.get("fees_paid_total")
+        or normalized.get("total_fees_paid")
+        or 0.0
+    )
+
+    gross_realized = normalized.get("gross_realized_pnl")
+    if gross_realized is None:
+        gross_realized = normalized.get("realized_pnl", 0.0)
+
+    try:
+        gross_realized = float(gross_realized or 0.0)
+    except Exception:
+        gross_realized = 0.0
+
+    net_realized = gross_realized - fees_paid_total
+
+    normalized["realized_pnl"] = gross_realized
+    normalized["gross_realized_pnl"] = gross_realized
+    normalized["fees_paid_total"] = fees_paid_total
+    normalized["net_realized_pnl"] = net_realized
+    normalized["pnl_convention"] = {
+        "realized_pnl": "gross trading PnL before fees",
+        "gross_realized_pnl": "gross trading PnL before fees",
+        "net_realized_pnl": "gross_realized_pnl minus fees_paid_total",
+        "fees_paid_total": "actual execution fees deducted from net PnL",
+    }
+    return normalized
+
+
 def get_bootstrap_overview(account_id: int):
     overview, overview_status, overview_error = get_json(
         f"{EVALUATOR_BASE_URL}/overview",
@@ -96,6 +132,10 @@ def get_bootstrap_overview(account_id: int):
         errors.append(entry_gate_error)
 
     account_status = overview.get("account_status", {}) if isinstance(overview, dict) else {}
+    account_status = _normalize_account_pnl_fields(account_status)
+    if isinstance(overview, dict):
+        overview = dict(overview)
+        overview["account_status"] = account_status
     trading_enabled = account_status.get("trading_enabled", True)
     manual_halt = account_status.get("manual_halt", False)
     daily_kill_switch = account_status.get("daily_kill_switch", False)

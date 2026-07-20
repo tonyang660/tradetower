@@ -16,7 +16,7 @@ export default function PerformanceSummaryStrip({
         value={money(s?.gross_pnl)}
         hint="PnL before fees"
       />
-      <MetricCard label="Net PnL" value={money(s?.net_pnl)} hint="After losses and fees" />
+      <MetricCard label="Net PnL" value={money(s?.net_pnl)} hint="Gross PnL minus fees" />
       <MetricCard label="Fees Paid" value={money(s?.total_fees_paid)} hint="Cumulative execution costs" />
       <MetricCard
         label="Max Drawdown"

@@ -154,7 +154,8 @@ export default function OverviewPage() {
     return {
       equity: account.equity,
       cash: account.cash_balance,
-      realized: account.realized_pnl,
+      grossRealized: account.gross_realized_pnl ?? account.realized_pnl,
+      realized: account.net_realized_pnl ?? ((account.realized_pnl ?? 0) - (account.fees_paid_total ?? perf.fees_paid_total ?? 0)),
       unrealized: account.unrealized_pnl,
       feesPaid: account.fees_paid_total ?? perf.fees_paid_total ?? 0,
       usedMargin,
@@ -352,7 +353,7 @@ export default function OverviewPage() {
         <MetricCard
           label="Net Realized PnL"
           value={formatMoney(summary.realized)}
-          hint="Closed profit and loss"
+          hint="Gross closed PnL minus fees"
         />
         <MetricCard
           label="Open Positions"

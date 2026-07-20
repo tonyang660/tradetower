@@ -51,13 +51,13 @@ export default function WorkingOrdersPanel({
           {orders.map((order) => (
             <div
               key={order.order_id}
-              className="grid gap-3 rounded-[24px] border border-white/8 bg-white/5 p-4 text-sm text-white/60 transition hover:bg-white/7 xl:grid-cols-[0.9fr_0.72fr_0.72fr_0.9fr_0.95fr_0.95fr_1fr_0.9fr_1fr]"
+              className="grid gap-3 rounded-[24px] border border-white/8 bg-white/5 px-4 py-5 text-xs text-white/60 transition hover:bg-white/7 xl:grid-cols-[0.9fr_0.72fr_0.72fr_0.9fr_0.95fr_0.95fr_1fr_0.9fr_1fr]"
             >
               <div>
-                <div className="font-semibold text-white">{order.symbol}</div>
-                <div className="mt-1 flex flex-wrap gap-2">
+                <div className="font-semibold text-white text-sm">{order.symbol}</div>
+                <div className="mt-1 flex flex-wrap gap-1.5">
                   <span
-                    className={`inline-flex rounded-full px-2 py-1 text-[11px] ${
+                    className={`inline-flex rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
                       order.side === "long"
                         ? "bg-emerald-500/12 text-emerald-200"
                         : "bg-rose-500/12 text-rose-200"
@@ -67,7 +67,7 @@ export default function WorkingOrdersPanel({
                   </span>
 
                   {order.role ? (
-                    <span className={`inline-flex rounded-full px-2 py-1 text-[11px] ${roleTone(order.role)}`}>
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${roleTone(order.role)}`}>
                       {order.role}
                     </span>
                   ) : null}
@@ -76,43 +76,43 @@ export default function WorkingOrdersPanel({
 
               <div>
                 <div className="text-white/40">Type</div>
-                <div className="mt-1 text-white">{order.order_type}</div>
+                <div className="mt-0.5 font-medium text-white">{order.order_type}</div>
               </div>
 
               <div>
                 <div className="text-white/40">Price</div>
-                <div className="mt-1 text-white">{numberText(order.entry_price)}</div>
+                <div className="mt-0.5 font-medium text-white">{numberText(order.entry_price)}</div>
               </div>
 
               <div>
                 <div className="text-white/40">Size</div>
-                <div className="mt-1 text-white">{numberText(order.requested_size)}</div>
+                <div className="mt-0.5 font-medium text-white">{numberText(order.requested_size)}</div>
               </div>
 
               <div>
                 <div className="text-white/40">Protection</div>
-                <div className="mt-1 flex flex-wrap gap-2">
+                <div className="mt-0.5 flex flex-wrap gap-1">
                   {order.stop_loss != null ? (
-                    <span className="rounded-full border border-rose-400/15 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-200">
-                      SL {numberText(order.stop_loss)}
+                    <span className="whitespace-nowrap rounded-full border border-rose-400/15 bg-rose-500/10 px-1.5 py-0.5 text-[10px] text-rose-200">
+                      SL {numberText(order.stop_loss, 4)}
                     </span>
                   ) : null}
 
                   {order.tp1 != null ? (
-                    <span className="rounded-full border border-emerald-400/15 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-200">
-                      TP1 {numberText(order.tp1)}
+                    <span className="whitespace-nowrap rounded-full border border-emerald-400/15 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-200">
+                      TP1 {numberText(order.tp1, 4)}
                     </span>
                   ) : null}
 
                   {order.tp2 != null ? (
-                    <span className="rounded-full border border-emerald-400/15 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-200">
-                      TP2 {numberText(order.tp2)}
+                    <span className="whitespace-nowrap rounded-full border border-emerald-400/15 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-200">
+                      TP2 {numberText(order.tp2, 4)}
                     </span>
                   ) : null}
 
                   {order.tp3 != null ? (
-                    <span className="rounded-full border border-emerald-400/15 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-200">
-                      TP3 {numberText(order.tp3)}
+                    <span className="whitespace-nowrap rounded-full border border-emerald-400/15 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-200">
+                      TP3 {numberText(order.tp3, 4)}
                     </span>
                   ) : null}
                 </div>
@@ -120,26 +120,26 @@ export default function WorkingOrdersPanel({
 
               <div>
                 <div className="text-white/40">Linked Position</div>
-                <div className="mt-1 text-white">{order.linked_position_id ?? "-"}</div>
+                <div className="mt-0.5 truncate font-medium text-white">{order.linked_position_id ?? "-"}</div>
               </div>
 
               <div>
                 <div className="text-white/40">Status</div>
-                <div className={`mt-1 inline-flex rounded-full px-2 py-1 text-[11px] ${statusTone(order.status)}`}>
+                <div className={`mt-0.5 inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium tracking-wide ${statusTone(order.status)}`}>
                   {order.status}
                 </div>
               </div>
 
               <div>
                 <div className="text-white/40">Submitted</div>
-                <div className="mt-1 text-white">
+                <div className="mt-0.5 leading-tight text-white/80">
                   {order.submitted_at ? new Date(order.submitted_at).toLocaleString() : "-"}
                 </div>
               </div>
 
               <div>
                 <div className="text-white/40">Updated</div>
-                <div className="mt-1 text-white">
+                <div className="mt-0.5 leading-tight text-white/80">
                   {order.updated_at ? new Date(order.updated_at).toLocaleString() : "-"}
                 </div>
               </div>

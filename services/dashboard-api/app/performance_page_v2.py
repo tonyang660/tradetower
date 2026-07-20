@@ -6,7 +6,7 @@ from config import EVALUATOR_BASE_URL
 from http_client import get_json
 from time_utils import iso_now
 
-PERFORMANCE_PAGE_V2_VERSION = "phase7_step12_performance_page_v2_hotfix6_7_v2_only"
+PERFORMANCE_PAGE_V2_VERSION = "hotfix20b_performance_page_net_pnl_display"
 
 
 def _safe_get(source: str, path: str, params: dict[str, Any] | None = None, timeout: int = 30):
@@ -70,11 +70,18 @@ def _map_equity_curve(performance_v2: dict[str, Any] | None) -> list[dict[str, A
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
             continue
+        gross_realized = _num(row.get("gross_realized_pnl"), _num(row.get("realized_pnl")))
+        fees_paid = _num(row.get("fees_paid_total"), _num(row.get("total_fees_paid")))
+        net_realized = _num(row.get("net_realized_pnl"), gross_realized - fees_paid)
+
         mapped.append({
             "recorded_at": row.get("recorded_at"),
             "equity": _num(row.get("equity")),
-            "realized_pnl": _num(row.get("realized_pnl")),
+            "realized_pnl": gross_realized,
+            "gross_realized_pnl": gross_realized,
+            "net_realized_pnl": net_realized,
             "unrealized_pnl": _num(row.get("unrealized_pnl")),
+            "fees_paid_total": fees_paid,
         })
     return mapped
 
@@ -115,18 +122,40 @@ def _map_summary(performance_v2: dict[str, Any] | None) -> dict[str, Any] | None
     equity_block = performance_v2.get("equity") or {}
     equity_summary = equity_block.get("summary") if isinstance(equity_block, dict) else {}
     cost_breakdown = performance_v2.get("cost_breakdown") or {}
+    latest_equity = performance_v2.get("latest_equity") or {}
 
     wins = int(_num(position_summary.get("wins")))
     losses = int(_num(position_summary.get("losses")))
     total_trades = int(_num(position_summary.get("positions_closed"), _num(position_summary.get("positions_total"))))
-    net_pnl = _num(position_summary.get("net_realized_pnl"))
-    gross_pnl = _num(position_summary.get("gross_realized_pnl"), net_pnl + _num(position_summary.get("fees_paid")))
-    fees = _num(position_summary.get("fees_paid"), _num(cost_breakdown.get("fees_paid")))
+
+    fees = _num(
+        position_summary.get("fees_paid"),
+        _num(
+            cost_breakdown.get("fees_paid"),
+            _num(latest_equity.get("fees_paid_total"), _num(latest_equity.get("total_fees_paid"))),
+        ),
+    )
+    gross_pnl = _num(
+        position_summary.get("gross_realized_pnl"),
+        _num(
+            latest_equity.get("gross_realized_pnl"),
+            _num(latest_equity.get("realized_pnl"), _num(position_summary.get("net_realized_pnl")) + fees),
+        ),
+    )
+
+    # Source of truth for display: realized_pnl is gross trading PnL before fees.
+    # Therefore displayed net PnL must always be gross - fees.
+    net_pnl = gross_pnl - fees
 
     return {
         "gross_pnl": gross_pnl,
         "net_pnl": net_pnl,
         "total_fees_paid": fees,
+        "pnl_convention": {
+            "gross_pnl": "gross realized trading PnL before fees",
+            "net_pnl": "gross_pnl minus total_fees_paid",
+            "total_fees_paid": "actual execution fees deducted from net PnL",
+        },
         "equity_change_pct": _num(equity_summary.get("equity_change_pct")),
         "max_drawdown_pct": _num(equity_summary.get("max_drawdown_pct")),
         "max_drawdown_value": _num(equity_summary.get("max_drawdown_value")),

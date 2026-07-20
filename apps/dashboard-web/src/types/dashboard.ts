@@ -50,6 +50,8 @@ export type BootstrapOverview = {
       equity: number;
       cash_balance: number;
       realized_pnl: number;
+    gross_realized_pnl?: number;
+    net_realized_pnl?: number;
       unrealized_pnl: number;
       fees_paid_total?: number;
       trading_enabled: boolean;
