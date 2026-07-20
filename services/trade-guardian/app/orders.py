@@ -832,6 +832,274 @@ def finalize_position_closing_order_tx(cur, order_id: int, fill_size: float, fil
         "average_fill_price": float(row[4]),
     }
 
+
+def _safe_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _split_remaining_size(remaining_size: float) -> tuple[float, float]:
+    remaining = round(max(_safe_float(remaining_size), 0.0), 8)
+    first = round(remaining / 2.0, 8)
+    second = round(max(remaining - first, 0.0), 8)
+    return first, second
+
+
+def _active_stop_order_count_tx(cur, position_id: int) -> int:
+    cur.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM orders
+        WHERE linked_position_id = %s
+          AND role IN ('stop_loss', 'sl2')
+          AND status IN ({_active_status_sql()})
+        """,
+        (position_id, *ACTIVE_ORDER_STATUSES),
+    )
+    return int(cur.fetchone()[0] or 0)
+
+
+def reconcile_stop_protection_for_position(account_id: int, position_id: int, remaining_size: float):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            stop_count = _active_stop_order_count_tx(cur, int(position_id))
+            if stop_count <= 0:
+                return {"ok": False, "error": "no_active_stop_orders", "position_id": int(position_id)}
+
+            remaining = round(max(_safe_float(remaining_size), 0.0), 8)
+            if stop_count > 1:
+                sl1_size, sl2_size = _split_remaining_size(remaining)
+                size_by_role = {"stop_loss": sl1_size, "sl2": sl2_size}
+            else:
+                size_by_role = {"stop_loss": remaining}
+
+            updates = []
+            for role, size in size_by_role.items():
+                cur.execute(
+                    f"""
+                    UPDATE orders
+                    SET requested_size = %s,
+                        remaining_size = GREATEST(%s - filled_size, 0),
+                        status = CASE
+                            WHEN %s <= 0 THEN 'cancelled'
+                            WHEN filled_size >= %s THEN 'filled'
+                            ELSE status
+                        END,
+                        filled_at = CASE
+                            WHEN filled_size >= %s THEN COALESCE(filled_at, NOW())
+                            ELSE filled_at
+                        END,
+                        cancelled_at = CASE
+                            WHEN %s <= 0 THEN COALESCE(cancelled_at, NOW())
+                            ELSE cancelled_at
+                        END,
+                        updated_at = NOW()
+                    WHERE linked_position_id = %s
+                      AND role = %s
+                      AND status IN ({_active_status_sql()})
+                    RETURNING order_id, role, requested_size, filled_size, remaining_size, status
+                    """,
+                    (size, size, size, size, size, size, int(position_id), role, *ACTIVE_ORDER_STATUSES),
+                )
+                for row in cur.fetchall():
+                    updates.append({
+                        "order_id": int(row[0]),
+                        "role": row[1],
+                        "requested_size": float(row[2] or 0),
+                        "filled_size": float(row[3] or 0),
+                        "remaining_size": float(row[4] or 0),
+                        "status": row[5],
+                    })
+
+            record_position_event_tx(
+                cur=cur,
+                position_id=int(position_id),
+                account_id=int(account_id),
+                event_type="STOP_SIZE_RECONCILED",
+                details={
+                    "remaining_size": remaining,
+                    "stop_count": stop_count,
+                    "updates": updates,
+                    "policy": "split_sl1_sl2_50_50_if_sl2_active_else_sl1_full_remaining",
+                },
+            )
+        conn.commit()
+
+    return {"ok": True, "position_id": int(position_id), "updates": updates}
+
+
+def resize_stop_order_for_position(position_id: int, new_size: float):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT account_id FROM positions WHERE position_id = %s", (int(position_id),))
+            row = cur.fetchone()
+    if not row:
+        return []
+    result = reconcile_stop_protection_for_position(int(row[0]), int(position_id), float(new_size))
+    return result.get("updates", []) if isinstance(result, dict) else []
+
+
+def get_order_role(order_id: int) -> str | None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT role FROM orders WHERE order_id = %s", (int(order_id),))
+            row = cur.fetchone()
+    return str(row[0]).lower() if row and row[0] is not None else None
+
+
+def activate_adaptive_sl2_split_for_position(
+    *,
+    account_id: int,
+    position_id: int,
+    symbol: str,
+    position_side: str,
+    remaining_size: float,
+    sl2_price: float,
+    reason_code: str,
+    current_sl1_price: float | None = None,
+):
+    account_id = int(account_id)
+    position_id = int(position_id)
+    symbol = str(symbol).upper()
+    position_side = str(position_side).lower()
+    exit_side = opposite_order_side(position_side)
+    remaining = round(max(_safe_float(remaining_size), 0.0), 8)
+    sl1_size, sl2_size = _split_remaining_size(remaining)
+
+    if remaining <= 0:
+        return {"ok": False, "error": "position_has_no_remaining_size", "position_id": position_id}
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT order_id, requested_price, stop_loss
+                FROM orders
+                WHERE account_id = %s
+                  AND linked_position_id = %s
+                  AND role = 'stop_loss'
+                  AND status IN ({_active_status_sql()})
+                ORDER BY created_at DESC, order_id DESC
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (account_id, position_id, *ACTIVE_ORDER_STATUSES),
+            )
+            sl1 = cur.fetchone()
+            if not sl1:
+                return {"ok": False, "error": "active_sl1_not_found", "position_id": position_id}
+
+            sl1_order_id = int(sl1[0])
+            sl1_price = float(current_sl1_price) if current_sl1_price is not None else float(sl1[2] if sl1[2] is not None else sl1[1])
+
+            cur.execute(
+                f"""
+                UPDATE orders
+                SET requested_price = %s,
+                    stop_loss = %s,
+                    requested_size = %s,
+                    remaining_size = GREATEST(%s - filled_size, 0),
+                    updated_at = NOW()
+                WHERE order_id = %s
+                  AND status IN ({_active_status_sql()})
+                RETURNING order_id, role, requested_price, requested_size, filled_size, remaining_size, status
+                """,
+                (sl1_price, sl1_price, sl1_size, sl1_size, sl1_order_id, *ACTIVE_ORDER_STATUSES),
+            )
+            sl1_update = cur.fetchone()
+
+            cur.execute(
+                f"""
+                SELECT order_id
+                FROM orders
+                WHERE account_id = %s
+                  AND linked_position_id = %s
+                  AND role = 'sl2'
+                  AND status IN ({_active_status_sql()})
+                ORDER BY created_at DESC, order_id DESC
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (account_id, position_id, *ACTIVE_ORDER_STATUSES),
+            )
+            existing_sl2 = cur.fetchone()
+
+            if existing_sl2:
+                sl2_order_id = int(existing_sl2[0])
+                cur.execute(
+                    f"""
+                    UPDATE orders
+                    SET requested_price = %s,
+                        stop_loss = %s,
+                        requested_size = %s,
+                        remaining_size = GREATEST(%s - filled_size, 0),
+                        updated_at = NOW()
+                    WHERE order_id = %s
+                      AND status IN ({_active_status_sql()})
+                    RETURNING order_id, role, requested_price, requested_size, filled_size, remaining_size, status
+                    """,
+                    (float(sl2_price), float(sl2_price), sl2_size, sl2_size, sl2_order_id, *ACTIVE_ORDER_STATUSES),
+                )
+                sl2_update = cur.fetchone()
+                sl2_event_type = "SL2_REPRICED"
+            else:
+                client_order_id = f"tt-sl2-{uuid4().hex}"
+                cur.execute(
+                    """
+                    INSERT INTO orders (
+                        account_id, symbol, side, order_type, requested_price,
+                        requested_size, status, role, linked_position_id, stop_loss,
+                        position_side, client_order_id, exchange, filled_size,
+                        remaining_size, reduce_only, post_only, submitted_at,
+                        created_at, updated_at
+                    )
+                    VALUES (
+                        %s, %s, %s, 'limit', %s, %s, 'open', 'sl2', %s, %s,
+                        %s, %s, 'paper', 0, %s, TRUE, FALSE, NOW(), NOW(), NOW()
+                    )
+                    RETURNING order_id, role, requested_price, requested_size, filled_size, remaining_size, status
+                    """,
+                    (account_id, symbol, exit_side, float(sl2_price), sl2_size, position_id, float(sl2_price), position_side, client_order_id, sl2_size),
+                )
+                sl2_update = cur.fetchone()
+                sl2_event_type = "SL2_CREATED"
+
+            cur.execute("UPDATE positions SET stop_loss = %s WHERE account_id = %s AND position_id = %s", (sl1_price, account_id, position_id))
+
+            def row_to_update(row):
+                return {
+                    "order_id": int(row[0]),
+                    "role": row[1],
+                    "requested_price": float(row[2]),
+                    "requested_size": float(row[3] or 0),
+                    "filled_size": float(row[4] or 0),
+                    "remaining_size": float(row[5] or 0),
+                    "status": row[6],
+                }
+
+            sl1_payload = row_to_update(sl1_update)
+            sl2_payload = row_to_update(sl2_update)
+            event_details = {
+                "reason_code": reason_code,
+                "symbol": symbol,
+                "position_side": position_side,
+                "remaining_size": remaining,
+                "sl1_order": sl1_payload,
+                "sl2_order": sl2_payload,
+                "sl2_price": float(sl2_price),
+                "sl1_price": sl1_price,
+                "policy": "adaptive_defensive_sl2_at_breakeven_half_remaining",
+            }
+
+            record_position_event_tx(cur=cur, position_id=position_id, account_id=account_id, event_type="ADAPTIVE_STOP_SPLIT_ACTIVATED", order_id=int(sl2_payload["order_id"]), price=float(sl2_price), details=event_details)
+            record_position_event_tx(cur=cur, position_id=position_id, account_id=account_id, event_type=sl2_event_type, order_id=int(sl2_payload["order_id"]), price=float(sl2_price), size_before=remaining, size_delta=0, size_after=remaining, details=event_details)
+            record_position_event_tx(cur=cur, position_id=position_id, account_id=account_id, event_type="STOP_SIZE_RECONCILED", price=sl1_price, details=event_details)
+        conn.commit()
+
+    return {"ok": True, "action": "ADAPTIVE_STOP_SPLIT_ACTIVATED", "account_id": account_id, "position_id": position_id, "symbol": symbol, "reason_code": reason_code, "sl1_order": sl1_payload, "sl2_order": sl2_payload}
+
 def create_protective_orders_for_position(
     account_id: int,
     symbol: str,
@@ -981,7 +1249,7 @@ def reprice_protective_order(
     WHERE account_id = %s
       AND order_id = %s
       AND status IN ({_active_status_sql()})
-      AND role IN ('stop_loss', 'tp1', 'tp2', 'tp3')
+      AND role IN ('stop_loss', 'sl2', 'tp1', 'tp2', 'tp3')
     FOR UPDATE
     """
 
@@ -1040,6 +1308,7 @@ def reprice_protective_order(
             if position_id is not None:
                 event_type = {
                     "stop_loss": "STOP_REPRICED",
+                    "sl2": "SL2_REPRICED",
                     "tp1": "TP1_REPRICED",
                     "tp2": "TP2_REPRICED",
                     "tp3": "TP3_REPRICED",

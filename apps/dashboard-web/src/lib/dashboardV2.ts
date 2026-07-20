@@ -46,7 +46,7 @@ export function fetchPositionLifecycleV2(accountId = 1, positionId: number) {
   );
 }
 
-export function fetchPerformancePageV2(accountId = 1, limit = 500, equityLimit = 1000) {
+export function fetchPerformancePageV2(accountId = 1, limit = 500, equityLimit = 10000) {
   return getJson<PerformancePageV2Response>(
     `/dashboard/v2/performance-page?account_id=${accountId}&limit=${limit}&equity_limit=${equityLimit}`
   );

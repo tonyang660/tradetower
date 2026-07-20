@@ -25,7 +25,7 @@ export default function PerformancePage() {
       if (showLoading) setLoading(true);
       if (showRefreshing) setRefreshing(true);
 
-      const payload = await fetchPerformancePageV2(1, 500, 1000);
+      const payload = await fetchPerformancePageV2(1, 500, 10000);
       setData(payload);
       setError(null);
       setLastUpdated(new Date());

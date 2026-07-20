@@ -29,7 +29,7 @@ def handle_performance_v2_get(handler, parsed) -> bool:
     raw_limit = query.get("limit", [None])[0]
     limit = int(raw_limit) if raw_limit is not None else None
 
-    equity_limit = int(query.get("equity_limit", ["1000"])[0])
+    equity_limit = int(query.get("equity_limit", ["10000"])[0])
 
     if parsed.path == "/performance/v2":
         handler._send_json(get_performance_v2(account_id, limit, equity_limit))

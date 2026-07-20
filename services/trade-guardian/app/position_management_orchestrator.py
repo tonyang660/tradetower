@@ -37,6 +37,11 @@ from regime_change_stop_manager import (
     evaluate_regime_change_stop_for_position,
     apply_regime_change_stop_for_position,
 )
+from volatility_spike_stop_manager import (
+    build_volatility_spike_stop_manager_contract,
+    evaluate_volatility_spike_stop_for_position,
+    apply_volatility_spike_stop_for_position,
+)
 from position_management_idempotency import (
     build_position_management_idempotency_contract,
     summarize_management_result,
@@ -56,6 +61,7 @@ def build_position_management_health_payload() -> dict[str, Any]:
         "adaptive_stop_manager": build_adaptive_stop_manager_contract(),
         "near_tp_reversal": build_near_tp_reversal_manager_contract(),
         "regime_change_stop": build_regime_change_stop_manager_contract(),
+        "volatility_spike_stop": build_volatility_spike_stop_manager_contract(),
         "position_management_idempotency": build_position_management_idempotency_contract(),
     }
 
@@ -74,6 +80,12 @@ def evaluate_position_management(
     regime_min_profit_r: float = 0.4,
     regime_breakeven_buffer_pct: float = 0.0015,
     regime_already_triggered: bool = False,
+    entry_atr: float | None = None,
+    current_atr: float | None = None,
+    volatility_min_profit_r: float = 0.4,
+    volatility_spike_multiplier: float = 1.6,
+    volatility_breakeven_buffer_pct: float = 0.0015,
+    volatility_already_triggered: bool = False,
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
 
@@ -123,6 +135,25 @@ def evaluate_position_management(
             result=regime,
         ))
 
+    if current_price is not None and entry_atr is not None and current_atr is not None:
+        volatility = evaluate_volatility_spike_stop_for_position(
+            account_id=account_id,
+            symbol=symbol,
+            current_price=float(current_price),
+            entry_atr=float(entry_atr),
+            current_atr=float(current_atr),
+            min_profit_r=volatility_min_profit_r,
+            spike_multiplier=volatility_spike_multiplier,
+            breakeven_buffer_pct=volatility_breakeven_buffer_pct,
+            already_triggered=volatility_already_triggered,
+        )
+        results.append(summarize_management_result(
+            account_id=account_id,
+            symbol=symbol,
+            module="volatility_spike_stop",
+            result=volatility,
+        ))
+
     return {
         "ok": all(item.get("ok", False) for item in results),
         "position_management_orchestrator_version": POSITION_MANAGEMENT_ORCHESTRATOR_VERSION,
@@ -148,6 +179,12 @@ def apply_position_management(
     regime_min_profit_r: float = 0.4,
     regime_breakeven_buffer_pct: float = 0.0015,
     regime_already_triggered: bool = False,
+    entry_atr: float | None = None,
+    current_atr: float | None = None,
+    volatility_min_profit_r: float = 0.4,
+    volatility_spike_multiplier: float = 1.6,
+    volatility_breakeven_buffer_pct: float = 0.0015,
+    volatility_already_triggered: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
@@ -201,6 +238,26 @@ def apply_position_management(
             result=regime,
         ))
 
+    if current_price is not None and entry_atr is not None and current_atr is not None:
+        volatility = apply_volatility_spike_stop_for_position(
+            account_id=account_id,
+            symbol=symbol,
+            current_price=float(current_price),
+            entry_atr=float(entry_atr),
+            current_atr=float(current_atr),
+            min_profit_r=volatility_min_profit_r,
+            spike_multiplier=volatility_spike_multiplier,
+            breakeven_buffer_pct=volatility_breakeven_buffer_pct,
+            already_triggered=volatility_already_triggered,
+            dry_run=dry_run,
+        )
+        results.append(summarize_management_result(
+            account_id=account_id,
+            symbol=symbol,
+            module="volatility_spike_stop",
+            result=volatility,
+        ))
+
     hard_failures = [
         item for item in results
         if not item.get("ok", False)
@@ -242,4 +299,18 @@ def build_payload_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
         "regime_min_profit_r": float(payload.get("regime_min_profit_r", payload.get("min_profit_r", 0.4))),
         "regime_breakeven_buffer_pct": float(payload.get("regime_breakeven_buffer_pct", payload.get("breakeven_buffer_pct", 0.0015))),
         "regime_already_triggered": bool(payload.get("regime_already_triggered", payload.get("already_triggered", False))),
+        "entry_atr": (
+            float(payload["entry_atr"])
+            if payload.get("entry_atr") is not None
+            else None
+        ),
+        "current_atr": (
+            float(payload["current_atr"])
+            if payload.get("current_atr") is not None
+            else None
+        ),
+        "volatility_min_profit_r": float(payload.get("volatility_min_profit_r", payload.get("min_profit_r", 0.4))),
+        "volatility_spike_multiplier": float(payload.get("volatility_spike_multiplier", payload.get("spike_multiplier", 1.6))),
+        "volatility_breakeven_buffer_pct": float(payload.get("volatility_breakeven_buffer_pct", payload.get("breakeven_buffer_pct", 0.0015))),
+        "volatility_already_triggered": bool(payload.get("volatility_already_triggered", payload.get("already_triggered", False))),
     }

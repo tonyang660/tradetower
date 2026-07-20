@@ -8,6 +8,8 @@ from orders import (
     create_protective_orders_for_position_tx,
     finalize_position_closing_order,
     resize_stop_order_for_position,
+    reconcile_stop_protection_for_position,
+    get_order_role,
 )
 from position_events import (
     record_position_event,
@@ -558,6 +560,7 @@ def apply_execution_report(payload: dict):
             "realized_pnl": realized_pnl,
         }
 
+
     if execution_type == "STOP_LOSS":
         execution_id = insert_execution_report(
             account_id=account_id,
@@ -572,105 +575,99 @@ def apply_execution_report(payload: dict):
             position_side=position_side,
         )
 
-        accounting = build_partial_close_accounting(
-            execution_type="STOP_LOSS",
-            original_size=original_size,
-            remaining_size_before=remaining_size,
-            margin_used_before=open_position["margin_used"],
-        )
+        order_role = str(payload.get("order_role") or "").lower()
+        if not order_role and order_id is not None:
+            order_role = get_order_role(int(order_id)) or "stop_loss"
+        if order_role not in ("stop_loss", "sl2"):
+            order_role = "stop_loss"
 
-        close_size = accounting["close_size"]
-        released_margin = accounting["released_margin"]
+        close_size = round(min(float(filled_size), float(remaining_size)), 8)
+        new_remaining = round(max(float(remaining_size) - close_size, 0.0), 8)
+        is_full_close = new_remaining <= 0
+
+        released_margin = open_position["margin_used"] if is_full_close else round(open_position["margin_used"] * (close_size / remaining_size), 8)
+        new_remaining_margin = 0.0 if is_full_close else round(max(open_position["margin_used"] - released_margin, 0.0), 8)
+
+        accounting = {
+            "partial_close_policy_version": "phase7_6_adaptive_defensive_sl2",
+            "execution_type": "STOP_LOSS",
+            "order_role": order_role,
+            "original_size": round(float(original_size), 8),
+            "remaining_size_before": round(float(remaining_size), 8),
+            "close_size": close_size,
+            "remaining_size_after": new_remaining,
+            "margin_used_before": round(float(open_position["margin_used"]), 8),
+            "released_margin": released_margin,
+            "remaining_margin_after": new_remaining_margin,
+            "is_full_close": is_full_close,
+            "reason": "stop_order_partial_reduce" if not is_full_close else "stop_order_close_remaining",
+        }
 
         realized_pnl = calculate_realized_pnl(position_side, open_position["entry_price"], fill_price, close_size)
 
-        close_position(open_position["position_id"])
+        if is_full_close:
+            close_position(open_position["position_id"])
+        else:
+            update_position_after_partial_exit(open_position["position_id"], new_remaining, new_remaining_margin)
+
         apply_exit_balance_update(account_id, released_margin, realized_pnl, fee_paid)
 
         if order_id is not None:
-            finalize_position_closing_order(
-                order_id=int(order_id),
-                fill_size=close_size,
-                fill_price=fill_price,
+            if is_full_close:
+                finalize_position_closing_order(order_id=int(order_id), fill_size=close_size, fill_price=fill_price)
+            else:
+                apply_order_fill(order_id=int(order_id), fill_size=close_size, fill_price=fill_price)
+
+        if is_full_close:
+            cancel_open_protective_orders_for_position(open_position["position_id"], exclude_order_id=int(order_id) if order_id is not None else None)
+        else:
+            reconcile_stop_protection_for_position(account_id=account_id, position_id=open_position["position_id"], remaining_size=new_remaining)
+
+        event_type = "SL2_FILLED" if order_role == "sl2" else "STOP_FILLED"
+
+        record_position_event(
+            position_id=open_position["position_id"],
+            account_id=account_id,
+            event_type=event_type,
+            order_id=int(order_id) if order_id is not None else None,
+            execution_id=execution_id,
+            price=fill_price,
+            size_before=remaining_size,
+            size_delta=-close_size,
+            size_after=new_remaining,
+            details={"symbol": symbol, "order_role": order_role, "fee_paid": fee_paid, "realized_pnl": realized_pnl, "partial_close_accounting": accounting},
+        )
+
+        if is_full_close:
+            record_position_event(
+                position_id=open_position["position_id"],
+                account_id=account_id,
+                event_type="POSITION_CLOSED",
+                order_id=int(order_id) if order_id is not None else None,
+                execution_id=execution_id,
+                price=fill_price,
+                size_before=remaining_size,
+                size_delta=-close_size,
+                size_after=0,
+                details={"symbol": symbol, "close_reason": "STOP_LOSS", "order_role": order_role, "fee_paid": fee_paid, "realized_pnl": realized_pnl, "partial_close_accounting": accounting},
             )
-
-        cancel_open_protective_orders_for_position(
-            open_position["position_id"],
-            exclude_order_id=int(order_id) if order_id is not None else None,
-        )
-
-        record_position_event(
-            position_id=open_position["position_id"],
-            account_id=account_id,
-            event_type="STOP_FILLED",
-            order_id=(
-                int(order_id)
-                if order_id is not None
-                else None
-            ),
-            execution_id=execution_id,
-            price=fill_price,
-            size_before=remaining_size,
-            size_delta=-close_size,
-            size_after=0,
-            details={
-                "symbol": symbol,
-                "fee_paid": fee_paid,
-                "realized_pnl": realized_pnl,
-                "partial_close_accounting": accounting,
-            },
-        )
-
-        record_position_event(
-            position_id=open_position["position_id"],
-            account_id=account_id,
-            event_type="POSITION_CLOSED",
-            order_id=(
-                int(order_id)
-                if order_id is not None
-                else None
-            ),
-            execution_id=execution_id,
-            price=fill_price,
-            size_before=remaining_size,
-            size_delta=-close_size,
-            size_after=0,
-            details={
-                "symbol": symbol,
-                "close_reason": "STOP_LOSS",
-                "fee_paid": fee_paid,
-                "realized_pnl": realized_pnl,
-                "partial_close_accounting": accounting,
-            },
-        )
 
         insert_guardian_event(
             account_id,
             "STOP_LOSS_HIT",
             "STOP_LOSS_EXECUTED",
-            {
-                "symbol": symbol,
-                "position_id": open_position["position_id"],
-                "execution_id": execution_id,
-                "close_size": close_size,
-                "remaining_size": 0,
-                "fill_price": fill_price,
-                "fee_paid": fee_paid,
-                "realized_pnl": realized_pnl,
-                "partial_close_accounting": accounting,
-            },
+            {"symbol": symbol, "position_id": open_position["position_id"], "execution_id": execution_id, "order_role": order_role, "close_size": close_size, "remaining_size": new_remaining, "fill_price": fill_price, "fee_paid": fee_paid, "realized_pnl": realized_pnl, "partial_close_accounting": accounting},
         )
 
-        refreshed_position = open_position.copy()
-        refreshed_position["remaining_size"] = 0
-        trade_id = maybe_finalize_trade(refreshed_position)
+        if is_full_close:
+            refreshed_position = open_position.copy()
+            refreshed_position["remaining_size"] = 0
+            trade_id = maybe_finalize_trade(refreshed_position)
+            action = "stop_loss_applied_position_closed"
+        else:
+            trade_id = None
+            action = "stop_loss_applied_position_reduced"
 
-        return {
-            "ok": True,
-            "action": "stop_loss_applied_position_closed",
-            "execution_id": execution_id,
-            "trade_id": trade_id,
-            "realized_pnl": realized_pnl,
-        }
+        return {"ok": True, "action": action, "execution_id": execution_id, "trade_id": trade_id, "realized_pnl": realized_pnl, "remaining_size": new_remaining, "order_role": order_role}
 
     return {"ok": False, "error": "unhandled_execution_case"}

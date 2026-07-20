@@ -37,6 +37,10 @@ from regime_change_stop_manager import (
     apply_regime_change_stop_for_position,
     evaluate_regime_change_stop_for_position,
 )
+from volatility_spike_stop_manager import (
+    apply_volatility_spike_stop_for_position,
+    evaluate_volatility_spike_stop_for_position,
+)
 from position_management_orchestrator import (
     apply_position_management,
     build_payload_kwargs,
@@ -52,6 +56,8 @@ POSITION_MANAGEMENT_POST_PATHS = {
     "/position/manage-near-tp-reversal",
     "/position/evaluate-regime-change-stop",
     "/position/manage-regime-change-stop",
+    "/position/evaluate-volatility-spike-stop",
+    "/position/manage-volatility-spike-stop",
     "/position/evaluate-management",
     "/position/manage",
 }
@@ -192,6 +198,43 @@ def handle_position_management_post(handler, path: str) -> bool:
                 entry_regime=str(payload["entry_regime"]),
                 current_regime=str(payload["current_regime"]),
                 min_profit_r=float(payload.get("min_profit_r", 0.4)),
+                breakeven_buffer_pct=float(payload.get("breakeven_buffer_pct", 0.0015)),
+                already_triggered=bool(payload.get("already_triggered", False)),
+                dry_run=bool(payload.get("dry_run", False)),
+            )
+            handler._send_json(result, status=_status_for(result))
+            return True
+
+        if path == "/position/evaluate-volatility-spike-stop":
+            if not _require_fields(handler, payload, ["current_price", "entry_atr", "current_atr"]):
+                return True
+
+            result = evaluate_volatility_spike_stop_for_position(
+                account_id=account_id,
+                symbol=symbol,
+                current_price=float(payload["current_price"]),
+                entry_atr=float(payload["entry_atr"]),
+                current_atr=float(payload["current_atr"]),
+                min_profit_r=float(payload.get("min_profit_r", 0.4)),
+                spike_multiplier=float(payload.get("spike_multiplier", 1.6)),
+                breakeven_buffer_pct=float(payload.get("breakeven_buffer_pct", 0.0015)),
+                already_triggered=bool(payload.get("already_triggered", False)),
+            )
+            handler._send_json(result, status=_status_for(result))
+            return True
+
+        if path == "/position/manage-volatility-spike-stop":
+            if not _require_fields(handler, payload, ["current_price", "entry_atr", "current_atr"]):
+                return True
+
+            result = apply_volatility_spike_stop_for_position(
+                account_id=account_id,
+                symbol=symbol,
+                current_price=float(payload["current_price"]),
+                entry_atr=float(payload["entry_atr"]),
+                current_atr=float(payload["current_atr"]),
+                min_profit_r=float(payload.get("min_profit_r", 0.4)),
+                spike_multiplier=float(payload.get("spike_multiplier", 1.6)),
                 breakeven_buffer_pct=float(payload.get("breakeven_buffer_pct", 0.0015)),
                 already_triggered=bool(payload.get("already_triggered", False)),
                 dry_run=bool(payload.get("dry_run", False)),

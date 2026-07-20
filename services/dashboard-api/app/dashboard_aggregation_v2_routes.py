@@ -33,7 +33,7 @@ def handle_dashboard_aggregation_v2_get(handler, parsed) -> bool:
     account_id = _int_query(query, "account_id", 1)
     limit = _int_query(query, "limit", 500)
     cycle_limit = _int_query(query, "cycle_limit", 100)
-    equity_limit = _int_query(query, "equity_limit", 1000)
+    equity_limit = _int_query(query, "equity_limit", 10000)
 
     if parsed.path == "/dashboard/v2":
         handler._send_json(get_dashboard_v2_snapshot(account_id, limit, cycle_limit, equity_limit))

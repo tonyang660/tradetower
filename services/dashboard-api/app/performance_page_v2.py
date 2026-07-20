@@ -152,7 +152,7 @@ def _time_analytics(performance_v2: dict[str, Any] | None) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def get_performance_page_v2(account_id: int, limit: int = 500, equity_limit: int = 1000) -> dict[str, Any]:
+def get_performance_page_v2(account_id: int, limit: int = 500, equity_limit: int = 10000) -> dict[str, Any]:
     errors: list[dict[str, Any]] = []
 
     performance_v2, performance_error = _safe_get(

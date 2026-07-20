@@ -1,95 +1,78 @@
 """
-Phase 6 Step 9 — Regime-change stop manager.
-
-Wraps regime_change_stop_policy with Trade Guardian data access and existing
-stop repricing helpers.
+Phase 7.6b — Volatility-spike stop manager.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from adaptive_stop_manager import find_stop_loss_order
 from orders import activate_adaptive_sl2_split_for_position
 from positions import get_open_position
-from regime_change_stop_policy import (
-    REGIME_CHANGE_STOP_POLICY_VERSION,
-    build_regime_change_stop_policy_contract,
-    evaluate_regime_change_stop_adjustment,
+from volatility_spike_stop_policy import (
+    VOLATILITY_SPIKE_STOP_POLICY_VERSION,
+    build_volatility_spike_stop_policy_contract,
+    evaluate_volatility_spike_stop_adjustment,
 )
 
 
-def evaluate_regime_change_stop_for_position(
+def evaluate_volatility_spike_stop_for_position(
     *,
     account_id: int,
     symbol: str,
     current_price: float,
-    entry_regime: str,
-    current_regime: str,
+    entry_atr: float,
+    current_atr: float,
     min_profit_r: float = 0.4,
+    spike_multiplier: float = 1.6,
     breakeven_buffer_pct: float = 0.0015,
     already_triggered: bool = False,
 ) -> dict[str, Any]:
     position = get_open_position(int(account_id), str(symbol).upper())
     if position is None:
-        return {
-            "ok": False,
-            "error": "open_position_not_found",
-            "account_id": int(account_id),
-            "symbol": str(symbol).upper(),
-        }
+        return {"ok": False, "error": "open_position_not_found", "account_id": int(account_id), "symbol": str(symbol).upper()}
 
-    decision = evaluate_regime_change_stop_adjustment(
+    decision = evaluate_volatility_spike_stop_adjustment(
         position=position,
         current_price=float(current_price),
-        entry_regime=entry_regime,
-        current_regime=current_regime,
+        entry_atr=float(entry_atr),
+        current_atr=float(current_atr),
         min_profit_r=min_profit_r,
+        spike_multiplier=spike_multiplier,
         breakeven_buffer_pct=breakeven_buffer_pct,
         already_triggered=already_triggered,
     )
-
-    return {
-        "ok": bool(decision.get("ok", False)),
-        "account_id": int(account_id),
-        "symbol": str(symbol).upper(),
-        "position_id": int(position["position_id"]),
-        "decision": decision,
-    }
+    return {"ok": bool(decision.get("ok", False)), "account_id": int(account_id), "symbol": str(symbol).upper(), "position_id": int(position["position_id"]), "decision": decision}
 
 
-def apply_regime_change_stop_for_position(
+def apply_volatility_spike_stop_for_position(
     *,
     account_id: int,
     symbol: str,
     current_price: float,
-    entry_regime: str,
-    current_regime: str,
+    entry_atr: float,
+    current_atr: float,
     min_profit_r: float = 0.4,
+    spike_multiplier: float = 1.6,
     breakeven_buffer_pct: float = 0.0015,
     already_triggered: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     position = get_open_position(int(account_id), str(symbol).upper())
     if position is None:
-        return {
-            "ok": False,
-            "error": "open_position_not_found",
-            "account_id": int(account_id),
-            "symbol": str(symbol).upper(),
-        }
+        return {"ok": False, "error": "open_position_not_found", "account_id": int(account_id), "symbol": str(symbol).upper()}
 
-    decision = evaluate_regime_change_stop_adjustment(
+    decision = evaluate_volatility_spike_stop_adjustment(
         position=position,
         current_price=float(current_price),
-        entry_regime=entry_regime,
-        current_regime=current_regime,
+        entry_atr=float(entry_atr),
+        current_atr=float(current_atr),
         min_profit_r=min_profit_r,
+        spike_multiplier=spike_multiplier,
         breakeven_buffer_pct=breakeven_buffer_pct,
         already_triggered=already_triggered,
     )
 
-    if decision.get("action") != "MOVE_STOP_TO_BREAKEVEN_BUFFER":
+    if decision.get("action") != "ACTIVATE_DEFENSIVE_SL2":
         return {
             "ok": True,
             "action": decision.get("action", "NO_ACTION"),
@@ -100,32 +83,16 @@ def apply_regime_change_stop_for_position(
             "reason_codes": [decision.get("reason_code")],
         }
 
-    stop_order = find_stop_loss_order(
-        account_id=int(account_id),
-        position_id=int(position["position_id"]),
-        symbol=str(symbol).upper(),
-    )
-    if stop_order is None:
-        return {
-            "ok": False,
-            "error": "stop_loss_order_not_found",
-            "account_id": int(account_id),
-            "symbol": str(symbol).upper(),
-            "position_id": int(position["position_id"]),
-            "decision": decision,
-        }
-
     if dry_run:
         return {
             "ok": True,
-            "action": "DRY_RUN_REGIME_CHANGE_STOP_REPRICE",
+            "action": "DRY_RUN_VOLATILITY_SPIKE_SL2_SPLIT",
             "account_id": int(account_id),
             "symbol": str(symbol).upper(),
             "position_id": int(position["position_id"]),
-            "stop_order_id": int(stop_order["order_id"]),
+            "sl2_price": decision["proposed_stop"],
             "decision": decision,
         }
-
 
     split_update = activate_adaptive_sl2_split_for_position(
         account_id=int(account_id),
@@ -141,35 +108,34 @@ def apply_regime_change_stop_for_position(
     if not split_update.get("ok"):
         return {
             "ok": False,
-            "error": "adaptive_sl2_split_failed",
+            "error": "volatility_spike_adaptive_sl2_split_failed",
             "account_id": int(account_id),
             "symbol": str(symbol).upper(),
             "position_id": position["position_id"],
-            "stop_order_id": int(stop_order["order_id"]),
             "decision": decision,
             "split_update": split_update,
         }
 
     return {
         "ok": True,
-        "action": "ADAPTIVE_SL2_SPLIT_ACTIVATED",
+        "action": "VOLATILITY_SPIKE_SL2_SPLIT_ACTIVATED",
         "account_id": int(account_id),
         "symbol": str(symbol).upper(),
         "position_id": position["position_id"],
-        "stop_order_id": int(stop_order["order_id"]),
         "sl2_price": decision["proposed_stop"],
         "reason_code": decision["reason_code"],
         "decision": decision,
         "split_update": split_update,
     }
 
-def build_regime_change_stop_manager_contract() -> dict[str, Any]:
+
+def build_volatility_spike_stop_manager_contract() -> dict[str, Any]:
     return {
-        "regime_change_stop_policy_version": REGIME_CHANGE_STOP_POLICY_VERSION,
-        "policy": build_regime_change_stop_policy_contract(),
-        "manager_role": "evaluate and optionally create defensive SL2 at breakeven plus buffer, splitting stop protection 50/50",
-        "routes_to_wire_later": [
-            "POST /position/evaluate-regime-change-stop",
-            "POST /position/manage-regime-change-stop",
+        "volatility_spike_stop_policy_version": VOLATILITY_SPIKE_STOP_POLICY_VERSION,
+        "policy": build_volatility_spike_stop_policy_contract(),
+        "manager_role": "evaluate ATR spike and optionally create defensive SL2 at breakeven buffer",
+        "routes": [
+            "POST /position/evaluate-volatility-spike-stop",
+            "POST /position/manage-volatility-spike-stop",
         ],
     }

@@ -283,7 +283,7 @@ def classify_position_event(event: dict[str, Any]) -> str:
         return "tp2"
     if event_type in ("TP3_HIT", "TP3_FILLED"):
         return "tp3"
-    if event_type in ("STOP_LOSS_HIT", "STOP_LOSS_FILLED", "SL_HIT"):
+    if event_type in ("STOP_LOSS_HIT", "STOP_LOSS_FILLED", "STOP_FILLED", "SL_HIT", "SL2_FILLED"):
         return "stop_loss"
     if event_type in ("POSITION_CLOSED",):
         return "close"

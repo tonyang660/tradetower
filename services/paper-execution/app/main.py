@@ -239,7 +239,7 @@ def get_symbol_protective_orders(account_id: int, symbol: str, linked_position_i
         o for o in orders
         if o.get("symbol") == symbol
         and o.get("linked_position_id") == linked_position_id
-        and o.get("role") in ("stop_loss", "tp1", "tp2", "tp3")
+        and o.get("role") in ("stop_loss", "sl2", "tp1", "tp2", "tp3")
     ]
 
     return filtered, None
@@ -326,20 +326,41 @@ def recent_candles_touch_limit(candles: list[dict], price: float) -> bool:
     return False
 
 
+def _stop_trigger_candidate(side: str, current_price: float, order: dict | None, remaining_size: float):
+    if order is None:
+        return None
+    price = get_stop_trigger_price(order)
+    if price is None:
+        return None
+    if side == "long":
+        hit = current_price <= price
+    elif side == "short":
+        hit = current_price >= price
+    else:
+        hit = False
+    if not hit:
+        return None
+    order_remaining = float(order.get("remaining_size") or order.get("requested_size") or remaining_size or 0.0)
+    return "STOP_LOSS", price, min(order_remaining, float(remaining_size)), order
+
+
 def evaluate_live_price_trigger(side: str, current_price: float, orders_by_role: dict, remaining_size: float):
     sl_order = orders_by_role.get("stop_loss")
+    sl2_order = orders_by_role.get("sl2")
     tp1_order = orders_by_role.get("tp1")
     tp2_order = orders_by_role.get("tp2")
     tp3_order = orders_by_role.get("tp3")
 
-    sl_price = get_stop_trigger_price(sl_order)
+    for stop_order in (sl_order, sl2_order):
+        candidate = _stop_trigger_candidate(side, current_price, stop_order, remaining_size)
+        if candidate is not None:
+            return candidate
+
     tp1_price = get_order_trigger_price(tp1_order)
     tp2_price = get_order_trigger_price(tp2_order)
     tp3_price = get_order_trigger_price(tp3_order)
 
     if side == "long":
-        if sl_price is not None and current_price <= sl_price:
-            return "STOP_LOSS", sl_price, float(remaining_size), sl_order
         if tp1_price is not None and current_price >= tp1_price:
             return "TP1", tp1_price, float(tp1_order["requested_size"] or 0.0), tp1_order
         if tp2_price is not None and current_price >= tp2_price:
@@ -348,8 +369,6 @@ def evaluate_live_price_trigger(side: str, current_price: float, orders_by_role:
             return "TP3", tp3_price, float(remaining_size), tp3_order
 
     elif side == "short":
-        if sl_price is not None and current_price >= sl_price:
-            return "STOP_LOSS", sl_price, float(remaining_size), sl_order
         if tp1_price is not None and current_price <= tp1_price:
             return "TP1", tp1_price, float(tp1_order["requested_size"] or 0.0), tp1_order
         if tp2_price is not None and current_price <= tp2_price:
@@ -358,7 +377,6 @@ def evaluate_live_price_trigger(side: str, current_price: float, orders_by_role:
             return "TP3", tp3_price, float(remaining_size), tp3_order
 
     return None
-
 
 def build_entry_execution_from_fill(
     *,
@@ -651,17 +669,20 @@ def simulate_maintenance(payload: dict):
             low = float(candle["low"])
 
             sl_order = orders_by_role.get("stop_loss")
+            sl2_order = orders_by_role.get("sl2")
             tp1_order = orders_by_role.get("tp1")
             tp2_order = orders_by_role.get("tp2")
             tp3_order = orders_by_role.get("tp3")
 
             sl_price = get_stop_trigger_price(sl_order)
+            sl2_price = get_stop_trigger_price(sl2_order)
             tp1_price = get_order_trigger_price(tp1_order)
             tp2_price = get_order_trigger_price(tp2_order)
             tp3_price = get_order_trigger_price(tp3_order)
 
             if side == "long":
                 sl_hit = sl_price is not None and low <= sl_price
+                sl2_hit = sl2_price is not None and low <= sl2_price
                 tp1_hit = tp1_price is not None and high >= tp1_price
                 tp2_hit = tp2_price is not None and high >= tp2_price
                 tp3_hit = tp3_price is not None and high >= tp3_price
@@ -669,8 +690,14 @@ def simulate_maintenance(payload: dict):
                 if sl_hit:
                     execution_type = "STOP_LOSS"
                     trigger_price = sl_price
-                    close_size = float(position["remaining_size"])
+                    close_size = min(float(sl_order.get("remaining_size") or sl_order.get("requested_size") or position["remaining_size"]), float(position["remaining_size"]))
                     trigger_order = sl_order
+                    break
+                elif sl2_hit:
+                    execution_type = "STOP_LOSS"
+                    trigger_price = sl2_price
+                    close_size = min(float(sl2_order.get("remaining_size") or sl2_order.get("requested_size") or position["remaining_size"]), float(position["remaining_size"]))
+                    trigger_order = sl2_order
                     break
                 elif tp1_hit:
                     execution_type = "TP1"
@@ -693,6 +720,7 @@ def simulate_maintenance(payload: dict):
 
             elif side == "short":
                 sl_hit = sl_price is not None and high >= sl_price
+                sl2_hit = sl2_price is not None and high >= sl2_price
                 tp1_hit = tp1_price is not None and low <= tp1_price
                 tp2_hit = tp2_price is not None and low <= tp2_price
                 tp3_hit = tp3_price is not None and low <= tp3_price
@@ -700,8 +728,14 @@ def simulate_maintenance(payload: dict):
                 if sl_hit:
                     execution_type = "STOP_LOSS"
                     trigger_price = sl_price
-                    close_size = float(position["remaining_size"])
+                    close_size = min(float(sl_order.get("remaining_size") or sl_order.get("requested_size") or position["remaining_size"]), float(position["remaining_size"]))
                     trigger_order = sl_order
+                    break
+                elif sl2_hit:
+                    execution_type = "STOP_LOSS"
+                    trigger_price = sl2_price
+                    close_size = min(float(sl2_order.get("remaining_size") or sl2_order.get("requested_size") or position["remaining_size"]), float(position["remaining_size"]))
+                    trigger_order = sl2_order
                     break
                 elif tp1_hit:
                     execution_type = "TP1"
@@ -778,7 +812,8 @@ def simulate_maintenance(payload: dict):
         "filled_size": close_size,
         "fee_paid": fee_paid,
         "slippage_bps": effective_slippage_bps,
-        "notes": f"paper maintenance {execution_type.lower()} trigger"
+        "notes": f"paper maintenance {execution_type.lower()} trigger",
+        "order_role": str(trigger_order.get("role") or "").lower() if trigger_order else None,
     }
     guardian_result, g_error = send_execution_to_guardian(execution_event)
     if g_error:

@@ -280,7 +280,7 @@ def fetch_latest_equity(account_id: int) -> dict[str, Any] | None:
     }
 
 
-def fetch_equity_series(account_id: int, limit: int = 1000) -> list[dict[str, Any]]:
+def fetch_equity_series(account_id: int, limit: int = 10000) -> list[dict[str, Any]]:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -321,6 +321,7 @@ def _event_type_level(event_type: str) -> str | None:
 
     if upper in (
         "STOP_FILLED",
+        "SL2_FILLED",
         "STOP_LOSS_HIT",
         "STOP_LOSS_FILLED",
         "STOP_LOSS_EXECUTED",
@@ -598,7 +599,8 @@ def build_cost_breakdown(items: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def build_equity_drawdown_v2(account_id: int, limit: int = 1000) -> dict[str, Any]:
+
+def build_equity_drawdown_v2(account_id: int, limit: int = 10000) -> dict[str, Any]:
     series = fetch_equity_series(account_id, limit)
     peak = None
     max_drawdown_value = 0.0
@@ -817,7 +819,7 @@ def build_time_analytics_v2(items: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def get_performance_v2(account_id: int, limit: int | None = None, equity_limit: int = 1000) -> dict[str, Any]:
+def get_performance_v2(account_id: int, limit: int | None = None, equity_limit: int = 10000) -> dict[str, Any]:
     position_payload = build_position_performance(account_id, limit)
     items = position_payload["items"]
     latest_equity = fetch_latest_equity(account_id)
@@ -910,7 +912,8 @@ def get_performance_v2_positions(account_id: int, limit: int | None = None) -> d
     return build_position_performance(account_id, limit)
 
 
-def get_performance_v2_equity(account_id: int, equity_limit: int = 1000) -> dict[str, Any]:
+
+def get_performance_v2_equity(account_id: int, equity_limit: int = 10000) -> dict[str, Any]:
     return {
         "ok": True,
         "performance_v2_version": PERFORMANCE_V2_VERSION,

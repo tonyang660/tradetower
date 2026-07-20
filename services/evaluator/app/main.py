@@ -179,7 +179,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if parsed.path == "/performance/drawdown-series":
             account_id = int(query.get("account_id", ["1"])[0])
-            limit = int(query.get("limit", ["1000"])[0])
+            limit = int(query.get("limit", ["10000"])[0])
             self._send_json(get_drawdown_series(account_id, limit))
             return
 

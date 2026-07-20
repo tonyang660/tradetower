@@ -20,7 +20,7 @@ def handle_performance_page_v2_get(handler, parsed) -> bool:
     query = parse_qs(parsed.query)
     account_id = _int_query(query, "account_id", 1)
     limit = _int_query(query, "limit", 500)
-    equity_limit = _int_query(query, "equity_limit", 1000)
+    equity_limit = _int_query(query, "equity_limit", 10000)
 
     if parsed.path == "/dashboard/v2/performance-page":
         handler._send_json(get_performance_page_v2(account_id, limit, equity_limit))

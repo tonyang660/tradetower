@@ -23,7 +23,8 @@ from typing import Any
 
 PROTECTIVE_ORDER_POLICY_VERSION = "phase6_step5_protective_order_lifecycle"
 
-PROTECTIVE_ROLES = ("stop_loss", "tp1", "tp2", "tp3")
+PROTECTIVE_ROLES = ("stop_loss", "sl2", "tp1", "tp2", "tp3")
+BASE_REQUIRED_PROTECTIVE_ROLES = ("stop_loss", "tp1", "tp2", "tp3")
 TP_CLOSE_DEFAULTS = {
     "tp1": 50.0,
     "tp2": 30.0,
@@ -78,6 +79,7 @@ def order_price_for_role(order: dict[str, Any], role: str) -> float | None:
     role = normalize_role(role)
     keys = {
         "stop_loss": ("stop_loss", "requested_price", "entry_price"),
+        "sl2": ("stop_loss", "requested_price", "entry_price"),
         "tp1": ("tp1", "requested_price", "entry_price"),
         "tp2": ("tp2", "requested_price", "entry_price"),
         "tp3": ("tp3", "requested_price", "entry_price"),
@@ -135,7 +137,7 @@ def validate_protective_order_set(
     elif tp1_hit:
         required_roles = ["stop_loss", "tp2", "tp3"]
     else:
-        required_roles = list(PROTECTIVE_ROLES)
+        required_roles = list(BASE_REQUIRED_PROTECTIVE_ROLES)
 
     missing_roles = [role for role in required_roles if role not in roles]
 
@@ -231,7 +233,7 @@ def should_trigger_for_order(
 
     side = normalize_side(side)
 
-    if role == "stop_loss":
+    if role in ("stop_loss", "sl2"):
         if side == "long":
             return low <= price
         if side == "short":
@@ -265,6 +267,7 @@ def select_protective_trigger_from_candle(
 
     for role, execution_type in (
         ("stop_loss", "STOP_LOSS"),
+        ("sl2", "STOP_LOSS"),
         ("tp1", "TP1"),
         ("tp2", "TP2"),
         ("tp3", "TP3"),
@@ -300,9 +303,10 @@ def select_protective_trigger_from_candle(
 def build_protective_order_policy_contract() -> dict[str, Any]:
     return {
         "protective_order_policy_version": PROTECTIVE_ORDER_POLICY_VERSION,
-        "required_roles": list(PROTECTIVE_ROLES),
+        "required_roles": list(BASE_REQUIRED_PROTECTIVE_ROLES),
+        "optional_roles": ["sl2"],
         "tp_close_defaults": TP_CLOSE_DEFAULTS,
-        "same_candle_priority": ["stop_loss", "tp1", "tp2", "tp3"],
+        "same_candle_priority": ["stop_loss", "sl2", "tp1", "tp2", "tp3"],
         "owner_of_protective_orders": "trade_guardian",
         "paper_execution_role": "simulate fills against Trade Guardian protective orders",
         "not_in_scope": [

@@ -157,7 +157,7 @@ def get_dashboard_v2_snapshot(
     account_id: int,
     limit: int = 500,
     cycle_limit: int = 100,
-    equity_limit: int = 1000,
+    equity_limit: int = 10000,
 ) -> dict[str, Any]:
     errors: list[dict[str, Any]] = []
 
@@ -298,7 +298,8 @@ def get_dashboard_v2_overview(account_id: int, limit: int = 250, cycle_limit: in
     }
 
 
-def get_dashboard_v2_performance(account_id: int, limit: int = 500, equity_limit: int = 1000) -> dict[str, Any]:
+
+def get_dashboard_v2_performance(account_id: int, limit: int = 500, equity_limit: int = 10000) -> dict[str, Any]:
     performance_payload, performance_error = _safe_get(
         "performance_v2",
         "/performance/v2",

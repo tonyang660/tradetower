@@ -68,7 +68,7 @@ All responses are JSON. Query params use standard URL encoding.
 - `GET /performance/summary?account_id=1`
 - `GET /performance/summary-extended?account_id=1`
 - `GET /performance/pnl-series?account_id=1&limit=200`
-- `GET /performance/drawdown-series?account_id=1&limit=1000`
+- `GET /performance/drawdown-series?account_id=1&limit=10000`
 - `GET /performance/directional-breakdown?account_id=1`
 - `GET /performance/hourly?account_id=1`
 - `GET /performance/weekday?account_id=1`
