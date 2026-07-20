@@ -66,7 +66,9 @@ def build_pipeline_stages(cycle: dict | None):
     summary = cycle.get("summary", {}) or {}
 
     maintenance = summary.get("maintenance", {}) or {}
-    entry_gate = summary.get("entry_gate", {}) or {}
+    entry_gate = summary.get("entry_gate")
+    entry_gate_present = isinstance(entry_gate, dict)
+    entry_gate = entry_gate or {}
     candidate_filter = summary.get("candidate_filter", {}) or {}
     strategy_engine = summary.get("strategy_engine", {}) or {}
     risk_engine = summary.get("risk_engine", {}) or {}
@@ -98,9 +100,23 @@ def build_pipeline_stages(cycle: dict | None):
         {
             "key": "entry_gate",
             "label": "Entry Gate",
-            "status": "ok" if bool(entry_gate.get("trade_allowed", False)) else "blocked",
-            "primary_value": 1 if bool(entry_gate.get("trade_allowed", False)) else 0,
-            "secondary_text": "allowed" if bool(entry_gate.get("trade_allowed", False)) else "blocked",
+            "status": (
+                "ok"
+                if entry_gate_present and bool(entry_gate.get("trade_allowed", False))
+                else "blocked"
+                if entry_gate_present
+                else "idle"
+            ),
+            "primary_value": 1 if entry_gate_present and bool(entry_gate.get("trade_allowed", False)) else 0,
+            "secondary_text": (
+                "allowed"
+                if entry_gate_present and bool(entry_gate.get("trade_allowed", False))
+                else "blocked · " + ", ".join((entry_gate.get("reason_codes") or [])[:2])
+                if entry_gate_present and entry_gate.get("reason_codes")
+                else "blocked"
+                if entry_gate_present
+                else "not checked"
+            ),
         },
         {
             "key": "candidate_filter",

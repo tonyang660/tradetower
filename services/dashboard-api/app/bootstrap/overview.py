@@ -1,7 +1,41 @@
-from config import EVALUATOR_BASE_URL, SCHEDULER_BASE_URL
+from config import EVALUATOR_BASE_URL, SCHEDULER_BASE_URL, TRADE_GUARDIAN_BASE_URL
 from health import get_market_session_banner
-from http_client import get_json
+from http_client import get_json, post_json
 from time_utils import iso_now
+
+
+def _extract_latest_cycle_entry_gate(cycle_latest):
+    if not isinstance(cycle_latest, dict):
+        return None
+    cycle = cycle_latest.get("cycle")
+    if not isinstance(cycle, dict):
+        return None
+    summary = cycle.get("summary") or {}
+    entry_gate = summary.get("entry_gate")
+    return entry_gate if isinstance(entry_gate, dict) else None
+
+
+def _fetch_current_entry_gate(account_id: int, cycle_latest):
+    payload, status_code, error = post_json(
+        f"{TRADE_GUARDIAN_BASE_URL}/guard/check-entry",
+        {"account_id": account_id},
+        timeout=10,
+    )
+
+    if error or status_code != 200 or not isinstance(payload, dict):
+        fallback = _extract_latest_cycle_entry_gate(cycle_latest)
+        if fallback is not None:
+            return fallback, {
+                "source": "trade_guardian_entry_gate",
+                "error": error or payload,
+                "fallback": "latest_cycle.entry_gate",
+            }
+        return None, {
+            "source": "trade_guardian_entry_gate",
+            "error": error or payload,
+        }
+
+    return payload, None
 
 
 def get_bootstrap_overview(account_id: int):
@@ -30,6 +64,7 @@ def get_bootstrap_overview(account_id: int):
         timeout=10,
     )
     market_banner = get_market_session_banner()
+    entry_gate, entry_gate_error = _fetch_current_entry_gate(account_id, cycle_latest)
 
     errors = []
     if overview_error or overview_status != 200:
@@ -57,6 +92,8 @@ def get_bootstrap_overview(account_id: int):
             "source": "scheduler_health",
             "error": scheduler_error or scheduler_health,
         })
+    if entry_gate_error:
+        errors.append(entry_gate_error)
 
     account_status = overview.get("account_status", {}) if isinstance(overview, dict) else {}
     trading_enabled = account_status.get("trading_enabled", True)
@@ -74,10 +111,29 @@ def get_bootstrap_overview(account_id: int):
     if weekly_kill_switch:
         disable_reasons.append("WEEKLY_KILL_SWITCH")
 
+    entry_gate = entry_gate if isinstance(entry_gate, dict) else {
+        "trade_allowed": len(disable_reasons) == 0,
+        "reason_codes": disable_reasons,
+        "source": "account_status_fallback",
+    }
+
+    entry_allowed = bool(entry_gate.get("trade_allowed", False))
+    entry_reason_codes = entry_gate.get("reason_codes", []) or []
+
     trading_banner = {
         "trading_disabled": len(disable_reasons) > 0,
+        "entry_blocked": not entry_allowed,
+        "entry_allowed": entry_allowed,
         "reason_codes": disable_reasons,
-        "message": "Trading Suspended" if disable_reasons else "Trading Enabled",
+        "entry_reason_codes": entry_reason_codes,
+        "entry_gate": entry_gate,
+        "message": (
+            "Trading Suspended"
+            if disable_reasons
+            else "Entry Blocked"
+            if not entry_allowed
+            else "Trading Enabled"
+        ),
         "maintenance_remains_active": True,
     }
 
