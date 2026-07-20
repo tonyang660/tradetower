@@ -1,11 +1,9 @@
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 import json
 
 import state
-from accounts import enabled_account_ids, all_account_ids, PHASE8_SCHEDULER_ACCOUNTS_VERSION
-from accounts import enabled_account_ids, PHASE8_SCHEDULER_ACCOUNTS_VERSION
-from api_clients import fetch_pending_entry_orders
+from accounts import PHASE8_SCHEDULER_ACCOUNTS_VERSION
 from config import (
     ACCOUNT_ID,
     AUTO_LOOP_DEFAULT,
@@ -102,24 +100,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/health"):
-            pending_entries, pending_entries_error = (
-                fetch_pending_entry_orders(ACCOUNT_ID)
-            )
-
             account_snapshot = _scheduler_health_account_snapshot()
 
-            if pending_entries_error:
-                self._send_json({
-                    "ok": False,
-                    "service": SERVICE_NAME,
-                    "error": pending_entries_error,
-                    "timestamp": iso_now(),
-                }, status=502)
-                return
-
-            pending_status = build_pending_entry_status(
-                pending_entries
-            )
+            # Phase 8C hotfix:
+            # /health must not perform network reads. Use local scheduler state.
+            pending_status = build_pending_entry_status([])
 
             self._send_json({
                 "ok": True,
@@ -197,14 +182,17 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             state.AUTO_LOOP_ENABLED_STATE = enabled
-            enabled_ids, enabled_accounts_error = _account_ids_tuple(enabled_account_ids(ACCOUNT_ID), ACCOUNT_ID)
+            account_snapshot = _scheduler_health_account_snapshot()
 
             self._send_json({
                 "ok": True,
                 "auto_loop_enabled": state.AUTO_LOOP_ENABLED_STATE,
                 "phase8_scheduler_accounts_version": PHASE8_SCHEDULER_ACCOUNTS_VERSION,
-                "enabled_account_ids": enabled_ids,
-                "enabled_accounts_error": enabled_accounts_error,
+                "enabled_account_ids": account_snapshot["enabled_account_ids"],
+                "all_account_ids": account_snapshot["all_account_ids"],
+                "enabled_accounts_error": account_snapshot["enabled_accounts_error"],
+                "all_accounts_error": account_snapshot["all_accounts_error"],
+                "account_snapshot_source": account_snapshot["account_snapshot_source"],
                 "timestamp": iso_now(),
             })
             return
@@ -242,6 +230,6 @@ if __name__ == "__main__":
     maintenance_thread = Thread(target=open_position_maintenance_loop, daemon=True)
     maintenance_thread.start()
 
-    server = HTTPServer(("0.0.0.0", PORT), Handler)
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"{SERVICE_NAME} listening on {PORT}")
     server.serve_forever()
