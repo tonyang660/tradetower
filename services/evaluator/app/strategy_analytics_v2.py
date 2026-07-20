@@ -6,7 +6,7 @@ from typing import Any
 
 from db import get_conn
 
-STRATEGY_ANALYTICS_V2_VERSION = "phase7_step6_strategy_analytics_v2_hotfix13b_trade_outcomes"
+STRATEGY_ANALYTICS_V2_VERSION = "hotfix21_account_balances_pnl_source_of_truth"
 
 
 def _to_float(value: Any, default: float | None = 0.0) -> float | None:
@@ -87,6 +87,63 @@ def _score_bucket(score: Any) -> str:
     if value >= 0:
         return "<60"
     return "unknown"
+
+
+def fetch_account_balance_pnl(account_id: int) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    realized_pnl,
+                    fees_paid_total,
+                    unrealized_pnl,
+                    cash_balance,
+                    equity,
+                    updated_at
+                FROM account_balances
+                WHERE account_id = %s
+                """,
+                (account_id,),
+            )
+            row = cur.fetchone()
+
+    if not row:
+        return None
+
+    gross = _to_float(row[0])
+    fees = abs(_to_float(row[1]))
+    net = gross - fees
+
+    return {
+        "source": "account_balances",
+        "gross_pnl": round(gross, 8),
+        "total_fees": round(fees, 8),
+        "net_pnl": round(net, 8),
+        "unrealized_pnl": round(_to_float(row[2]), 8),
+        "cash_balance": round(_to_float(row[3]), 8),
+        "equity": round(_to_float(row[4]), 8),
+        "updated_at": row[5].isoformat().replace("+00:00", "Z") if row[5] else None,
+        "formula": "net_pnl = account_balances.realized_pnl - account_balances.fees_paid_total",
+    }
+
+
+def apply_account_balance_pnl_to_trade_summary(summary: dict[str, Any], account_balance_pnl: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(summary, dict):
+        summary = {}
+    if not isinstance(account_balance_pnl, dict):
+        return summary
+
+    updated = dict(summary)
+    updated["gross_pnl"] = account_balance_pnl["gross_pnl"]
+    updated["net_pnl"] = account_balance_pnl["net_pnl"]
+    updated["total_fees"] = account_balance_pnl["total_fees"]
+    gross = _to_float(updated.get("gross_pnl"))
+    fees = _to_float(updated.get("total_fees"))
+    updated["fee_to_gross_ratio"] = round(fees / abs(gross), 6) if gross else None
+    updated["pnl_source"] = "account_balances"
+    updated["account_balance_pnl"] = account_balance_pnl
+    return updated
 
 
 def fetch_decision_rows(account_id: int, limit: int | None = None) -> list[dict[str, Any]]:
@@ -699,11 +756,17 @@ def get_strategy_analytics_v2_summary(account_id: int, limit: int | None = None)
     decision_rows_for_funnel = fetch_decision_rows(account_id, limit)
 
     position_items, position_error = fetch_position_items_from_performance_v2(account_id, limit)
+    account_balance_pnl = fetch_account_balance_pnl(account_id)
+    trade_summary = apply_account_balance_pnl_to_trade_summary(
+        build_strategy_trade_summary_v2(position_items, decision_rows_for_attribution),
+        account_balance_pnl,
+    )
     return {
         "ok": position_error is None,
         "strategy_analytics_v2_version": STRATEGY_ANALYTICS_V2_VERSION,
         "account_id": account_id,
-        "summary": build_strategy_trade_summary_v2(position_items, decision_rows_for_attribution),
+        "summary": trade_summary,
+        "account_balance_pnl": account_balance_pnl,
         "decision_summary": summarize_decision_rows(decision_rows_for_funnel),
         "position_source_error": position_error,
         "score_attribution": {
@@ -801,7 +864,11 @@ def get_strategy_analytics_v2_bundle(account_id: int, limit: int | None = None, 
 
     position_items, position_error = fetch_position_items_from_performance_v2(account_id, limit)
 
-    trade_summary = build_strategy_trade_summary_v2(position_items, decision_rows_for_attribution)
+    account_balance_pnl = fetch_account_balance_pnl(account_id)
+    trade_summary = apply_account_balance_pnl_to_trade_summary(
+        build_strategy_trade_summary_v2(position_items, decision_rows_for_attribution),
+        account_balance_pnl,
+    )
     score_buckets = build_strategy_score_buckets_v2(position_items, decision_rows_for_attribution)
     symbols = build_strategy_symbols_v2(position_items)
     holding_times = build_holding_times_v2(position_items)
@@ -814,6 +881,7 @@ def get_strategy_analytics_v2_bundle(account_id: int, limit: int | None = None, 
         "account_id": account_id,
         "summary": trade_summary,
         "trade_summary": trade_summary,
+        "account_balance_pnl": account_balance_pnl,
         "decision_summary": summarize_decision_rows(decision_rows_for_funnel),
         "regimes": get_strategy_analytics_v2_regimes(account_id, limit)["items"],
         "setups": get_strategy_analytics_v2_setups(account_id, limit)["items"],
@@ -836,10 +904,10 @@ def get_strategy_analytics_v2_bundle(account_id: int, limit: int | None = None, 
             "note": "Decision history is uncapped for trade-score attribution. The page limit only caps positions and decision-summary rows.",
         },
         "pnl_convention": {
-            "source": "Performance V2 position items",
-            "net_realized_pnl": "account/equity realized pnl convention",
-            "gross_realized_pnl": "net_realized_pnl + fees_paid",
-            "fees": "actual execution fees counted once",
+            "source": "account_balances for top-line pnl; Performance V2 position items for attribution tables",
+            "gross_pnl": "account_balances.realized_pnl",
+            "net_pnl": "account_balances.realized_pnl - account_balances.fees_paid_total",
+            "fees": "account_balances.fees_paid_total",
         },
     }
 

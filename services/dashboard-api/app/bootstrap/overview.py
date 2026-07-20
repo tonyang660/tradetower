@@ -38,6 +38,22 @@ def _fetch_current_entry_gate(account_id: int, cycle_latest):
     return payload, None
 
 
+def _fetch_guardian_status(account_id: int):
+    payload, status_code, error = get_json(
+        f"{TRADE_GUARDIAN_BASE_URL}/status",
+        params={"account_id": account_id},
+        timeout=20,
+    )
+    if error or status_code != 200 or not isinstance(payload, dict):
+        return None, {
+            "source": "trade_guardian_status",
+            "path": "/status",
+            "status_code": status_code,
+            "error": error or payload,
+        }
+    return payload, None
+
+
 def _normalize_account_pnl_fields(account_status: dict) -> dict:
     if not isinstance(account_status, dict):
         return {}
@@ -101,6 +117,7 @@ def get_bootstrap_overview(account_id: int):
     )
     market_banner = get_market_session_banner()
     entry_gate, entry_gate_error = _fetch_current_entry_gate(account_id, cycle_latest)
+    guardian_status, guardian_status_error = _fetch_guardian_status(account_id)
 
     errors = []
     if overview_error or overview_status != 200:
@@ -130,8 +147,10 @@ def get_bootstrap_overview(account_id: int):
         })
     if entry_gate_error:
         errors.append(entry_gate_error)
+    if guardian_status_error:
+        errors.append(guardian_status_error)
 
-    account_status = overview.get("account_status", {}) if isinstance(overview, dict) else {}
+    account_status = guardian_status if isinstance(guardian_status, dict) else (overview.get("account_status", {}) if isinstance(overview, dict) else {})
     account_status = _normalize_account_pnl_fields(account_status)
     if isinstance(overview, dict):
         overview = dict(overview)

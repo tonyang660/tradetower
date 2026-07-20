@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from config import EVALUATOR_BASE_URL
+from config import EVALUATOR_BASE_URL, TRADE_GUARDIAN_BASE_URL
 from http_client import get_json
 from time_utils import iso_now
 
-PERFORMANCE_PAGE_V2_VERSION = "hotfix20e_performance_summary_from_calendar_net"
+PERFORMANCE_PAGE_V2_VERSION = "hotfix21_account_balances_pnl_source_of_truth"
 
 
 def _safe_get(source: str, path: str, params: dict[str, Any] | None = None, timeout: int = 30):
@@ -123,6 +123,30 @@ def _extract_gross_pnl(
             else None
         ),
     )
+
+
+def _account_balance_pnl_from_status(status: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(status, dict):
+        return None
+
+    gross_realized_pnl = _num(status.get("realized_pnl"))
+    fees_paid_total = abs(_num(status.get("fees_paid_total")))
+    unrealized_pnl = _num(status.get("unrealized_pnl"))
+    equity = _num(status.get("equity"))
+    cash_balance = _num(status.get("cash_balance"))
+    net_realized_pnl = gross_realized_pnl - fees_paid_total
+
+    return {
+        "source": "account_balances",
+        "gross_realized_pnl": gross_realized_pnl,
+        "fees_paid_total": fees_paid_total,
+        "net_realized_pnl": net_realized_pnl,
+        "unrealized_pnl": unrealized_pnl,
+        "cash_balance": cash_balance,
+        "equity": equity,
+        "total_account_pnl": net_realized_pnl + unrealized_pnl,
+        "formula": "net_realized_pnl = account_balances.realized_pnl - account_balances.fees_paid_total",
+    }
 
 
 def _service_block(payload: dict[str, Any] | None, error: dict[str, Any] | None) -> dict[str, Any]:
@@ -245,7 +269,7 @@ def _canonical_net_pnl_for_summary(performance_v2: dict[str, Any], position_summ
     return 0.0, "missing"
 
 
-def _map_summary(performance_v2: dict[str, Any] | None) -> dict[str, Any] | None:
+def _map_summary(performance_v2: dict[str, Any] | None, account_balance_pnl: dict[str, Any] | None = None) -> dict[str, Any] | None:
     if not isinstance(performance_v2, dict):
         return None
 
@@ -259,36 +283,32 @@ def _map_summary(performance_v2: dict[str, Any] | None) -> dict[str, Any] | None
     losses = int(_num(position_summary.get("losses")))
     total_trades = int(_num(position_summary.get("positions_closed"), _num(position_summary.get("positions_total"))))
 
-    # Hotfix 20e:
-    # Top Gross/Net cards must reconcile with the already-correct calendar and
-    # monthly panels. Some older evaluator summary payloads still contain stale
-    # gross/net fields, so do not use those as the primary source. Use the
-    # canonical net PnL from calendar days / position items, then derive gross:
-    #
-    #   gross_pnl = net_pnl + fees
-    #
-    # Example:
-    #   net -109.00 + fees 19.33 = gross -89.67
-    fees = _extract_fee_total(position_summary, cost_breakdown, latest_equity)
-    net_pnl, net_pnl_source = _canonical_net_pnl_for_summary(performance_v2, position_summary)
-
-    # If fee aliases were missing, infer fees from stale gross-vs-canonical-net.
-    if fees == 0.0:
-        stale_gross = _extract_gross_pnl(position_summary, latest_equity, fees)
-        implied_fees = stale_gross - net_pnl
-        if implied_fees != 0.0:
-            fees = abs(implied_fees)
-
-    gross_pnl = net_pnl + fees
+    # Hotfix 21:
+    # Source of truth for top-line Performance PnL is account_balances.
+    if isinstance(account_balance_pnl, dict):
+        gross_pnl = _num(account_balance_pnl.get("gross_realized_pnl"))
+        fees = abs(_num(account_balance_pnl.get("fees_paid_total")))
+        net_pnl = gross_pnl - fees
+        net_pnl_source = "account_balances"
+    else:
+        fees = _extract_fee_total(position_summary, cost_breakdown, latest_equity)
+        net_pnl, net_pnl_source = _canonical_net_pnl_for_summary(performance_v2, position_summary)
+        if fees == 0.0:
+            stale_gross = _extract_gross_pnl(position_summary, latest_equity, fees)
+            implied_fees = stale_gross - net_pnl
+            if implied_fees != 0.0:
+                fees = abs(implied_fees)
+        gross_pnl = net_pnl + fees
 
     return {
         "gross_pnl": gross_pnl,
         "net_pnl": net_pnl,
         "total_fees_paid": fees,
         "net_pnl_source": net_pnl_source,
+        "account_balance_pnl": account_balance_pnl,
         "pnl_convention": {
-            "gross_pnl": "gross realized trading PnL before fees",
-            "net_pnl": "canonical net PnL after fees from calendar_days or position_items",
+            "gross_pnl": "account_balances.realized_pnl when account balance status is available",
+            "net_pnl": "account_balances.realized_pnl minus account_balances.fees_paid_total when available",
             "total_fees_paid": "actual execution fees deducted from net PnL",
         },
         "equity_change_pct": _num(equity_summary.get("equity_change_pct")),
@@ -332,6 +352,22 @@ def get_performance_page_v2(account_id: int, limit: int = 500, equity_limit: int
     if performance_error:
         errors.append(performance_error)
 
+    guardian_status, guardian_status_status, guardian_status_raw_error = get_json(
+        f"{TRADE_GUARDIAN_BASE_URL}/status",
+        params={"account_id": account_id},
+        timeout=20,
+    )
+    guardian_status_error = None
+    if guardian_status_raw_error or guardian_status_status != 200 or not isinstance(guardian_status, dict):
+        guardian_status_error = {
+            "source": "trade_guardian_status",
+            "path": "/status",
+            "status_code": guardian_status_status,
+            "error": guardian_status_raw_error or guardian_status,
+        }
+        errors.append(guardian_status_error)
+
+    account_balance_pnl = _account_balance_pnl_from_status(guardian_status)
     analytics = _time_analytics(performance_v2)
 
     return {
@@ -340,7 +376,7 @@ def get_performance_page_v2(account_id: int, limit: int = 500, equity_limit: int
         "performance_page_v2_version": PERFORMANCE_PAGE_V2_VERSION,
         "account_id": account_id,
         "generated_at": iso_now(),
-        "summary": _map_summary(performance_v2),
+        "summary": _map_summary(performance_v2, account_balance_pnl),
         "equity_curve": _map_equity_curve(performance_v2),
         "drawdown_curve": _map_drawdown_curve(performance_v2),
         "directional_breakdown": analytics.get("directional_breakdown"),
@@ -355,10 +391,12 @@ def get_performance_page_v2(account_id: int, limit: int = 500, equity_limit: int
             "cost_breakdown": performance_v2.get("cost_breakdown") if isinstance(performance_v2, dict) else None,
             "leg_summary": performance_v2.get("leg_summary") if isinstance(performance_v2, dict) else None,
             "latest_equity": performance_v2.get("latest_equity") if isinstance(performance_v2, dict) else None,
+            "account_balance_pnl": account_balance_pnl,
             "time_analytics": analytics,
         },
         "services": {
             "performance_v2": _service_block(performance_v2, performance_error),
+            "trade_guardian_status": _service_block(guardian_status, guardian_status_error),
         },
         "errors": errors,
     }
