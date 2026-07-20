@@ -5,13 +5,15 @@ from typing import Any
 
 from db import get_conn
 
-PERFORMANCE_V2_VERSION = "phase7_step7_performance_v2_hotfix17_utc_time_buckets"
+PERFORMANCE_V2_VERSION = "hotfix20_performance_v2_net_realized_pnl_fee_convention"
 
 
 PNL_CONVENTION = {
-    "realized_pnl": "Net after actual trading fees. Use this as the main closed-trade PnL.",
+    "realized_pnl": "Gross trading PnL before execution fees, as stored in account_balances and position_events.",
+    "net_realized_pnl": "Gross trading PnL minus actual execution fees. Use this as the main closed-trade PnL.",
+    "gross_realized_pnl": "Trading PnL before execution fees.",
     "unrealized_pnl": "Live gross mark/last PnL. Do not subtract estimated exit fees.",
-    "fees": "Actual fees remain visible separately for transparency and cost pressure analysis.",
+    "fees": "Actual fees are deducted from net realized PnL and also visible separately for transparency.",
     "slippage": "Slippage should remain visible separately when execution data provides it.",
     "spread": "Spread should remain visible separately when pricing context provides it.",
     "funding": "Funding should remain separate later when available.",
@@ -266,13 +268,19 @@ def fetch_latest_equity(account_id: int) -> dict[str, Any] | None:
     if not row:
         return None
 
+    gross_realized_pnl = _to_float(row[3])
+    fees_paid_total = _to_float(row[5])
+    net_realized_pnl = gross_realized_pnl - fees_paid_total
+
     return {
         "recorded_at": _iso(row[0]),
         "cash_balance": _to_float(row[1]),
         "equity": _to_float(row[2]),
-        "realized_pnl": _to_float(row[3]),
+        "realized_pnl": gross_realized_pnl,
+        "gross_realized_pnl": gross_realized_pnl,
+        "net_realized_pnl": net_realized_pnl,
         "unrealized_pnl": _to_float(row[4]),
-        "fees_paid_total": _to_float(row[5]),
+        "fees_paid_total": fees_paid_total,
         "trading_enabled": bool(row[6]),
         "manual_halt": bool(row[7]),
         "daily_kill_switch": bool(row[8]),
@@ -295,16 +303,20 @@ def fetch_equity_series(account_id: int, limit: int = 10000) -> list[dict[str, A
             )
             rows = cur.fetchall()
 
-    return [
-        {
+    items = []
+    for row in rows:
+        gross_realized_pnl = _to_float(row[2])
+        fees_paid_total = _to_float(row[4])
+        items.append({
             "recorded_at": _iso(row[0]),
             "equity": _to_float(row[1]),
-            "realized_pnl": _to_float(row[2]),
+            "realized_pnl": gross_realized_pnl,
+            "gross_realized_pnl": gross_realized_pnl,
+            "net_realized_pnl": gross_realized_pnl - fees_paid_total,
             "unrealized_pnl": _to_float(row[3]),
-            "fees_paid_total": _to_float(row[4]),
-        }
-        for row in rows
-    ]
+            "fees_paid_total": fees_paid_total,
+        })
+    return items
 
 
 def _event_type_level(event_type: str) -> str | None:
@@ -411,12 +423,11 @@ def build_position_performance_item(
     cost_fees = _to_float((costs or {}).get("fees_paid"), 0.0)
     total_fees = fees_from_events if fees_from_events else cost_fees
 
-    # V2 page convention after Hotfix 10:
-    # - event realized_pnl is the canonical realized PnL used by Overview/equity
-    # - Performance panels should sum that value as net/account realized PnL
-    # - Gross before fees is derived as net + fees
-    net_realized_pnl = realized_pnl
-    gross_realized_pnl = realized_pnl + total_fees
+    # Hotfix 20 convention:
+    # - event realized_pnl is gross trading PnL before actual execution fees
+    # - net/account realized PnL deducts fees exactly once
+    gross_realized_pnl = realized_pnl
+    net_realized_pnl = realized_pnl - total_fees
 
     risk_amount = _to_float(position.get("risk_amount"))
     realized_r = (net_realized_pnl / risk_amount) if risk_amount and risk_amount > 0 else None
@@ -527,6 +538,7 @@ def summarize_position_performance(items: list[dict[str, Any]]) -> dict[str, Any
         "fees_paid": round(fees, 8),
         "net_realized_pnl": round(net_realized, 8),
         "fee_to_gross_realized_ratio": round(fees / abs(gross_realized), 8) if gross_realized else None,
+        "pnl_convention": PNL_CONVENTION,
         "expectancy_net_pnl": round(net_realized / len(closed), 8) if closed else 0.0,
         "profit_factor": round(profit_factor, 8) if profit_factor is not None else None,
         "average_win_pnl": round(average_win_pnl, 8),
@@ -591,6 +603,7 @@ def build_cost_breakdown(items: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "fees_paid": round(fees, 8),
         "fee_to_gross_realized_ratio": round(fees / abs(gross_realized), 8) if gross_realized else None,
+        "pnl_convention": PNL_CONVENTION,
         "average_slippage_bps": _avg([float(value) for value in slippage_values if value is not None]),
         "spread_cost": None,
         "spread_note": "Spread cost is not aggregated yet; preserve pricing_context/spread fields for later extraction.",

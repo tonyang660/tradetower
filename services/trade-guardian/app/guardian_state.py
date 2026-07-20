@@ -181,6 +181,10 @@ def fetch_guardian_status(account_id: int):
     weekly_pnl_pct = calculate_pnl_pct(weekly_pnl, weekly_basis_equity)
     daily_pnl_pct = calculate_pnl_pct(daily_pnl, daily_basis_equity)
 
+    gross_realized_pnl = float(row[7])
+    fees_paid_total = float(row[9])
+    net_realized_pnl = gross_realized_pnl - fees_paid_total
+
     status = {
         "account_id": int(row[0]),
         "account_name": row[1],
@@ -189,9 +193,13 @@ def fetch_guardian_status(account_id: int):
         "is_active": row[4],
         "cash_balance": float(row[5]),
         "equity": float(row[6]),
-        "realized_pnl": float(row[7]),
+        # Backward-compatible existing field. This is gross trading PnL before fees
+        # because account_balances updates realized_pnl separately from fee debits.
+        "realized_pnl": gross_realized_pnl,
+        "gross_realized_pnl": gross_realized_pnl,
+        "net_realized_pnl": net_realized_pnl,
         "unrealized_pnl": float(row[8]),
-        "fees_paid_total": float(row[9]),
+        "fees_paid_total": fees_paid_total,
         "trading_enabled": row[10],
         "manual_halt": row[11],
         "daily_kill_switch": row[12],
