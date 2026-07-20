@@ -22,7 +22,11 @@ export type BootstrapOverview = {
   };
   trading_banner: {
     trading_disabled: boolean;
+    entry_blocked?: boolean;
+    entry_allowed?: boolean;
     reason_codes: string[];
+    entry_reason_codes?: string[];
+    entry_gate?: Record<string, any> | null;
     message: string;
     maintenance_remains_active: boolean;
   };
