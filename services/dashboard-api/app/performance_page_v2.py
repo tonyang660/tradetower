@@ -6,7 +6,7 @@ from config import EVALUATOR_BASE_URL
 from http_client import get_json
 from time_utils import iso_now
 
-PERFORMANCE_PAGE_V2_VERSION = "hotfix20b_performance_page_net_pnl_display"
+PERFORMANCE_PAGE_V2_VERSION = "hotfix20d_performance_page_fee_aliases_net_pnl"
 
 
 def _safe_get(source: str, path: str, params: dict[str, Any] | None = None, timeout: int = 30):
@@ -54,6 +54,77 @@ def _num(value: Any, fallback: float = 0.0) -> float:
     return fallback
 
 
+def _first_nonzero_num(*values: Any) -> float:
+    for value in values:
+        n = _num(value, 0.0)
+        if n != 0.0:
+            return n
+    return 0.0
+
+
+def _first_present_num(*values: Any) -> float:
+    for value in values:
+        if value is None:
+            continue
+        return _num(value, 0.0)
+    return 0.0
+
+
+def _extract_fee_total(
+    position_summary: dict[str, Any],
+    cost_breakdown: dict[str, Any],
+    latest_equity: dict[str, Any],
+    gross_pnl: float | None = None,
+) -> float:
+    fees = _first_nonzero_num(
+        position_summary.get("fees_paid"),
+        position_summary.get("total_fees_paid"),
+        position_summary.get("fees_paid_total"),
+        position_summary.get("total_fees"),
+        position_summary.get("fees"),
+        cost_breakdown.get("fees_paid"),
+        cost_breakdown.get("total_fees_paid"),
+        cost_breakdown.get("fees_paid_total"),
+        cost_breakdown.get("total_fees"),
+        cost_breakdown.get("fees"),
+        latest_equity.get("fees_paid_total"),
+        latest_equity.get("total_fees_paid"),
+        latest_equity.get("fees_paid"),
+        latest_equity.get("total_fees"),
+    )
+
+    if fees != 0.0:
+        return abs(fees)
+
+    if gross_pnl is not None:
+        for key in ("net_realized_pnl", "net_pnl"):
+            if position_summary.get(key) is not None:
+                implied = float(gross_pnl) - _num(position_summary.get(key))
+                if implied != 0.0:
+                    return abs(implied)
+
+    return 0.0
+
+
+def _extract_gross_pnl(
+    position_summary: dict[str, Any],
+    latest_equity: dict[str, Any],
+    fees: float,
+) -> float:
+    return _first_present_num(
+        position_summary.get("gross_realized_pnl"),
+        position_summary.get("gross_pnl"),
+        latest_equity.get("gross_realized_pnl"),
+        latest_equity.get("realized_pnl"),
+        position_summary.get("realized_pnl"),
+        (
+            _num(position_summary.get("net_realized_pnl"), _num(position_summary.get("net_pnl"))) + fees
+            if position_summary.get("net_realized_pnl") is not None or position_summary.get("net_pnl") is not None
+            else None
+        ),
+    )
+
+
 def _service_block(payload: dict[str, Any] | None, error: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "ok": error is None,
@@ -72,7 +143,7 @@ def _map_equity_curve(performance_v2: dict[str, Any] | None) -> list[dict[str, A
             continue
         gross_realized = _num(row.get("gross_realized_pnl"), _num(row.get("realized_pnl")))
         fees_paid = _num(row.get("fees_paid_total"), _num(row.get("total_fees_paid")))
-        net_realized = _num(row.get("net_realized_pnl"), gross_realized - fees_paid)
+        net_realized = gross_realized - fees_paid
 
         mapped.append({
             "recorded_at": row.get("recorded_at"),
@@ -128,23 +199,19 @@ def _map_summary(performance_v2: dict[str, Any] | None) -> dict[str, Any] | None
     losses = int(_num(position_summary.get("losses")))
     total_trades = int(_num(position_summary.get("positions_closed"), _num(position_summary.get("positions_total"))))
 
-    fees = _num(
-        position_summary.get("fees_paid"),
-        _num(
-            cost_breakdown.get("fees_paid"),
-            _num(latest_equity.get("fees_paid_total"), _num(latest_equity.get("total_fees_paid"))),
-        ),
-    )
-    gross_pnl = _num(
-        position_summary.get("gross_realized_pnl"),
-        _num(
-            latest_equity.get("gross_realized_pnl"),
-            _num(latest_equity.get("realized_pnl"), _num(position_summary.get("net_realized_pnl")) + fees),
-        ),
-    )
+    # Hotfix 20d:
+    # The evaluator and dashboard payloads have used multiple fee field names
+    # across hotfixes. Strategy Analytics is already correct because it reads the
+    # position-performance items directly, but Performance Page summary can still
+    # miss fees when the alias is total_fees_paid / fees_paid_total / total_fees.
+    # Normalize here and always display net = gross - fees.
+    fees = _extract_fee_total(position_summary, cost_breakdown, latest_equity)
+    gross_pnl = _extract_gross_pnl(position_summary, latest_equity, fees)
 
-    # Source of truth for display: realized_pnl is gross trading PnL before fees.
-    # Therefore displayed net PnL must always be gross - fees.
+    # If the first pass did not find fees, try again now that gross_pnl is known.
+    if fees == 0.0:
+        fees = _extract_fee_total(position_summary, cost_breakdown, latest_equity, gross_pnl=gross_pnl)
+
     net_pnl = gross_pnl - fees
 
     return {

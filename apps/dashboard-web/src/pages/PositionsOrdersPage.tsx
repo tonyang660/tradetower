@@ -236,7 +236,7 @@ export default function PositionsOrdersPage() {
 
       <OpenPositionsPanel positions={model.openPositions} />
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(360px,1fr)]">
         <PositionEventsPanel lifecycles={positionsOrdersV2?.recent_position_lifecycles ?? []} />
         <WorkingOrdersPanel orders={model.workingOrders} />
       </div>
