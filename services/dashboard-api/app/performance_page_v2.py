@@ -6,7 +6,7 @@ from config import EVALUATOR_BASE_URL
 from http_client import get_json
 from time_utils import iso_now
 
-PERFORMANCE_PAGE_V2_VERSION = "hotfix20d_performance_page_fee_aliases_net_pnl"
+PERFORMANCE_PAGE_V2_VERSION = "hotfix20e_performance_summary_from_calendar_net"
 
 
 def _safe_get(source: str, path: str, params: dict[str, Any] | None = None, timeout: int = 30):
@@ -185,6 +185,66 @@ def _map_drawdown_curve(performance_v2: dict[str, Any] | None) -> list[dict[str,
     return mapped
 
 
+def _sum_calendar_net_pnl(performance_v2: dict[str, Any]) -> float | None:
+    analytics = _time_analytics(performance_v2)
+    days = analytics.get("calendar_days") or []
+    if not isinstance(days, list) or not days:
+        return None
+
+    total = 0.0
+    found = False
+    for day in days:
+        if not isinstance(day, dict):
+            continue
+        if day.get("pnl") is None:
+            continue
+        total += _num(day.get("pnl"))
+        found = True
+
+    return total if found else None
+
+
+def _sum_item_net_pnl(performance_v2: dict[str, Any]) -> float | None:
+    items = performance_v2.get("items") if isinstance(performance_v2, dict) else None
+    if not isinstance(items, list) or not items:
+        return None
+
+    total = 0.0
+    found = False
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("net_realized_pnl") is not None:
+            total += _num(item.get("net_realized_pnl"))
+            found = True
+        elif item.get("gross_realized_pnl") is not None:
+            total += _num(item.get("gross_realized_pnl")) - _num(item.get("fees_paid"))
+            found = True
+
+    return total if found else None
+
+
+def _canonical_net_pnl_for_summary(performance_v2: dict[str, Any], position_summary: dict[str, Any]) -> tuple[float, str]:
+    # The calendar/monthly panels are already correct because they are based on
+    # per-position net PnL after fees. Use the same net source for top summary
+    # cards so Gross/Net cannot drift from calendar totals.
+    calendar_net = _sum_calendar_net_pnl(performance_v2)
+    if calendar_net is not None:
+        return calendar_net, "calendar_days"
+
+    items_net = _sum_item_net_pnl(performance_v2)
+    if items_net is not None:
+        return items_net, "position_items"
+
+    if position_summary.get("net_realized_pnl") is not None:
+        return _num(position_summary.get("net_realized_pnl")), "position_summary.net_realized_pnl"
+
+    if position_summary.get("net_pnl") is not None:
+        return _num(position_summary.get("net_pnl")), "position_summary.net_pnl"
+
+    return 0.0, "missing"
+
+
 def _map_summary(performance_v2: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(performance_v2, dict):
         return None
@@ -199,28 +259,36 @@ def _map_summary(performance_v2: dict[str, Any] | None) -> dict[str, Any] | None
     losses = int(_num(position_summary.get("losses")))
     total_trades = int(_num(position_summary.get("positions_closed"), _num(position_summary.get("positions_total"))))
 
-    # Hotfix 20d:
-    # The evaluator and dashboard payloads have used multiple fee field names
-    # across hotfixes. Strategy Analytics is already correct because it reads the
-    # position-performance items directly, but Performance Page summary can still
-    # miss fees when the alias is total_fees_paid / fees_paid_total / total_fees.
-    # Normalize here and always display net = gross - fees.
+    # Hotfix 20e:
+    # Top Gross/Net cards must reconcile with the already-correct calendar and
+    # monthly panels. Some older evaluator summary payloads still contain stale
+    # gross/net fields, so do not use those as the primary source. Use the
+    # canonical net PnL from calendar days / position items, then derive gross:
+    #
+    #   gross_pnl = net_pnl + fees
+    #
+    # Example:
+    #   net -109.00 + fees 19.33 = gross -89.67
     fees = _extract_fee_total(position_summary, cost_breakdown, latest_equity)
-    gross_pnl = _extract_gross_pnl(position_summary, latest_equity, fees)
+    net_pnl, net_pnl_source = _canonical_net_pnl_for_summary(performance_v2, position_summary)
 
-    # If the first pass did not find fees, try again now that gross_pnl is known.
+    # If fee aliases were missing, infer fees from stale gross-vs-canonical-net.
     if fees == 0.0:
-        fees = _extract_fee_total(position_summary, cost_breakdown, latest_equity, gross_pnl=gross_pnl)
+        stale_gross = _extract_gross_pnl(position_summary, latest_equity, fees)
+        implied_fees = stale_gross - net_pnl
+        if implied_fees != 0.0:
+            fees = abs(implied_fees)
 
-    net_pnl = gross_pnl - fees
+    gross_pnl = net_pnl + fees
 
     return {
         "gross_pnl": gross_pnl,
         "net_pnl": net_pnl,
         "total_fees_paid": fees,
+        "net_pnl_source": net_pnl_source,
         "pnl_convention": {
             "gross_pnl": "gross realized trading PnL before fees",
-            "net_pnl": "gross_pnl minus total_fees_paid",
+            "net_pnl": "canonical net PnL after fees from calendar_days or position_items",
             "total_fees_paid": "actual execution fees deducted from net PnL",
         },
         "equity_change_pct": _num(equity_summary.get("equity_change_pct")),
