@@ -25,6 +25,7 @@ from symbol_config import (
     validate_symbol_via_api_gateway,
 )
 from time_utils import iso_now
+from account_manager import create_account, list_accounts, update_account
 
 from dashboard_aggregation_v2_routes import handle_dashboard_aggregation_v2_get
 from positions_orders_v2_routes import handle_positions_orders_v2_get
@@ -64,6 +65,17 @@ class Handler(BaseHTTPRequestHandler):
                 "error": "invalid_json",
                 "details": str(e),
             }, status=400)
+            return
+
+
+        if parsed.path == "/accounts/create":
+            result, status = create_account(payload)
+            self._send_json(result, status=status)
+            return
+
+        if parsed.path == "/accounts/update":
+            result, status = update_account(payload)
+            self._send_json(result, status=status)
             return
 
         if parsed.path == "/controls/trading/suspend":
@@ -188,6 +200,11 @@ class Handler(BaseHTTPRequestHandler):
         if handle_performance_page_v2_get(self, parsed): return
         if handle_strategy_analytics_page_v2_get(self, parsed): return
         if handle_system_configuration_page_v2_get(self, parsed): return
+
+
+        if parsed.path == "/accounts":
+            self._send_json(list_accounts())
+            return
 
         if parsed.path == "/market/banner":
             self._send_json(get_market_session_banner())

@@ -1,3 +1,4 @@
+import { useSelectedAccount } from "../lib/accountContext";
 import { useEffect, useState } from "react";
 import { RefreshCcw } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard";
@@ -13,6 +14,7 @@ import { fetchPerformancePageV2 } from "../lib/dashboardV2";
 import type { PerformancePageV2Response } from "../types/performanceV2";
 
 export default function PerformancePage() {
+  const { selectedAccountId } = useSelectedAccount();
   const [data, setData] = useState<PerformancePageV2Response | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -25,7 +27,7 @@ export default function PerformancePage() {
       if (showLoading) setLoading(true);
       if (showRefreshing) setRefreshing(true);
 
-      const payload = await fetchPerformancePageV2(1, 500, 10000);
+      const payload = await fetchPerformancePageV2(selectedAccountId, 500, 10000);
       setData(payload);
       setError(null);
       setLastUpdated(new Date());
@@ -39,13 +41,13 @@ export default function PerformancePage() {
 
   useEffect(() => {
     load(true, false);
-  }, []);
+  }, [selectedAccountId]);
 
   useEffect(() => {
     if (!autoRefresh) return;
     const id = window.setInterval(() => load(false, false), 30000);
     return () => window.clearInterval(id);
-  }, [autoRefresh]);
+  }, [autoRefresh, selectedAccountId]);
 
   if (loading) {
     return <div className="text-white/70">Loading performance...</div>;

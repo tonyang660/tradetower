@@ -1,3 +1,4 @@
+import { useSelectedAccount } from "../lib/accountContext";
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCcw, PauseCircle, PlayCircle, Zap, Clock3 } from "lucide-react";
 import { fetchBootstrapOverview, resumeTrading, suspendTrading, enableSchedulerAutoLoop, disableSchedulerAutoLoop } from "../lib/api";
@@ -69,6 +70,7 @@ function ActionButton({
 }
 
 export default function OverviewPage() {
+  const { selectedAccountId } = useSelectedAccount();
   const [data, setData] = useState<BootstrapOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -86,7 +88,7 @@ export default function OverviewPage() {
       if (showLoading) setLoading(true);
       if (showRefreshing) setRefreshing(true);
 
-      const payload = await fetchBootstrapOverview(1);
+      const payload = await fetchBootstrapOverview(selectedAccountId);
       setData(payload);
       setError(null);
       setLastUpdated(new Date());
@@ -106,7 +108,7 @@ export default function OverviewPage() {
   useEffect(() => {
     load(true, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [selectedAccountId]);
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -127,7 +129,7 @@ export default function OverviewPage() {
     }, 30000);
 
     return () => window.clearInterval(id);
-  }, [autoRefresh]);
+  }, [autoRefresh, selectedAccountId]);
 
   const summary = useMemo(() => {
     if (!data) return null;
@@ -180,7 +182,7 @@ export default function OverviewPage() {
   async function handleSuspend() {
     try {
       setActionBusy("suspend");
-      await suspendTrading(1);
+      await suspendTrading(selectedAccountId);
       await load(false, true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to suspend trading");
@@ -192,7 +194,7 @@ export default function OverviewPage() {
   async function handleResume() {
     try {
       setActionBusy("resume");
-      await resumeTrading(1);
+      await resumeTrading(selectedAccountId);
       await load(false, true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to resume trading");

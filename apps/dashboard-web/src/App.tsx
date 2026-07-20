@@ -7,6 +7,7 @@ import PerformancePage from "./pages/PerformancePage";
 import StrategyAnalyticsPage from "./pages/StrategyAnalyticsPage";
 import SystemHealthPage from "./pages/SystemHealthPage";
 import ConfigurationPage from "./pages/ConfigurationPage";
+import { AccountProvider } from "./lib/accountContext";
 
 function PlaceholderPage({ title }: { title: string }) {
   return (
@@ -19,8 +20,9 @@ function PlaceholderPage({ title }: { title: string }) {
 
 export default function App() {
   return (
-    <AppShell>
-      <Routes>
+    <AccountProvider>
+      <AppShell>
+        <Routes>
         <Route path="/" element={<OverviewPage />} />
         <Route path="/live-cycle-monitor" element={<LiveCycleMonitorPage />} />
         <Route path="/positions-orders" element={<PositionsOrdersPage />} />
@@ -29,7 +31,8 @@ export default function App() {
         <Route path="/backtest" element={<PlaceholderPage title="Backtest"/>} />
         <Route path="/system-health" element={<SystemHealthPage />} />
         <Route path="/configuration" element={<ConfigurationPage />} />
-      </Routes>
-    </AppShell>
+        </Routes>
+      </AppShell>
+    </AccountProvider>
   );
 }

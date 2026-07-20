@@ -156,3 +156,13 @@ export function setConfigurationAutoLoop(enabled: boolean) {
     enabled,
   });
 }
+
+export function fetchAccounts() {
+  return getJson<{
+    ok: boolean;
+    accounts: import("./accountContext").TradeTowerAccount[];
+    default_selected_account_id: number | null;
+  }>("/accounts");
+}
+export function createAccount(payload: Record<string, unknown>) { return postJson("/accounts/create", payload); }
+export function updateAccount(payload: Record<string, unknown>) { return postJson("/accounts/update", payload); }

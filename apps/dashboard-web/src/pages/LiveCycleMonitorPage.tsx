@@ -1,3 +1,4 @@
+import { useSelectedAccount } from "../lib/accountContext";
 import { useEffect, useState } from "react";
 import { RefreshCcw } from "lucide-react";
 import { fetchLiveCycleMonitor } from "../lib/api";
@@ -15,6 +16,7 @@ import type { DashboardV2LiveResponse } from "../types/dashboardLiveV2";
 import LiveCycleV2Panels from "../components/live-cycle-v2/LiveCycleV2Panels";
 
 export default function LiveCycleMonitorPage() {
+  const { selectedAccountId } = useSelectedAccount();
   const [data, setData] = useState<LiveCycleMonitorBootstrap | null>(null);
   const [dataV2, setDataV2] = useState<DashboardV2LiveResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -29,8 +31,8 @@ export default function LiveCycleMonitorPage() {
       if (showRefreshing) setRefreshing(true);
 
       const [payload, payloadV2] = await Promise.all([
-        fetchLiveCycleMonitor(1, 15),
-        fetchDashboardV2Live(1, 50).catch((err) => {
+        fetchLiveCycleMonitor(selectedAccountId, 15),
+        fetchDashboardV2Live(selectedAccountId, 50).catch((err) => {
           console.warn("Dashboard V2 live monitor failed", err);
           return null;
         }),
@@ -50,13 +52,13 @@ export default function LiveCycleMonitorPage() {
 
   useEffect(() => {
     load(true, false);
-  }, []);
+  }, [selectedAccountId]);
 
   useEffect(() => {
     if (!autoRefresh) return;
     const id = window.setInterval(() => load(false, false), 30000);
     return () => window.clearInterval(id);
-  }, [autoRefresh]);
+  }, [autoRefresh, selectedAccountId]);
 
   if (loading) {
     return <div className="text-white/70">Loading live cycle monitor...</div>;

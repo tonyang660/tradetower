@@ -3,6 +3,7 @@ from threading import Thread
 import json
 
 import state
+from accounts import enabled_account_ids, PHASE8_SCHEDULER_ACCOUNTS_VERSION
 from api_clients import fetch_pending_entry_orders
 from config import (
     ACCOUNT_ID,
@@ -40,6 +41,8 @@ class Handler(BaseHTTPRequestHandler):
                 fetch_pending_entry_orders(ACCOUNT_ID)
             )
 
+            enabled_ids, enabled_accounts_error = enabled_account_ids(ACCOUNT_ID)
+
             if pending_entries_error:
                 self._send_json({
                     "ok": False,
@@ -58,6 +61,9 @@ class Handler(BaseHTTPRequestHandler):
                 "service": SERVICE_NAME,
                 "timestamp": iso_now(),
                 "auto_loop_enabled": state.AUTO_LOOP_ENABLED_STATE,
+                "phase8_scheduler_accounts_version": PHASE8_SCHEDULER_ACCOUNTS_VERSION,
+                "enabled_account_ids": enabled_ids,
+                "enabled_accounts_error": enabled_accounts_error,
                 "auto_loop_default": AUTO_LOOP_DEFAULT,
                 "loop_interval_seconds": LOOP_INTERVAL_SECONDS,
                 "paper_execution_entry_path": PAPER_EXECUTION_ENTRY_PATH,
@@ -123,10 +129,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             state.AUTO_LOOP_ENABLED_STATE = enabled
+            enabled_ids, enabled_accounts_error = enabled_account_ids(ACCOUNT_ID)
 
             self._send_json({
                 "ok": True,
                 "auto_loop_enabled": state.AUTO_LOOP_ENABLED_STATE,
+                "phase8_scheduler_accounts_version": PHASE8_SCHEDULER_ACCOUNTS_VERSION,
+                "enabled_account_ids": enabled_ids,
+                "enabled_accounts_error": enabled_accounts_error,
                 "timestamp": iso_now(),
             })
             return

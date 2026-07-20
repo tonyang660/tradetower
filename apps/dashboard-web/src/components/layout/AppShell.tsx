@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { ShieldCheck } from "lucide-react";
 import Sidebar from "./Sidebar";
+import AccountManagerPanel from "../account/AccountManagerPanel";
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -43,9 +44,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   </span>
                 </div>
 
-                <div className="rounded-2xl border border-white/10 bg-white/6 px-4 py-2 text-sm text-white/55">
-                  Future logout / user menu
-                </div>
+                <AccountManagerPanel />
               </div>
             </header>
 
