@@ -166,3 +166,17 @@ export function fetchAccounts() {
 }
 export function createAccount(payload: Record<string, unknown>) { return postJson("/accounts/create", payload); }
 export function updateAccount(payload: Record<string, unknown>) { return postJson("/accounts/update", payload); }
+
+export function fetchGuardianAccountPolicy(accountId: number) {
+  return getJson<{
+    ok: boolean;
+    policy: any;
+  }>(`/accounts/guardian-policy?account_id=${accountId}`);
+}
+
+export function updateGuardianAccountPolicy(accountId: number, payload: Record<string, unknown>) {
+  return postJson("/accounts/guardian-policy/update", {
+    ...payload,
+    account_id: accountId,
+  });
+}

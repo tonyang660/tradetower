@@ -44,7 +44,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
                   </span>
                 </div>
 
-                <AccountManagerPanel />
+                <div className="ml-auto flex min-w-[50vw] max-w-[1180px] flex-1 justify-end">
+                  <AccountManagerPanel />
+                </div>
               </div>
             </header>
 
