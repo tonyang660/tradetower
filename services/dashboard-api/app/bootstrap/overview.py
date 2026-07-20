@@ -122,7 +122,7 @@ def get_bootstrap_overview(account_id: int):
 
     weekly_pnl = float(account_status.get("weekly_pnl", 0.0) or 0.0)
     weekly_pnl_pct = float(account_status.get("weekly_pnl_pct", 0.0) or 0.0)
-    weekly_pnl_loss_threshold_pct = 3.0
+    weekly_pnl_loss_threshold_pct = 5.0
     weekly_pnl_score_penalty = 10
     weekly_pnl_base_threshold = 75
     weekly_pnl_penalty_active = weekly_pnl_pct <= -weekly_pnl_loss_threshold_pct
