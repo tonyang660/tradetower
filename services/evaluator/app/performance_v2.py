@@ -5,7 +5,7 @@ from typing import Any
 
 from db import get_conn
 
-PERFORMANCE_V2_VERSION = "phase7_step7_performance_v2"
+PERFORMANCE_V2_VERSION = "phase7_step7_performance_v2_hotfix17_utc_time_buckets"
 
 
 PNL_CONVENTION = {
@@ -645,14 +645,22 @@ def build_equity_drawdown_v2(account_id: int, limit: int = 10000) -> dict[str, A
 def _parse_dt(value: Any):
     if value is None:
         return None
-    if hasattr(value, "hour") and hasattr(value, "date"):
-        return value
     try:
-        from datetime import datetime
-        text = str(value)
-        if text.endswith("Z"):
-            text = text[:-1] + "+00:00"
-        return datetime.fromisoformat(text)
+        from datetime import datetime, timezone
+        if hasattr(value, "hour") and hasattr(value, "date"):
+            dt = value
+        else:
+            text = str(value)
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            dt = datetime.fromisoformat(text)
+
+        if getattr(dt, "tzinfo", None) is None:
+            # Database timestamps are intended to be UTC. Treat naive values as UTC
+            # so time analytics never depend on container or browser locale.
+            return dt.replace(tzinfo=timezone.utc)
+
+        return dt.astimezone(timezone.utc)
     except Exception:
         return None
 
@@ -695,6 +703,7 @@ def build_directional_breakdown_v2(items: list[dict[str, Any]]) -> dict[str, Any
 
 
 def build_hourly_performance_v2(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # UTC buckets: closed_at is normalized by _parse_dt().
     buckets: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for item in _closed_v2_items(items):
         closed_at = _parse_dt(item.get("closed_at"))
@@ -759,6 +768,8 @@ def build_session_performance_v2(items: list[dict[str, Any]]) -> list[dict[str, 
 
 
 def build_calendar_performance_v2(items: list[dict[str, Any]], limit_days: int = 120) -> list[dict[str, Any]]:
+    # UTC calendar buckets. This keeps monthly summary, calendar cells,
+    # hourly performance, and session analytics aligned.
     buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in _closed_v2_items(items):
         closed_at = _parse_dt(item.get("closed_at"))

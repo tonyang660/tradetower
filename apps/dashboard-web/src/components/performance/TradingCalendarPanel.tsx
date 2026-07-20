@@ -15,36 +15,57 @@ type CalendarCell = {
   hasData: boolean;
 };
 
-function toIsoDate(date: Date) {
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, "0");
-  const day = `${date.getDate()}`.padStart(2, "0");
+function toUtcIsoDate(date: Date) {
+  const year = date.getUTCFullYear();
+  const month = `${date.getUTCMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getUTCDate()}`.padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
-function buildCurrentMonthCells(days: CalendarDayItem[]): CalendarCell[] {
+function utcDate(year: number, monthIndex: number, day: number) {
+  return new Date(Date.UTC(year, monthIndex, day));
+}
+
+function monthFromSummaryOrNow(monthlySummary?: MonthlySummary) {
+  const month = monthlySummary?.month;
+  if (month && /^\d{4}-\d{2}$/.test(month)) {
+    const [year, monthNumber] = month.split("-").map(Number);
+    return {
+      year,
+      monthIndex: monthNumber - 1,
+      monthKey: month,
+    };
+  }
+
   const now = new Date();
-  const currentYear = now.getFullYear();
-  const currentMonth = now.getMonth();
+  return {
+    year: now.getUTCFullYear(),
+    monthIndex: now.getUTCMonth(),
+    monthKey: `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`,
+  };
+}
 
-  const firstDay = new Date(currentYear, currentMonth, 1);
-  const lastDay = new Date(currentYear, currentMonth + 1, 0);
+function buildMonthCellsUtc(days: CalendarDayItem[], monthlySummary?: MonthlySummary): CalendarCell[] {
+  const now = new Date();
+  const { year: currentYear, monthIndex: currentMonth } = monthFromSummaryOrNow(monthlySummary);
 
-  const todayIso = toIsoDate(now);
+  const firstDay = utcDate(currentYear, currentMonth, 1);
+  const lastDay = utcDate(currentYear, currentMonth + 1, 0);
+
+  const todayIso = toUtcIsoDate(now);
   const dayMap = new Map(days.map((d) => [d.date, d]));
 
   const cells: CalendarCell[] = [];
 
-  // Monday-first calendar
-  const jsDay = firstDay.getDay(); // Sunday=0 ... Saturday=6
+  const jsDay = firstDay.getUTCDay();
   const mondayFirstOffset = jsDay === 0 ? 6 : jsDay - 1;
 
   for (let i = 0; i < mondayFirstOffset; i++) {
-    const blankDate = new Date(currentYear, currentMonth, 1 - (mondayFirstOffset - i));
+    const blankDate = utcDate(currentYear, currentMonth, 1 - (mondayFirstOffset - i));
     cells.push({
       date: blankDate,
-      isoDate: toIsoDate(blankDate),
-      dayNumber: blankDate.getDate(),
+      isoDate: toUtcIsoDate(blankDate),
+      dayNumber: blankDate.getUTCDate(),
       isCurrentMonth: false,
       isFuture: false,
       isToday: false,
@@ -55,9 +76,9 @@ function buildCurrentMonthCells(days: CalendarDayItem[]): CalendarCell[] {
     });
   }
 
-  for (let day = 1; day <= lastDay.getDate(); day++) {
-    const cellDate = new Date(currentYear, currentMonth, day);
-    const isoDate = toIsoDate(cellDate);
+  for (let day = 1; day <= lastDay.getUTCDate(); day++) {
+    const cellDate = utcDate(currentYear, currentMonth, day);
+    const isoDate = toUtcIsoDate(cellDate);
     const found = dayMap.get(isoDate);
 
     const isFuture = isoDate > todayIso;
@@ -78,12 +99,12 @@ function buildCurrentMonthCells(days: CalendarDayItem[]): CalendarCell[] {
   }
 
   while (cells.length % 7 !== 0) {
-    const nextIndex = cells.length - (mondayFirstOffset + lastDay.getDate()) + 1;
-    const trailingDate = new Date(currentYear, currentMonth + 1, nextIndex);
+    const nextIndex = cells.length - (mondayFirstOffset + lastDay.getUTCDate()) + 1;
+    const trailingDate = utcDate(currentYear, currentMonth + 1, nextIndex);
     cells.push({
       date: trailingDate,
-      isoDate: toIsoDate(trailingDate),
-      dayNumber: trailingDate.getDate(),
+      isoDate: toUtcIsoDate(trailingDate),
+      dayNumber: trailingDate.getUTCDate(),
       isCurrentMonth: false,
       isFuture: true,
       isToday: false,
@@ -132,17 +153,15 @@ export default function TradingCalendarPanel({
   days: CalendarDayItem[];
   monthlySummary: MonthlySummary;
 }) {
-  const cells = buildCurrentMonthCells(days);
-  const now = new Date();
-  const headerMonth = monthLabel(
-    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
-  );
+  const cells = buildMonthCellsUtc(days, monthlySummary);
+  const { monthKey } = monthFromSummaryOrNow(monthlySummary);
+  const headerMonth = monthLabel(monthKey);
 
   return (
     <ChartCard
       title="Trading Calendar"
-      subtitle="Day-by-day realized performance rhythm"
-      right={headerMonth}
+      subtitle="Day-by-day realized performance grouped by UTC close date"
+      right={`${headerMonth} · UTC`}
     >
       <div className="grid gap-4 xl:grid-cols-[1.6fr_0.8fr]">
         <div>
@@ -164,19 +183,19 @@ export default function TradingCalendarPanel({
                 className={`min-h-[88px] rounded-[18px] border p-2.5 transition ${cellTone(cell)} ${todayRing(cell)}`}
               >
                 <div className="flex items-start justify-between">
-                  <div 
+                  <div
                     className={`text-sm font-medium ${
-                      !cell.isToday && !cell.isFuture 
-                        ? "text-white/30" // Dimmed color for past days
-                        : "text-white"    // Bright color for today and future
+                      !cell.isToday && !cell.isFuture
+                        ? "text-white/30"
+                        : "text-white"
                     }`}
                   >
                     {cell.dayNumber}
                   </div>
-                  
+
                   {cell.isToday ? (
                     <div className="rounded-full border border-violet-300/18 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-200">
-                      Today
+                      Today UTC
                     </div>
                   ) : null}
                 </div>
@@ -227,6 +246,9 @@ export default function TradingCalendarPanel({
             <div className="mt-2 flex justify-between"><span>Flat days</span><span className="text-white">{monthlySummary?.flat_days ?? 0}</span></div>
             <div className="mt-3 border-t border-white/8 pt-3 flex justify-between"><span>Best day</span><span className="text-emerald-300">{money(monthlySummary?.best_day)}</span></div>
             <div className="mt-2 flex justify-between"><span>Worst day</span><span className="text-rose-300">{money(monthlySummary?.worst_day)}</span></div>
+            <div className="mt-3 border-t border-white/8 pt-3 text-xs leading-relaxed text-white/35">
+              Days are bucketed by UTC close date, matching hourly/session analytics.
+            </div>
           </div>
         </div>
       </div>

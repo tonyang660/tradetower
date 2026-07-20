@@ -236,9 +236,10 @@ export default function PositionsOrdersPage() {
 
       <OpenPositionsPanel positions={model.openPositions} />
 
-      <PositionEventsPanel lifecycles={positionsOrdersV2?.recent_position_lifecycles ?? []} />
-
-      <WorkingOrdersPanel orders={model.workingOrders} />
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
+        <PositionEventsPanel lifecycles={positionsOrdersV2?.recent_position_lifecycles ?? []} />
+        <WorkingOrdersPanel orders={model.workingOrders} />
+      </div>
 
       <ExecutedOrdersPanel items={model.executedOrders} />
 

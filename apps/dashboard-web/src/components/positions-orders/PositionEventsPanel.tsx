@@ -74,8 +74,6 @@ function getEvents(item: PositionLifecycleLike): Record<string, any>[] {
   const direct = item.events ?? item.items;
   if (Array.isArray(direct)) return direct;
 
-  // Evaluator lifecycle payloads are shaped like:
-  // { position_events, executions, position_management_events, timeline }
   if (Array.isArray(item.position_events) && item.position_events.length > 0) {
     return item.position_events;
   }
@@ -187,10 +185,10 @@ export default function PositionEventsPanel({ lifecycles }: Props) {
 
   const events = flattened
     .sort((a, b) => String(eventTime(b) ?? "").localeCompare(String(eventTime(a) ?? "")))
-    .slice(0, 40);
+    .slice(0, 80);
 
   return (
-    <GlassCard>
+    <GlassCard className="h-full">
       <SectionTitle
         title="Position Events"
         subtitle="Lifecycle audit trail for fills, stop reprices, and protective-order changes"
@@ -201,7 +199,7 @@ export default function PositionEventsPanel({ lifecycles }: Props) {
           No position events available yet.
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="max-h-[560px] space-y-2 overflow-y-auto pr-2">
           {events.map((event, idx) => {
             const price = eventPrice(event);
             const details = compactDetails(event);
@@ -210,31 +208,33 @@ export default function PositionEventsPanel({ lifecycles }: Props) {
             return (
               <div
                 key={key}
-                className="rounded-2xl border border-white/10 bg-white/6 p-4"
+                className="rounded-2xl border border-white/10 bg-white/6 p-3"
               >
-                <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                <div className="flex flex-col gap-2 2xl:flex-row 2xl:items-start 2xl:justify-between">
                   <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-semibold text-white">{event._symbol}</span>
-                      <span className="rounded-full border border-white/10 bg-white/8 px-2 py-1 text-xs text-white/60">
-                        Position {event._position_id}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-sm font-semibold text-white">{event._symbol}</span>
+                      <span className="rounded-full border border-white/10 bg-white/8 px-2 py-0.5 text-[10px] text-white/60">
+                        Pos {event._position_id}
                       </span>
                       {event.source ? (
-                        <span className="rounded-full border border-white/10 bg-white/8 px-2 py-1 text-xs text-white/45">
+                        <span className="rounded-full border border-white/10 bg-white/8 px-2 py-0.5 text-[10px] text-white/45">
                           {event.source}
                         </span>
                       ) : null}
-                      <span className="rounded-full border border-cyan-300/15 bg-cyan-400/10 px-2 py-1 text-xs text-cyan-100">
+                      <span className="rounded-full border border-cyan-300/15 bg-cyan-400/10 px-2 py-0.5 text-[10px] text-cyan-100">
                         {eventType(event)}
                       </span>
                     </div>
 
                     {details ? (
-                      <div className="mt-2 text-sm text-white/55">{details}</div>
+                      <div className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-white/55">
+                        {details}
+                      </div>
                     ) : null}
                   </div>
 
-                  <div className="text-right text-sm">
+                  <div className="shrink-0 text-left text-xs 2xl:text-right">
                     {price !== null ? (
                       <div className="text-white/85">Price {price.toFixed(6)}</div>
                     ) : null}
