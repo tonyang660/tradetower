@@ -18,7 +18,7 @@ from state import LAST_PENDING_ENTRY_LOOP_RESULT
 from time_utils import iso_now
 
 
-def _loop_failure(error: str):
+def _loop_failure(error: str, account_id: int | None = None):
     result = {
         "ok": False,
         "processed": 0,
@@ -27,26 +27,28 @@ def _loop_failure(error: str):
         "cancelled": 0,
         "blocked": 0,
         "errors": 1,
-        "results": [{"error": error}],
+        "results": [{"error": error, "account_id": account_id}],
         "timestamp": iso_now(),
     }
     LAST_PENDING_ENTRY_LOOP_RESULT.update(result)
     return result
 
 
-def _cancel_entry(order_id: int):
+def _cancel_entry(order_id: int, account_id: int = ACCOUNT_ID):
     return cancel_pending_entry_order(
-        account_id=ACCOUNT_ID,
+        account_id=account_id,
         order_id=order_id,
     )
 
 
-def process_pending_entries_once():
+def process_pending_entries_once(account_id: int | None = None):
+    account_id = int(account_id or ACCOUNT_ID)
+
     guardian_status, guardian_status_error = fetch_trade_guardian_status(
-        ACCOUNT_ID
+        account_id
     )
     if guardian_status_error:
-        return _loop_failure(guardian_status_error)
+        return _loop_failure(guardian_status_error, account_id)
 
     execution_mode = guardian_status["execution_mode"]
 
@@ -67,14 +69,14 @@ def process_pending_entries_once():
         return result
 
     pending_orders, pending_orders_error = fetch_pending_entry_orders(
-        ACCOUNT_ID
+        account_id
     )
     if pending_orders_error:
-        return _loop_failure(pending_orders_error)
+        return _loop_failure(pending_orders_error, account_id)
 
-    open_positions, positions_error = fetch_open_positions(ACCOUNT_ID)
+    open_positions, positions_error = fetch_open_positions(account_id)
     if positions_error:
-        return _loop_failure(positions_error)
+        return _loop_failure(positions_error, account_id)
 
     current_open_symbols = {p["symbol"] for p in open_positions}
 
@@ -128,7 +130,7 @@ def process_pending_entries_once():
         pending_payload["originating_cycle_id"] = originating_cycle_id
 
         if symbol in current_open_symbols:
-            cancel_result, cancel_error = _cancel_entry(order_id)
+            cancel_result, cancel_error = _cancel_entry(order_id, account_id)
             if cancel_error:
                 errors_count += 1
                 results.append({
@@ -141,7 +143,7 @@ def process_pending_entries_once():
                 continue
 
             ingest_pending_loop_event_to_evaluator({
-                "account_id": ACCOUNT_ID,
+                "account_id": account_id,
                 "cycle_id": originating_cycle_id,
                 "symbol": symbol,
                 "event_type": "ENTRY_FILLED",
@@ -165,7 +167,7 @@ def process_pending_entries_once():
             continue
 
         retry_gate, retry_gate_error = check_entry_gate_for_symbol(
-            ACCOUNT_ID,
+            account_id,
             symbol,
             ignore_pending_order=True,
         )
@@ -184,7 +186,7 @@ def process_pending_entries_once():
             reason_codes = retry_gate.get("reason_codes", [])
 
             if "MAX_CONCURRENT_POSITIONS_REACHED" in reason_codes:
-                cancel_result, cancel_error = _cancel_entry(order_id)
+                cancel_result, cancel_error = _cancel_entry(order_id, account_id)
                 if cancel_error:
                     errors_count += 1
                     results.append({
@@ -198,7 +200,7 @@ def process_pending_entries_once():
 
                 cancelled += 1
                 ingest_pending_loop_event_to_evaluator({
-                    "account_id": ACCOUNT_ID,
+                    "account_id": account_id,
                     "cycle_id": originating_cycle_id,
                     "symbol": symbol,
                     "event_type": "ENTRY_CANCELLED",
@@ -223,7 +225,7 @@ def process_pending_entries_once():
 
             blocked += 1
             ingest_pending_loop_event_to_evaluator({
-                "account_id": ACCOUNT_ID,
+                "account_id": account_id,
                 "cycle_id": originating_cycle_id,
                 "symbol": symbol,
                 "event_type": "ENTRY_BLOCKED",
@@ -257,7 +259,7 @@ def process_pending_entries_once():
             continue
 
         repriced_risk_payload = build_repriced_risk_payload(
-            ACCOUNT_ID,
+            account_id,
             pending_payload,
             latest_price,
         )
@@ -275,7 +277,7 @@ def process_pending_entries_once():
             continue
 
         if not risk_result.get("approved", False):
-            cancel_result, cancel_error = _cancel_entry(order_id)
+            cancel_result, cancel_error = _cancel_entry(order_id, account_id)
             if cancel_error:
                 errors_count += 1
                 results.append({
@@ -289,7 +291,7 @@ def process_pending_entries_once():
 
             cancelled += 1
             ingest_pending_loop_event_to_evaluator({
-                "account_id": ACCOUNT_ID,
+                "account_id": account_id,
                 "cycle_id": originating_cycle_id,
                 "symbol": symbol,
                 "event_type": "ENTRY_CANCELLED",
@@ -315,7 +317,7 @@ def process_pending_entries_once():
         new_attempt_number = attempt_number + 1
 
         paper_payload = build_repriced_paper_payload(
-            ACCOUNT_ID,
+            account_id,
             pending_payload,
             risk_result,
             latest_price,
@@ -353,7 +355,7 @@ def process_pending_entries_once():
             cancelled += 1
 
         ingest_pending_loop_event_to_evaluator({
-            "account_id": ACCOUNT_ID,
+            "account_id": account_id,
             "cycle_id": originating_cycle_id,
             "symbol": symbol,
             "event_type": action,
@@ -376,6 +378,7 @@ def process_pending_entries_once():
 
     result = {
         "ok": True,
+        "account_id": account_id,
         "processed": len(results),
         "fills": fills,
         "pending": pending_count,

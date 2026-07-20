@@ -35,13 +35,15 @@ from time_utils import iso_now
 
 from position_management_cycle import run_position_management_for_open_positions
 
-def run_one_cycle():
+def run_one_cycle(account_id: int | None = None):
+    account_id = int(account_id or ACCOUNT_ID)
     started_at = iso_now()
     cycle_id = started_at
 
     summary = {
         "ok": True,
         "cycle_id": cycle_id,
+        "account_id": account_id,
         "started_at": started_at,
         "completed_at": None,
         "symbol_universe": None,
@@ -103,7 +105,7 @@ def run_one_cycle():
     }
 
     try:
-        guardian_status, guardian_status_error = fetch_trade_guardian_status(ACCOUNT_ID)
+        guardian_status, guardian_status_error = fetch_trade_guardian_status(account_id)
         if guardian_status_error:
             summary["ok"] = False
             summary["errors"].append(guardian_status_error)
@@ -125,7 +127,7 @@ def run_one_cycle():
             return summary
 
         pending_entries, pending_entries_error = fetch_pending_entry_orders(
-            ACCOUNT_ID
+            account_id
         )
         if pending_entries_error:
             summary["ok"] = False
@@ -145,7 +147,7 @@ def run_one_cycle():
                 refreshed_ok_symbols.add(item["symbol"])
         summary["refreshed_symbols_count"] = len(refreshed_ok_symbols)
 
-        open_positions, positions_error = fetch_open_positions(ACCOUNT_ID)
+        open_positions, positions_error = fetch_open_positions(account_id)
         if positions_error:
             summary["errors"].append(positions_error)
             open_positions = []
@@ -156,7 +158,7 @@ def run_one_cycle():
         current_open_symbols = [p["symbol"] for p in open_positions]
 
         position_management_summary = run_position_management_for_open_positions(
-            account_id=ACCOUNT_ID,
+            account_id=account_id,
             open_positions=open_positions,
             dry_run=False,
         )
@@ -164,7 +166,7 @@ def run_one_cycle():
         if position_management_summary.get("errors", 0) > 0:
             summary["errors"].append("position_management_errors_detected")
 
-        entry_gate, entry_error = check_entry_gate(ACCOUNT_ID)
+        entry_gate, entry_error = check_entry_gate(account_id)
         if entry_error:
             summary["errors"].append(entry_error)
             summary["entry_gate"] = {
@@ -194,7 +196,7 @@ def run_one_cycle():
         summary["entry_eligible_symbols"] = sorted(entry_eligible_symbols)
 
         candidate_filter_payload, candidate_error = run_candidate_filter(
-            ACCOUNT_ID,
+            account_id,
             summary["entry_eligible_symbols"],
         )
         if candidate_error:
@@ -247,7 +249,7 @@ def run_one_cycle():
 
         for strategy_payload in trade_candidates:
             risk_payload = build_risk_payload_from_strategy(
-                ACCOUNT_ID,
+                account_id,
                 strategy_payload,
             )
             risk_result, risk_error = run_risk_engine(risk_payload)
@@ -296,7 +298,7 @@ def run_one_cycle():
             symbol = risk_result["symbol"]
 
             final_gate, final_gate_error = check_entry_gate_for_symbol(
-                ACCOUNT_ID,
+                account_id,
                 symbol,
             )
             if final_gate_error:
@@ -328,7 +330,7 @@ def run_one_cycle():
                 continue
 
             execution_payload = build_paper_execution_payload(
-                account_id=ACCOUNT_ID,
+                account_id=account_id,
                 cycle_id=cycle_id,
                 strategy_result=strategy_payload,
                 risk_result=risk_result,
@@ -359,7 +361,7 @@ def run_one_cycle():
                 summary["paper_execution"]["pending_retries"] += 1
 
         pending_entries_after, pending_entries_after_error = (
-            fetch_pending_entry_orders(ACCOUNT_ID)
+            fetch_pending_entry_orders(account_id)
         )
         if pending_entries_after_error:
             summary["errors"].append(pending_entries_after_error)
@@ -369,11 +371,11 @@ def run_one_cycle():
             )
 
         if MARK_TO_MARKET_BEFORE_EVALUATOR_INGEST:
-            _, mtm_error = run_mark_to_market_refresh(ACCOUNT_ID)
+            _, mtm_error = run_mark_to_market_refresh(account_id)
             if mtm_error:
                 summary["errors"].append(mtm_error)
 
-        latest_status, latest_status_error = fetch_trade_guardian_status(ACCOUNT_ID)
+        latest_status, latest_status_error = fetch_trade_guardian_status(account_id)
         if latest_status_error:
             summary["errors"].append(latest_status_error)
         else:

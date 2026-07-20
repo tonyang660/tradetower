@@ -3,6 +3,7 @@ from threading import Thread
 import json
 
 import state
+from accounts import enabled_account_ids, all_account_ids, PHASE8_SCHEDULER_ACCOUNTS_VERSION
 from accounts import enabled_account_ids, PHASE8_SCHEDULER_ACCOUNTS_VERSION
 from api_clients import fetch_pending_entry_orders
 from config import (
@@ -143,7 +144,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path == "/cycle/run-once":
             try:
-                result = run_one_cycle()
+                result = run_one_cycle(account_id=int(payload.get('account_id', ACCOUNT_ID)))
                 self._send_json(result, status=200 if result.get("ok") else 500)
                 return
             except Exception as e:

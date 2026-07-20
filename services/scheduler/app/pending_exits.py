@@ -8,18 +8,37 @@ from config import ACCOUNT_ID, EXIT_RETRY_MAX_ATTEMPTS
 from state import LAST_PENDING_EXIT_LOOP_RESULT, PENDING_EXIT_ORDERS
 from time_utils import iso_now
 
+def _split_pending_exit_key(raw_key, state):
+    text = str(raw_key)
+    if ':' in text:
+        prefix, symbol = text.split(':', 1)
+        try:
+            return int(prefix), symbol.upper()
+        except Exception:
+            pass
+    return int(state.get('account_id', ACCOUNT_ID)), str(state.get('symbol', text)).upper()
 
-def process_pending_exits_once():
+
+def _pending_exit_key(account_id: int, symbol: str) -> str:
+    return f"{int(account_id)}:{str(symbol).upper()}"
+
+def process_pending_exits_once(account_id: int | None = None):
+    account_id = int(account_id or ACCOUNT_ID)
     results = []
     filled = 0
     pending = 0
     forced_market = 0
     errors_count = 0
 
-    for symbol in list(PENDING_EXIT_ORDERS.keys()):
-        state = PENDING_EXIT_ORDERS.get(symbol)
+    for raw_key in list(PENDING_EXIT_ORDERS.keys()):
+        state = PENDING_EXIT_ORDERS.get(raw_key)
         if not state:
             continue
+
+        state_account_id, symbol = _split_pending_exit_key(raw_key, state)
+        if int(state_account_id) != int(account_id):
+            continue
+        pending_key = _pending_exit_key(account_id, symbol)
 
         attempt_number = int(state.get("attempt_number", 1))
         order_id = int(state["order_id"])
@@ -35,7 +54,7 @@ def process_pending_exits_once():
             })
             continue
 
-        open_positions, positions_error = fetch_open_positions(ACCOUNT_ID)
+        open_positions, positions_error = fetch_open_positions(account_id)
         if positions_error:
             errors_count += 1
             results.append({
@@ -48,7 +67,7 @@ def process_pending_exits_once():
 
         matching_position = next((p for p in open_positions if p["symbol"] == symbol), None)
         if not matching_position:
-            PENDING_EXIT_ORDERS.pop(symbol, None)
+            PENDING_EXIT_ORDERS.pop(raw_key, None)
             results.append({
                 "symbol": symbol,
                 "ok": True,
@@ -59,8 +78,8 @@ def process_pending_exits_once():
         trigger_seen_count = int(state.get("trigger_seen_count", 1))
 
         if trigger_seen_count < 2:
-            PENDING_EXIT_ORDERS[symbol]["trigger_seen_count"] = trigger_seen_count + 1
-            PENDING_EXIT_ORDERS[symbol]["updated_at"] = iso_now()
+            PENDING_EXIT_ORDERS[pending_key]["trigger_seen_count"] = trigger_seen_count + 1
+            PENDING_EXIT_ORDERS[pending_key]["updated_at"] = iso_now()
             pending += 1
             results.append({
                 "symbol": symbol,
@@ -94,7 +113,7 @@ def process_pending_exits_once():
             continue
 
         reprice_result, reprice_error = reprice_protective_order(
-            ACCOUNT_ID,
+            account_id,
             order_id,
             new_limit_price,
         )
@@ -113,7 +132,7 @@ def process_pending_exits_once():
             forced_market += 1
 
         maintenance_result, maintenance_error = run_maintenance(
-            ACCOUNT_ID,
+            account_id,
             symbol,
             force_market_stop_loss=use_force_market,
         )
@@ -141,12 +160,12 @@ def process_pending_exits_once():
         action = str(maintenance_result.get("action", "")).upper()
 
         if action == "STOP_LOSS_PENDING":
-            PENDING_EXIT_ORDERS[symbol]["attempt_number"] = attempt_number + 1
-            PENDING_EXIT_ORDERS[symbol]["updated_at"] = iso_now()
-            PENDING_EXIT_ORDERS[symbol]["requested_price"] = float(new_limit_price)
+            PENDING_EXIT_ORDERS[pending_key]["attempt_number"] = attempt_number + 1
+            PENDING_EXIT_ORDERS[pending_key]["updated_at"] = iso_now()
+            PENDING_EXIT_ORDERS[pending_key]["requested_price"] = float(new_limit_price)
             pending += 1
         else:
-            PENDING_EXIT_ORDERS.pop(symbol, None)
+            PENDING_EXIT_ORDERS.pop(raw_key, None)
 
         if action in ("STOP_LOSS_TRIGGERED", "STOP_LOSS_APPLIED_POSITION_CLOSED"):
             filled += 1
@@ -163,6 +182,7 @@ def process_pending_exits_once():
 
     result = {
         "ok": True,
+        "account_id": account_id,
         "timestamp": iso_now(),
         "processed": len(results),
         "filled": filled,

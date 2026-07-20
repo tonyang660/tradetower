@@ -4,7 +4,12 @@ from state import LAST_MAINTENANCE_LOOP_RESULT, PENDING_EXIT_ORDERS
 from time_utils import iso_now
 
 
-def process_open_position_maintenance_once():
+def _pending_exit_key(account_id: int, symbol: str) -> str:
+    return f"{int(account_id)}:{str(symbol).upper()}"
+
+
+def process_open_position_maintenance_once(account_id: int | None = None):
+    account_id = int(account_id or ACCOUNT_ID)
     results = []
     checked = 0
     actions_triggered = 0
@@ -12,7 +17,7 @@ def process_open_position_maintenance_once():
     blocked = 0
     errors_count = 0
 
-    open_positions, positions_error = fetch_open_positions(ACCOUNT_ID)
+    open_positions, positions_error = fetch_open_positions(account_id)
     if positions_error:
         result = {
             "ok": False,
@@ -36,7 +41,7 @@ def process_open_position_maintenance_once():
         symbol = pos["symbol"]
         checked += 1
 
-        guard_result, guard_error = check_maintenance(ACCOUNT_ID, symbol)
+        guard_result, guard_error = check_maintenance(account_id, symbol)
         if guard_error:
             errors_count += 1
             results.append({
@@ -57,7 +62,7 @@ def process_open_position_maintenance_once():
             })
             continue
 
-        maintenance_result, maintenance_error = run_maintenance(ACCOUNT_ID, symbol)
+        maintenance_result, maintenance_error = run_maintenance(account_id, symbol)
         if maintenance_error:
             errors_count += 1
             results.append({
@@ -84,10 +89,13 @@ def process_open_position_maintenance_once():
         if action == "STOP_LOSS_PENDING":
             order_id = maintenance_result.get("order_id")
             if order_id is not None:
-                existing_state = PENDING_EXIT_ORDERS.get(symbol)
+                pending_key = _pending_exit_key(account_id, symbol)
+                existing_state = PENDING_EXIT_ORDERS.get(pending_key)
 
                 if existing_state is None:
-                    PENDING_EXIT_ORDERS[symbol] = {
+                    PENDING_EXIT_ORDERS[pending_key] = {
+                        "account_id": account_id,
+                        "symbol": symbol,
                         "order_id": int(order_id),
                         "attempt_number": 1,
                         "updated_at": iso_now(),
@@ -103,8 +111,10 @@ def process_open_position_maintenance_once():
                         "trigger_seen_count": 1,
                     }
                 else:
-                    PENDING_EXIT_ORDERS[symbol] = {
+                    PENDING_EXIT_ORDERS[pending_key] = {
                         **existing_state,
+                        "account_id": account_id,
+                        "symbol": symbol,
                         "order_id": int(order_id),
                         "updated_at": iso_now(),
                         "requested_price": float(
@@ -137,6 +147,7 @@ def process_open_position_maintenance_once():
     result = {
         "ok": True,
         "timestamp": iso_now(),
+        "account_id": account_id,
         "checked": checked,
         "actions_triggered": actions_triggered,
         "no_action": no_action,
