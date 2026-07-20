@@ -34,6 +34,28 @@ TP2_CLOSE_PERCENT_DEFAULT = float(os.getenv("TP2_CLOSE_PERCENT", "30"))
 TP3_CLOSE_PERCENT_DEFAULT = float(os.getenv("TP3_CLOSE_PERCENT", "20"))
 
 
+
+def derive_entry_atr_from_entry_payload(payload: dict, entry_price: float, stop_loss: float) -> float | None:
+    for key in ("entry_atr", "atr_at_entry", "opening_atr", "initial_atr"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        try:
+            value = float(value)
+            if value > 0:
+                return value
+        except Exception:
+            pass
+
+    try:
+        risk_per_unit = abs(float(entry_price) - float(stop_loss))
+        if risk_per_unit > 0:
+            return round(risk_per_unit / 2.5, 8)
+    except Exception:
+        pass
+
+    return None
+
 def get_tp_close_percent(payload: dict, key: str, default: float) -> float:
     try:
         value = payload.get(f"{key}_close_percent")
@@ -87,6 +109,7 @@ def apply_execution_report(payload: dict):
         tp3_close_percent = get_tp_close_percent(payload, "tp3", TP3_CLOSE_PERCENT_DEFAULT)
         risk_amount = float(payload["risk_amount"])
         leverage = float(payload.get("leverage", 1.0))
+        entry_atr = derive_entry_atr_from_entry_payload(payload, fill_price, stop_loss)
 
         try:
             with get_conn() as conn:
@@ -128,6 +151,7 @@ def apply_execution_report(payload: dict):
                         tp2_price=tp2_price,
                         tp3_price=tp3_price,
                         risk_amount=risk_amount,
+                        entry_atr=entry_atr,
                     )
 
                     protective_orders = create_protective_orders_for_position_tx(
@@ -174,6 +198,7 @@ def apply_execution_report(payload: dict):
                             "fee_paid": fee_paid,
                             "risk_amount": risk_amount,
                             "leverage": leverage,
+                            "entry_atr": entry_atr,
                             "stop_loss": stop_loss,
                             "tp1_price": tp1_price,
                             "tp2_price": tp2_price,

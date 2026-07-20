@@ -3,6 +3,7 @@ import requests
 from config import (
     API_GATEWAY_BASE_URL,
     DATA_HUB_BASE_URL,
+    FEATURE_FACTORY_BASE_URL,
     TRADE_GUARDIAN_BASE_URL,
     CANDIDATE_FILTER_BASE_URL,
     STRATEGY_ENGINE_BASE_URL,
@@ -67,6 +68,24 @@ def fetch_latest_price(symbol: str):
         return None, "latest_price_missing"
 
     return float(price), None
+
+
+
+def fetch_market_snapshot(symbol: str):
+    try:
+        r = requests.get(
+            f"{FEATURE_FACTORY_BASE_URL}/snapshot",
+            params={"symbol": symbol},
+            timeout=20,
+        )
+        payload = r.json()
+    except Exception as e:
+        return None, f"feature_factory_snapshot_failed: {str(e)}"
+
+    if not payload.get("ok", False):
+        return None, payload.get("error", "feature_factory_snapshot_failed")
+
+    return payload, None
 
 
 def fetch_market_instrument(symbol: str):

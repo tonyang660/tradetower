@@ -115,6 +115,7 @@ def build_entry_execution_report_v2(
         "tp3_close_percent": get_tp_close_percent(payload, "tp3", 20),
         "risk_amount": safe_float(payload["risk_amount"]),
         "leverage": safe_float(payload.get("leverage", 1.0)),
+        "entry_atr": safe_float(payload.get("entry_atr")),
         "notes": notes,
 
         "fill_source": fill_source,
@@ -131,6 +132,7 @@ def build_entry_execution_report_v2(
             "regime": payload.get("regime"),
             "strategy_confidence": payload.get("strategy_confidence"),
             "risk_context": payload.get("risk_context", {}),
+            "entry_atr": safe_float(payload.get("entry_atr")),
         },
     }
 

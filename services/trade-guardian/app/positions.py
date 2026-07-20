@@ -25,7 +25,8 @@ def get_open_position(account_id: int, symbol: str):
         tp3_hit,
         opened_at,
         closed_at,
-        status
+        status,
+        entry_atr
     FROM positions
     WHERE account_id = %s
       AND symbol = %s
@@ -65,8 +66,8 @@ def get_open_position(account_id: int, symbol: str):
         "opened_at": row[19],
         "closed_at": row[20],
         "status": row[21],
+        "entry_atr": float(row[22]) if row[22] is not None else None,
     }
-
 
 def fetch_open_position_for_api(account_id: int, symbol: str):
     position = get_open_position(account_id, symbol)
@@ -103,6 +104,7 @@ def fetch_all_open_positions(account_id: int):
         p.tp3_hit,
         p.opened_at,
         p.status,
+        p.entry_atr,
         COALESCE((
             SELECT SUM(
                 CASE
@@ -161,8 +163,9 @@ def fetch_all_open_positions(account_id: int):
             "tp3_hit": row[15],
             "opened_at": row[16].isoformat().replace("+00:00", "Z") if row[16] else None,
             "status": row[17],
-            "fees_paid": float(row[18]) if row[18] is not None else 0.0,
-            "realized_pnl_closed": float(row[19]) if row[19] is not None else 0.0,
+            "entry_atr": float(row[18]) if row[18] is not None else None,
+            "fees_paid": float(row[19]) if row[19] is not None else 0.0,
+            "realized_pnl_closed": float(row[20]) if row[20] is not None else 0.0,
         })
 
     return results
@@ -170,7 +173,7 @@ def fetch_all_open_positions(account_id: int):
 
 def create_open_position(account_id: int, symbol: str, position_side: str, size: float, entry_price: float,
                          leverage: float, stop_loss: float, tp1_price: float, tp2_price: float,
-                         tp3_price: float, risk_amount: float):
+                         tp3_price: float, risk_amount: float, entry_atr: float | None = None):
     margin_used = size * entry_price / leverage if leverage != 0 else size * entry_price
 
     query = """
@@ -190,13 +193,14 @@ def create_open_position(account_id: int, symbol: str, position_side: str, size:
         tp1_price,
         tp2_price,
         tp3_price,
+        entry_atr,
         tp1_hit,
         tp2_hit,
         tp3_hit,
         opened_at,
         status
     )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, FALSE, FALSE, NOW(), 'open')
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, FALSE, FALSE, NOW(), 'open')
     RETURNING position_id
     """
 
@@ -220,6 +224,7 @@ def create_open_position(account_id: int, symbol: str, position_side: str, size:
                     tp1_price,
                     tp2_price,
                     tp3_price,
+                    entry_atr,
                 ),
             )
             position_id = cur.fetchone()[0]
@@ -227,10 +232,9 @@ def create_open_position(account_id: int, symbol: str, position_side: str, size:
 
     return position_id
 
-
 def create_open_position_tx(cur, account_id: int, symbol: str, position_side: str, size: float, entry_price: float,
                             leverage: float, stop_loss: float, tp1_price: float, tp2_price: float,
-                            tp3_price: float, risk_amount: float):
+                            tp3_price: float, risk_amount: float, entry_atr: float | None = None):
     margin_used = size * entry_price / leverage if leverage != 0 else size * entry_price
 
     cur.execute(
@@ -251,13 +255,14 @@ def create_open_position_tx(cur, account_id: int, symbol: str, position_side: st
             tp1_price,
             tp2_price,
             tp3_price,
+            entry_atr,
             tp1_hit,
             tp2_hit,
             tp3_hit,
             opened_at,
             status
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, FALSE, FALSE, NOW(), 'open')
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, FALSE, FALSE, NOW(), 'open')
         RETURNING position_id, margin_used
         """,
         (
@@ -276,11 +281,11 @@ def create_open_position_tx(cur, account_id: int, symbol: str, position_side: st
             tp1_price,
             tp2_price,
             tp3_price,
+            entry_atr,
         ),
     )
     row = cur.fetchone()
     return int(row[0]), float(row[1])
-
 
 def update_position_after_partial_exit(
     position_id: int,

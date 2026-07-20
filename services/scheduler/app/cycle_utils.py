@@ -132,6 +132,47 @@ def extract_btc_macro_context(strategy_result: dict) -> dict:
     return flat
 
 
+
+def extract_entry_atr(strategy_result: dict, risk_result: dict | None = None):
+    risk_result = risk_result or {}
+
+    for source in (risk_result, strategy_result):
+        for key in ("entry_atr", "atr_at_entry", "opening_atr", "initial_atr"):
+            value = source.get(key)
+            if value is not None:
+                try:
+                    value = float(value)
+                    if value > 0:
+                        return value
+                except Exception:
+                    pass
+
+    proposed_trade = strategy_result.get("proposed_trade") or {}
+    for key in ("entry_atr", "atr_at_entry", "atr"):
+        value = proposed_trade.get(key)
+        if value is not None:
+            try:
+                value = float(value)
+                if value > 0:
+                    return value
+            except Exception:
+                pass
+
+    for details_key in ("stop_loss_details", "stop_details", "trade_level_details", "proposed_trade_details"):
+        details = proposed_trade.get(details_key) or strategy_result.get(details_key) or {}
+        if isinstance(details, dict):
+            for key in ("entry_atr", "atr_at_entry", "atr"):
+                value = details.get(key)
+                if value is not None:
+                    try:
+                        value = float(value)
+                        if value > 0:
+                            return value
+                    except Exception:
+                        pass
+
+    return None
+
 def build_risk_payload_from_strategy(account_id: int, strategy_result: dict):
     position_side = normalize_position_side(strategy_result)
     btc_macro_context = extract_btc_macro_context(strategy_result)
@@ -254,6 +295,7 @@ def build_repriced_paper_payload(account_id: int, pending_payload: dict, risk_re
         "stop_loss": risk_result.get("stop_loss", float(pending_payload["stop_loss"])),
         "take_profits": risk_result.get("take_profits") or pending_payload.get("take_profits", {}),
         "scheduler_risk_compatibility_version": SCHEDULER_RISK_COMPATIBILITY_VERSION,
+        "entry_atr": extract_entry_atr(strategy_result, risk_result),
     }
 
     if isinstance(risk_result, dict):
