@@ -14,6 +14,16 @@ function formatCooldownRemaining(until?: string | null) {
   return `${hours}h ${minutes}m left`;
 }
 
+function unique(values: Array<string | null | undefined>) {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => String(value ?? "").trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
 export default function TradingStatusCard({
   enabled,
   reasonCodes,
@@ -31,31 +41,56 @@ export default function TradingStatusCard({
   weeklyPnlPenalty?: Record<string, any> | null;
   consecutiveLossCooldownUntil?: string | null;
 }) {
-  const entryBlocked = enabled && entryAllowed === false;
+  const accountDisabled = !enabled;
+  const entryBlocked = entryAllowed === false;
+  const entryOnlyBlocked = !accountDisabled && entryBlocked;
   const cooldownRemaining = formatCooldownRemaining(consecutiveLossCooldownUntil);
-  const hasConsecutiveLossCooldown = entryReasonCodes.includes("CONSECUTIVE_LOSS_COOLDOWN");
 
-  const title = !enabled
+  const allReasons = unique([...reasonCodes, ...entryReasonCodes]);
+  const hasConsecutiveLossCooldown = allReasons.includes("CONSECUTIVE_LOSS_COOLDOWN");
+
+  const title = accountDisabled
     ? "Trading Disabled"
-    : entryBlocked
+    : entryOnlyBlocked
     ? "Entry Blocked"
     : "Trading Enabled";
 
-  const titleClass = !enabled ? "text-rose-200" : entryBlocked ? "text-amber-200" : "text-emerald-200";
-  const dotClass = !enabled
+  const titleClass = accountDisabled
+    ? "text-rose-200"
+    : entryOnlyBlocked
+    ? "text-amber-200"
+    : "text-emerald-200";
+
+  const dotClass = accountDisabled
     ? "bg-rose-400 shadow-[0_0_18px_rgba(251,113,133,0.8)]"
-    : entryBlocked
+    : entryOnlyBlocked
     ? "bg-amber-400 shadow-[0_0_18px_rgba(251,191,36,0.8)]"
     : "bg-emerald-400 shadow-[0_0_18px_rgba(52,211,153,0.8)]";
 
-  const message = !enabled
-    ? "Trading is currently suspended or blocked. Maintenance remains active."
-    : entryBlocked
-    ? "Account is online, but new entries are blocked by the same Trade Guardian entry gate used by the scheduler."
+  const message = accountDisabled
+    ? "Account-level safety has disabled trading. New entries are blocked; maintenance remains active."
+    : entryOnlyBlocked
+    ? "Account is online, but new entries are blocked by the Trade Guardian entry gate. Maintenance remains active."
     : "All entry paths available. Maintenance remains active.";
 
-  const uniqueEntryReasons = Array.from(new Set(entryReasonCodes.filter(Boolean)));
-  const uniqueTradingReasons = Array.from(new Set(reasonCodes.filter(Boolean)));
+  const stateChip = accountDisabled
+    ? {
+        label: "Entry blocked by account safety",
+        className: "border-rose-400/20 bg-rose-500/10 text-rose-200",
+      }
+    : entryOnlyBlocked
+    ? {
+        label: "Entry Blocked",
+        className: "border-amber-400/20 bg-amber-500/10 text-amber-200",
+      }
+    : {
+        label: "Entry Enabled",
+        className: "border-emerald-400/20 bg-emerald-500/10 text-emerald-200",
+      };
+
+  const reasonClass = accountDisabled
+    ? "border-rose-300/20 bg-rose-500/10 text-rose-200"
+    : "border-amber-300/20 bg-amber-500/10 text-amber-200";
 
   return (
     <GlassCard className="h-full">
@@ -94,22 +129,17 @@ export default function TradingStatusCard({
           Maintenance Active
         </div>
 
-        {entryAllowed ? (
-          <div className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">Entry Enabled</div>
-        ) : (
-          <div className="rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-200">Entry Blocked</div>
-        )}
+        <div className={`rounded-full border px-3 py-1 text-xs ${stateChip.className}`}>
+          {stateChip.label}
+        </div>
 
-        {!enabled ? (
-          <div className="rounded-full border border-rose-400/20 bg-rose-500/10 px-3 py-1 text-xs text-rose-200">Account Trading Disabled</div>
-        ) : null}
-
-        {uniqueTradingReasons.map((reason) => (
-          <div key={`trading-${reason}`} className="rounded-full border border-rose-300/20 bg-rose-500/10 px-3 py-1 text-xs text-rose-200">{reason}</div>
-        ))}
-
-        {uniqueEntryReasons.map((reason) => (
-          <div key={`entry-${reason}`} className="rounded-full border border-amber-300/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-200">{reason}</div>
+        {allReasons.map((reason) => (
+          <div
+            key={reason}
+            className={`rounded-full border px-3 py-1 text-xs ${reasonClass}`}
+          >
+            {reason}
+          </div>
         ))}
       </div>
 
