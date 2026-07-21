@@ -4,11 +4,14 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from config import DEFAULT_FEE_BPS, DEFAULT_MAX_CYCLES, DEFAULT_RISK_PER_TRADE_PCT, DEFAULT_SLIPPAGE_BPS, DEFAULT_STARTING_CAPITAL
+from config import DEFAULT_MAX_CYCLES, DEFAULT_RISK_PER_TRADE_PCT, DEFAULT_SLIPPAGE_BPS, DEFAULT_STARTING_CAPITAL
 from cycle_simulator import Phase14BaselineDecisionEngine, build_entry_plan
 from db import get_conn
 from historical_feed import build_historical_feed, parse_time
 from market_snapshot import MarketSnapshotBuilder
+
+from fee_model import FeeModel
+from guardian_risk import GuardianPolicy, evaluate_entry_guard
 
 
 def _json(value: Any) -> str:
@@ -36,13 +39,23 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "starting_capital": float(payload.get("starting_capital", DEFAULT_STARTING_CAPITAL)),
         "max_cycles": int(payload.get("max_cycles", DEFAULT_MAX_CYCLES)),
         "risk_per_trade_pct": float(payload.get("risk_per_trade_pct", DEFAULT_RISK_PER_TRADE_PCT)),
-        "fee_bps": float(payload.get("fee_bps", DEFAULT_FEE_BPS)),
+        "fee_bps_override": float(payload["fee_bps"]) if "fee_bps" in payload else None,
+        "maker_fee_bps": float(payload.get("maker_fee_bps", 2.0)),
+        "taker_fee_bps": float(payload.get("taker_fee_bps", 6.0)),
+        "limit_order_fill_ratio": float(payload.get("limit_order_fill_ratio", 0.80)),
         "slippage_bps": float(payload.get("slippage_bps", DEFAULT_SLIPPAGE_BPS)),
         "data_mode": payload.get("data_mode", "phase14b_sample_historical_feed"),
         "execution_model": "market_with_fee_slippage_bps",
         "preflight_strict": bool(payload.get("preflight_strict", True)),
         "warmup_required_bars": int(payload.get("warmup_required_bars", 8)),
         "cycle_decision_log_interval": int(payload.get("cycle_decision_log_interval", 25)),
+        "guardian_trading_enabled": bool(payload.get("guardian_trading_enabled", True)),
+        "guardian_read_only_mode": bool(payload.get("guardian_read_only_mode", False)),
+        "guardian_maintenance_only_mode": bool(payload.get("guardian_maintenance_only_mode", False)),
+        "guardian_max_concurrent_positions": int(payload.get("guardian_max_concurrent_positions", 3)),
+        "guardian_max_account_exposure_pct": float(payload.get("guardian_max_account_exposure_pct", 50.0)),
+        "guardian_daily_loss_limit_pct": float(payload.get("guardian_daily_loss_limit_pct", 3.0)),
+        "guardian_weekly_loss_limit_pct": float(payload.get("guardian_weekly_loss_limit_pct", 6.0)),
     }
 
 
@@ -238,9 +251,18 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     max_drawdown_pct = 0.0
     open_positions: dict[str, dict[str, Any]] = {}
 
+    fee_model = FeeModel.from_config(config)
+    guardian_policy = GuardianPolicy.from_config(config)
+
+    guard_rejections = 0
+    risk_approved = 0
+    risk_notional_requested = 0.0
+
     snapshot_builder = MarketSnapshotBuilder(config["symbols"], warmup_required_bars=config["warmup_required_bars"])
     decision_engine = Phase14BaselineDecisionEngine()
-    cycle_count = decision_count = skipped_warmup = 0
+    cycle_count = 0
+    decision_count = 0
+    skipped_warmup = 0
     last_snapshot = None
 
     try:
@@ -279,7 +301,7 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
                     slip = config["slippage_bps"] / 10000
                     filled_exit = requested_exit * (1 - slip if position["side"] == "long" else 1 + slip)
                     gross = _unrealized(position, filled_exit)
-                    exit_fee = abs(filled_exit * position["qty"]) * config["fee_bps"] / 10000
+                    exit_fee = fee_model.fee(abs(filled_exit * position["qty"]))
                     cash_delta = gross - exit_fee
                     trade_net = gross - position["fees"] - exit_fee
                     cash += cash_delta
@@ -324,7 +346,40 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
                 entry, side, qty = plan["entry"], plan["side"], plan["qty"]
                 slip = config["slippage_bps"] / 10000
                 filled_entry = entry * (1 + slip if side == "long" else 1 - slip)
-                entry_fee = abs(filled_entry * qty) * config["fee_bps"] / 10000
+                planned_notional = abs(filled_entry * qty)
+
+                guard = evaluate_entry_guard(
+                    policy=guardian_policy,
+                    symbol=symbol,
+                    planned_notional=planned_notional,
+                    equity=equity,
+                    starting_capital=config["starting_capital"],
+                    realized_pnl=realized_pnl,
+                    open_positions=open_positions,
+                )
+
+                risk_notional_requested += planned_notional
+
+                if not guard.allowed:
+                    guard_rejections += 1
+                    _log(
+                        run_id,
+                        "GUARDIAN_ENTRY_REJECTED",
+                        f"{symbol} entry rejected.",
+                        {
+                            "cycle_index": cycle_index,
+                            "symbol": symbol,
+                            "decision": decision.reason,
+                            "guard": guard.to_dict(),
+                        },
+                        "WARNING",
+                    )
+                    continue
+
+                risk_approved += 1
+
+                entry_fee = fee_model.fee(planned_notional)
+
                 cash -= entry_fee
                 realized_pnl -= entry_fee
 
@@ -336,7 +391,28 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
                     "score": plan["score"], "confidence": plan["confidence"],
                     "reason_tags": plan["reason_tags"], "debug": plan["debug"],
                 }
-                _record_order(run_id, symbol, "buy" if side == "long" else "sell", "market_entry", entry, filled_entry, qty, entry_fee, "STRATEGY_ENTRY", snapshot.timestamp, {"score": plan["score"], "cycle_index": cycle_index, "decision": decision.reason})
+
+                _record_order(
+                    run_id,
+                    symbol,
+                    "buy" if side == "long" else "sell",
+                    "market_entry",
+                    entry,
+                    filled_entry,
+                    qty,
+                    entry_fee,
+                    "STRATEGY_ENTRY",
+                    snapshot.timestamp,
+                    {
+                        "score": plan["score"],
+                        "cycle_index": cycle_index,
+                        "decision": decision.reason,
+                        "guardian": guard.to_dict(),
+                        "fee_model": fee_model.to_dict(),
+                        "planned_notional": planned_notional,
+                    },
+                )
+
                 _open_position(run_id, position)
                 open_positions[symbol] = position
                 _log(run_id, "POSITION_OPENED", f"{symbol} {side} opened.", {"cycle_index": cycle_index, "entry": filled_entry, "quantity": qty, "score": plan["score"], "lookahead_guard": snapshot.lookahead_guard})
@@ -357,7 +433,7 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
                 slip = config["slippage_bps"] / 10000
                 filled_exit = requested_exit * (1 - slip if position["side"] == "long" else 1 + slip)
                 gross = _unrealized(position, filled_exit)
-                exit_fee = abs(filled_exit * position["qty"]) * config["fee_bps"] / 10000
+                exit_fee = fee_model.fee(abs(filled_exit * position["qty"]))
                 cash_delta = gross - exit_fee
                 trade_net = gross - position["fees"] - exit_fee
                 cash += cash_delta
@@ -368,10 +444,16 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
 
         summary = _finalize_run(run_id, cash, config["starting_capital"], max_drawdown_pct)
         diagnostics = {
-            "cycle_count": cycle_count, "decision_count": decision_count,
+            "cycle_count": cycle_count,
+            "decision_count": decision_count,
             "skipped_warmup": skipped_warmup,
             "warmup_required_bars": config["warmup_required_bars"],
             "preflight": preflight.to_dict(),
+            "guard_rejections": guard_rejections,
+            "risk_approved": risk_approved,
+            "risk_notional_requested": risk_notional_requested,
+            "guardian_policy": guardian_policy.to_dict(),
+            "fee_model": fee_model.to_dict(),
         }
         _log(run_id, "BACKTEST_COMPLETED", "Phase 14C completed.", {**summary, **diagnostics})
         return {"ok": True, "run_id": run_id, "summary": summary, "diagnostics": diagnostics, "preflight": preflight.to_dict(), "config": config}
