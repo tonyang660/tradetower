@@ -42,7 +42,7 @@ class GuardianPolicy:
             read_only_mode=bool(config.get("guardian_read_only_mode", False)),
             maintenance_only_mode=bool(config.get("guardian_maintenance_only_mode", False)),
             max_concurrent_positions=int(config.get("guardian_max_concurrent_positions", 3)),
-            max_account_exposure_pct=float(config.get("guardian_max_account_exposure_pct", 100.0)),
+            max_account_exposure_pct=float(config.get("guardian_max_account_exposure_pct", 80.0)),
 
             # New names. Old names remain accepted as compatibility aliases.
             max_position_leverage=float(
