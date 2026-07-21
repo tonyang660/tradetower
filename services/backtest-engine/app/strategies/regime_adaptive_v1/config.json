@@ -1,0 +1,27 @@
+{
+  "strategy_name": "regime_adaptive_v1",
+  "strategy_version": "0.1.0",
+  "strategy_family": "regime_adaptive",
+  "description": "Routes between standalone trend_following_v1 and mean_reversion_v1.",
+  "required_timeframes": [
+    "15m"
+  ],
+  "parameters": {
+    "strategy_trade_threshold": {
+      "type": "float",
+      "default": 65.0
+    },
+    "trend_momentum_3_threshold": {
+      "type": "float",
+      "default": 0.003
+    },
+    "trend_momentum_7_threshold": {
+      "type": "float",
+      "default": 0.001
+    },
+    "mean_reversion_deviation_threshold": {
+      "type": "float",
+      "default": 0.006
+    }
+  }
+}

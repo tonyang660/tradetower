@@ -1,0 +1,27 @@
+{
+  "strategy_name": "trend_following_v1",
+  "strategy_version": "0.1.0",
+  "strategy_family": "trend_following",
+  "description": "Standalone trend-following strategy stub.",
+  "required_timeframes": [
+    "15m"
+  ],
+  "parameters": {
+    "strategy_trade_threshold": {
+      "type": "float",
+      "default": 65.0
+    },
+    "trend_momentum_3_threshold": {
+      "type": "float",
+      "default": 0.003
+    },
+    "trend_momentum_7_threshold": {
+      "type": "float",
+      "default": 0.001
+    },
+    "stop_distance_pct": {
+      "type": "float",
+      "default": 0.015
+    }
+  }
+}

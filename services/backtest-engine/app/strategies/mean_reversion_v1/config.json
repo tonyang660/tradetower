@@ -1,0 +1,23 @@
+{
+  "strategy_name": "mean_reversion_v1",
+  "strategy_version": "0.1.0",
+  "strategy_family": "mean_reversion",
+  "description": "Standalone mean-reversion strategy stub.",
+  "required_timeframes": [
+    "15m"
+  ],
+  "parameters": {
+    "strategy_trade_threshold": {
+      "type": "float",
+      "default": 65.0
+    },
+    "mean_reversion_deviation_threshold": {
+      "type": "float",
+      "default": 0.006
+    },
+    "stop_distance_pct": {
+      "type": "float",
+      "default": 0.012
+    }
+  }
+}
