@@ -1,19 +1,14 @@
-
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
 from typing import Any
 
-from config import (
-    DEFAULT_FEE_BPS,
-    DEFAULT_MAX_CYCLES,
-    DEFAULT_RISK_PER_TRADE_PCT,
-    DEFAULT_SLIPPAGE_BPS,
-    DEFAULT_STARTING_CAPITAL,
-)
+from config import DEFAULT_FEE_BPS, DEFAULT_MAX_CYCLES, DEFAULT_RISK_PER_TRADE_PCT, DEFAULT_SLIPPAGE_BPS, DEFAULT_STARTING_CAPITAL
+from cycle_simulator import Phase14BaselineDecisionEngine, build_entry_plan
 from db import get_conn
-from historical_feed import CandleBar, build_historical_feed, parse_time
+from historical_feed import build_historical_feed, parse_time
+from market_snapshot import MarketSnapshotBuilder
 
 
 def _json(value: Any) -> str:
@@ -30,8 +25,6 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(timeframes, str):
         timeframes = [timeframes]
 
-    data_mode = payload.get("data_mode", "phase14b_sample_historical_feed")
-
     return {
         "strategy_name": payload.get("strategy_name", "phase14a_baseline"),
         "strategy_version": payload.get("strategy_version", "0.1.0"),
@@ -45,9 +38,11 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "risk_per_trade_pct": float(payload.get("risk_per_trade_pct", DEFAULT_RISK_PER_TRADE_PCT)),
         "fee_bps": float(payload.get("fee_bps", DEFAULT_FEE_BPS)),
         "slippage_bps": float(payload.get("slippage_bps", DEFAULT_SLIPPAGE_BPS)),
-        "data_mode": data_mode,
+        "data_mode": payload.get("data_mode", "phase14b_sample_historical_feed"),
         "execution_model": "market_with_fee_slippage_bps",
         "preflight_strict": bool(payload.get("preflight_strict", True)),
+        "warmup_required_bars": int(payload.get("warmup_required_bars", 8)),
+        "cycle_decision_log_interval": int(payload.get("cycle_decision_log_interval", 25)),
     }
 
 
@@ -63,15 +58,9 @@ def _create_run(config: dict[str, Any]) -> int:
             RETURNING run_id
             """,
             (
-                config["strategy_name"],
-                config["strategy_version"],
-                config["symbols"],
-                config["timeframes"],
-                config["start_time"],
-                config.get("end_time"),
-                config["cycle_timeframe"],
-                config["starting_capital"],
-                _json(config),
+                config["strategy_name"], config["strategy_version"], config["symbols"],
+                config["timeframes"], config["start_time"], config.get("end_time"),
+                config["cycle_timeframe"], config["starting_capital"], _json(config),
             ),
         )
         return int(cur.fetchone()[0])
@@ -193,15 +182,9 @@ def _finalize_run(run_id: int, final_equity: float, starting_capital: float, max
         profit_factor = gross_wins / gross_losses if gross_losses else None
         return_pct = ((final_equity - starting_capital) / starting_capital * 100.0) if starting_capital else 0
         summary = {
-            "run_id": run_id,
-            "final_equity": final_equity,
-            "return_pct": return_pct,
-            "gross_pnl": gross_pnl,
-            "net_pnl": net_pnl,
-            "max_drawdown_pct": max_drawdown_pct,
-            "total_trades": total_trades,
-            "win_rate": win_rate,
-            "profit_factor": profit_factor,
+            "run_id": run_id, "final_equity": final_equity, "return_pct": return_pct,
+            "gross_pnl": gross_pnl, "net_pnl": net_pnl, "max_drawdown_pct": max_drawdown_pct,
+            "total_trades": total_trades, "win_rate": win_rate, "profit_factor": profit_factor,
         }
         cur.execute(
             """
@@ -233,19 +216,12 @@ def _unrealized(position: dict[str, Any], price: float) -> float:
     return (position["entry"] - price) * position["qty"]
 
 
-def _bar_maps(candles: list[CandleBar]) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-    closes = {bar.symbol: bar.close for bar in candles}
-    highs = {bar.symbol: bar.high for bar in candles}
-    lows = {bar.symbol: bar.low for bar in candles}
-    return closes, highs, lows
-
-
 def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     config = _normalize_config(payload)
     run_id = _create_run(config)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("UPDATE backtest_runs SET status='running', started_at=NOW() WHERE run_id=%s", (run_id,))
-    _log(run_id, "BACKTEST_STARTED", "Phase 14B event-driven backtest started.", config)
+    _log(run_id, "BACKTEST_STARTED", "Phase 14C production-like cycle simulation started.", config)
 
     feed = build_historical_feed(config)
     preflight = feed.preflight()
@@ -253,50 +229,49 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
 
     if not preflight.ok and config["preflight_strict"]:
         with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                "UPDATE backtest_runs SET status='failed', completed_at=NOW(), error=%s WHERE run_id=%s",
-                ("data_preflight_failed", run_id),
-            )
-        return {
-            "ok": False,
-            "run_id": run_id,
-            "error": "data_preflight_failed",
-            "preflight": preflight.to_dict(),
-            "config": config,
-        }
+            cur.execute("UPDATE backtest_runs SET status='failed', completed_at=NOW(), error=%s WHERE run_id=%s", ("data_preflight_failed", run_id))
+        return {"ok": False, "run_id": run_id, "error": "data_preflight_failed", "preflight": preflight.to_dict(), "config": config}
 
     cash = config["starting_capital"]
     realized_pnl = 0.0
     peak_equity = cash
     max_drawdown_pct = 0.0
     open_positions: dict[str, dict[str, Any]] = {}
-    history = {symbol: [] for symbol in config["symbols"]}
+
+    snapshot_builder = MarketSnapshotBuilder(config["symbols"], warmup_required_bars=config["warmup_required_bars"])
+    decision_engine = Phase14BaselineDecisionEngine()
+    cycle_count = decision_count = skipped_warmup = 0
+    last_snapshot = None
 
     try:
-        last_candles: list[CandleBar] = []
-
-        for candles in feed.iter_cycles():
+        for cycle_index, candles in enumerate(feed.iter_cycles()):
             if not candles:
                 continue
 
-            last_candles = candles
-            timestamp = candles[0].timestamp
-            closes, highs, lows = _bar_maps(candles)
+            cycle_count += 1
+            snapshot = snapshot_builder.build(cycle_index, candles)
+            last_snapshot = snapshot
 
+            # 1) Manage existing positions before new entries.
             for symbol, position in list(open_positions.items()):
+                if symbol not in snapshot.closes:
+                    continue
+
                 position["bars"] += 1
-                requested_exit = closes[symbol]
+                requested_exit = snapshot.closes[symbol]
                 exit_reason = None
+
                 if position["side"] == "long":
-                    if lows[symbol] <= position["stop"]:
+                    if snapshot.lows[symbol] <= position["stop"]:
                         exit_reason, requested_exit = "STOP_LOSS", position["stop"]
-                    elif highs[symbol] >= position["tp3"]:
+                    elif snapshot.highs[symbol] >= position["tp3"]:
                         exit_reason, requested_exit = "TP3", position["tp3"]
                 else:
-                    if highs[symbol] >= position["stop"]:
+                    if snapshot.highs[symbol] >= position["stop"]:
                         exit_reason, requested_exit = "STOP_LOSS", position["stop"]
-                    elif lows[symbol] <= position["tp3"]:
+                    elif snapshot.lows[symbol] <= position["tp3"]:
                         exit_reason, requested_exit = "TP3", position["tp3"]
+
                 if position["bars"] >= 48 and not exit_reason:
                     exit_reason = "TIMEOUT_CLOSE"
 
@@ -305,48 +280,48 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
                     filled_exit = requested_exit * (1 - slip if position["side"] == "long" else 1 + slip)
                     gross = _unrealized(position, filled_exit)
                     exit_fee = abs(filled_exit * position["qty"]) * config["fee_bps"] / 10000
-
                     cash_delta = gross - exit_fee
                     trade_net = gross - position["fees"] - exit_fee
                     cash += cash_delta
                     realized_pnl += cash_delta
-
-                    _record_order(run_id, symbol, "sell" if position["side"] == "long" else "buy", "market_exit", requested_exit, filled_exit, position["qty"], exit_fee, exit_reason, timestamp, {"position_id": position["position_id"]})
-                    _close_position(run_id, position, timestamp, filled_exit, gross, exit_fee, trade_net, exit_reason)
+                    _record_order(run_id, symbol, "sell" if position["side"] == "long" else "buy", "market_exit", requested_exit, filled_exit, position["qty"], exit_fee, exit_reason, snapshot.timestamp, {"position_id": position["position_id"], "cycle_index": cycle_index})
+                    _close_position(run_id, position, snapshot.timestamp, filled_exit, gross, exit_fee, trade_net, exit_reason)
+                    _log(run_id, "POSITION_CLOSED", f"{symbol} closed via {exit_reason}.", {"cycle_index": cycle_index, "symbol": symbol, "net_pnl": trade_net})
                     del open_positions[symbol]
 
-            unrealized = sum(_unrealized(p, closes[s]) for s, p in open_positions.items())
+            # 2) Mark-to-market.
+            unrealized = sum(_unrealized(p, snapshot.closes[s]) for s, p in open_positions.items() if s in snapshot.closes)
             equity = cash + unrealized
             peak_equity = max(peak_equity, equity)
             drawdown_pct = ((peak_equity - equity) / peak_equity * 100.0) if peak_equity else 0.0
             max_drawdown_pct = max(max_drawdown_pct, drawdown_pct)
-            _record_equity(run_id, timestamp, equity, cash, realized_pnl, unrealized, drawdown_pct)
+            _record_equity(run_id, snapshot.timestamp, equity, cash, realized_pnl, unrealized, drawdown_pct)
 
-            for symbol_index, symbol in enumerate(config["symbols"]):
-                if symbol not in closes:
+            # 3) Evaluate decisions from point-in-time snapshot.
+            cycle_decisions = []
+            for symbol in config["symbols"]:
+                if symbol not in snapshot.closes:
                     continue
 
-                history[symbol].append(closes[symbol])
-                if symbol in open_positions or len(history[symbol]) < 8:
+                decision = decision_engine.evaluate_symbol(snapshot, symbol)
+                decision_count += 1
+                if decision.reason == "WARMUP_NOT_READY":
+                    skipped_warmup += 1
+
+                cycle_decisions.append({
+                    "symbol": decision.symbol, "action": decision.action, "side": decision.side,
+                    "reason": decision.reason, "score": decision.score, "confidence": decision.confidence,
+                    "reason_tags": decision.reason_tags, "debug": decision.debug,
+                })
+
+                if symbol in open_positions:
                     continue
 
-                m3 = (history[symbol][-1] - history[symbol][-4]) / history[symbol][-4]
-                m7 = (history[symbol][-1] - history[symbol][-8]) / history[symbol][-8]
-                side = None
-                if m3 > 0.003 and m7 > 0.001:
-                    side = "long"
-                elif m3 < -0.003 and m7 < -0.001:
-                    side = "short"
-                if not side:
+                plan = build_entry_plan(snapshot, decision, equity, config["risk_per_trade_pct"])
+                if not plan:
                     continue
 
-                entry = closes[symbol]
-                stop = entry * (0.985 if side == "long" else 1.015)
-                risk = equity * config["risk_per_trade_pct"] / 100
-                qty = risk / abs(entry - stop) if abs(entry - stop) > 0 else 0
-                if qty <= 0:
-                    continue
-
+                entry, side, qty = plan["entry"], plan["side"], plan["qty"]
                 slip = config["slippage_bps"] / 10000
                 filled_entry = entry * (1 + slip if side == "long" else 1 - slip)
                 entry_fee = abs(filled_entry * qty) * config["fee_bps"] / 10000
@@ -354,49 +329,53 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
                 realized_pnl -= entry_fee
 
                 position = {
-                    "symbol": symbol,
-                    "side": side,
-                    "entry_time": timestamp,
-                    "entry": filled_entry,
-                    "stop": stop,
-                    "tp1": entry * (1.012 if side == "long" else 0.988),
-                    "tp2": entry * (1.020 if side == "long" else 0.980),
-                    "tp3": entry * (1.032 if side == "long" else 0.968),
-                    "qty": qty,
-                    "fees": entry_fee,
-                    "bars": 0,
-                    "regime": "sample_trend" if side == "long" else "sample_downtrend",
-                    "score": 70.0,
-                    "confidence": 0.70,
-                    "reason_tags": ["PHASE14A_BASELINE", "EVENT_DRIVEN_TEST"],
-                    "debug": {"m3": m3, "m7": m7, "data_mode": config["data_mode"]},
+                    "symbol": symbol, "side": side, "entry_time": snapshot.timestamp,
+                    "entry": filled_entry, "stop": plan["stop"], "tp1": plan["tp1"],
+                    "tp2": plan["tp2"], "tp3": plan["tp3"], "qty": qty,
+                    "fees": entry_fee, "bars": 0, "regime": plan["regime"],
+                    "score": plan["score"], "confidence": plan["confidence"],
+                    "reason_tags": plan["reason_tags"], "debug": plan["debug"],
                 }
-                _record_order(run_id, symbol, "buy" if side == "long" else "sell", "market_entry", entry, filled_entry, qty, entry_fee, "STRATEGY_ENTRY", timestamp, {"score": 70})
+                _record_order(run_id, symbol, "buy" if side == "long" else "sell", "market_entry", entry, filled_entry, qty, entry_fee, "STRATEGY_ENTRY", snapshot.timestamp, {"score": plan["score"], "cycle_index": cycle_index, "decision": decision.reason})
                 _open_position(run_id, position)
                 open_positions[symbol] = position
+                _log(run_id, "POSITION_OPENED", f"{symbol} {side} opened.", {"cycle_index": cycle_index, "entry": filled_entry, "quantity": qty, "score": plan["score"], "lookahead_guard": snapshot.lookahead_guard})
 
-        if last_candles:
-            timestamp = last_candles[0].timestamp
-            closes, _, _ = _bar_maps(last_candles)
+            if cycle_index < 3 or cycle_index % max(1, config["cycle_decision_log_interval"]) == 0:
+                _log(run_id, "CYCLE_DECISIONS", "Cycle decisions recorded.", {
+                    "cycle_index": cycle_index, "timestamp": snapshot.timestamp.isoformat(),
+                    "equity": equity, "open_positions": list(open_positions.keys()),
+                    "snapshot": snapshot.to_log_dict(), "decisions": cycle_decisions,
+                })
+
+        # 4) Close remaining positions at final snapshot close.
+        if last_snapshot is not None:
             for symbol, position in list(open_positions.items()):
-                requested_exit = closes[symbol]
+                if symbol not in last_snapshot.closes:
+                    continue
+                requested_exit = last_snapshot.closes[symbol]
                 slip = config["slippage_bps"] / 10000
                 filled_exit = requested_exit * (1 - slip if position["side"] == "long" else 1 + slip)
                 gross = _unrealized(position, filled_exit)
                 exit_fee = abs(filled_exit * position["qty"]) * config["fee_bps"] / 10000
-
                 cash_delta = gross - exit_fee
                 trade_net = gross - position["fees"] - exit_fee
                 cash += cash_delta
                 realized_pnl += cash_delta
-
-                _record_order(run_id, symbol, "sell" if position["side"] == "long" else "buy", "market_exit", requested_exit, filled_exit, position["qty"], exit_fee, "END_OF_BACKTEST", timestamp, {"position_id": position["position_id"]})
-                _close_position(run_id, position, timestamp, filled_exit, gross, exit_fee, trade_net, "END_OF_BACKTEST")
+                _record_order(run_id, symbol, "sell" if position["side"] == "long" else "buy", "market_exit", requested_exit, filled_exit, position["qty"], exit_fee, "END_OF_BACKTEST", last_snapshot.timestamp, {"position_id": position["position_id"], "cycle_index": last_snapshot.cycle_index})
+                _close_position(run_id, position, last_snapshot.timestamp, filled_exit, gross, exit_fee, trade_net, "END_OF_BACKTEST")
                 del open_positions[symbol]
 
         summary = _finalize_run(run_id, cash, config["starting_capital"], max_drawdown_pct)
-        _log(run_id, "BACKTEST_COMPLETED", "Phase 14B completed.", {**summary, "preflight": preflight.to_dict()})
-        return {"ok": True, "run_id": run_id, "summary": summary, "preflight": preflight.to_dict(), "config": config}
+        diagnostics = {
+            "cycle_count": cycle_count, "decision_count": decision_count,
+            "skipped_warmup": skipped_warmup,
+            "warmup_required_bars": config["warmup_required_bars"],
+            "preflight": preflight.to_dict(),
+        }
+        _log(run_id, "BACKTEST_COMPLETED", "Phase 14C completed.", {**summary, **diagnostics})
+        return {"ok": True, "run_id": run_id, "summary": summary, "diagnostics": diagnostics, "preflight": preflight.to_dict(), "config": config}
+
     except Exception as exc:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute("UPDATE backtest_runs SET status='failed', completed_at=NOW(), error=%s WHERE run_id=%s", (str(exc), run_id))
@@ -416,9 +395,11 @@ def run_detail(run_id: int) -> dict[str, Any] | None:
         row = cur.fetchone()
         if not row:
             return None
+
         def rows(query: str):
             cur.execute(query, (run_id,))
             return [item[0] for item in cur.fetchall()]
+
         return {
             "run": row[0],
             "trades": rows("SELECT row_to_json(t) FROM backtest_trades t WHERE run_id=%s ORDER BY trade_id"),
