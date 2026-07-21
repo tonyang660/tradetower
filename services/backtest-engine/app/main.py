@@ -17,6 +17,7 @@ from result_api import (
     fetch_trades,
 )
 from runner import list_runs, run_backtest, run_detail
+from strategies.registry import list_strategies
 
 
 def _read_json(handler: BaseHTTPRequestHandler) -> dict:
@@ -95,6 +96,13 @@ class Handler(BaseHTTPRequestHandler):
                     "/backtests/run/logs",
                     "/backtests/run/result-bundle",
                 ],
+            })
+            return
+
+        if parsed.path == "/strategies":
+            self._send_json({
+                "ok": True,
+                "strategies": list_strategies(),
             })
             return
 

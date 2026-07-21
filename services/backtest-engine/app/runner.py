@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from config import DEFAULT_MAX_CYCLES, DEFAULT_RISK_PER_TRADE_PCT, DEFAULT_SLIPPAGE_BPS, DEFAULT_STARTING_CAPITAL
-from cycle_simulator import Phase14BaselineDecisionEngine, build_entry_plan
+from strategies.registry import build_strategy
 from db import get_conn
 from historical_feed import build_historical_feed, parse_time
 from market_snapshot import MarketSnapshotBuilder
@@ -29,7 +29,7 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         timeframes = [timeframes]
 
     return {
-        "strategy_name": payload.get("strategy_name", "phase14a_baseline"),
+        "strategy_name": payload.get("strategy_name", "tradetower_baseline_v1"),
         "strategy_version": payload.get("strategy_version", "0.1.0"),
         "symbols": [str(s).upper().replace("/", "").replace("-", "") for s in symbols],
         "timeframes": [str(t) for t in timeframes],
@@ -261,7 +261,7 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     risk_notional_requested = 0.0
 
     snapshot_builder = MarketSnapshotBuilder(config["symbols"], warmup_required_bars=config["warmup_required_bars"])
-    decision_engine = Phase14BaselineDecisionEngine()
+    strategy = build_strategy(config["strategy_name"], config)
     cycle_count = 0
     decision_count = 0
     skipped_warmup = 0
@@ -327,7 +327,7 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
                 if symbol not in snapshot.closes:
                     continue
 
-                decision = decision_engine.evaluate_symbol(snapshot, symbol)
+                decision = strategy.evaluate_symbol(snapshot, symbol)
                 decision_count += 1
                 if decision.reason == "WARMUP_NOT_READY":
                     skipped_warmup += 1
@@ -341,7 +341,7 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
                 if symbol in open_positions:
                     continue
 
-                plan = build_entry_plan(snapshot, decision, equity, config["risk_per_trade_pct"])
+                plan = strategy.build_entry_plan(snapshot, decision, equity, config["risk_per_trade_pct"])
                 if not plan:
                     continue
 
