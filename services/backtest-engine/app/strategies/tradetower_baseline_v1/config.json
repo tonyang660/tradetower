@@ -124,5 +124,22 @@
     "registry_role": "standalone_upstream_context",
     "included_in_strategy_registry": false,
     "context_key": "candidate_filter_context"
+  },
+  "parity_adapter_version": "phase15c_strategy_engine_parity_adapter",
+  "phase15c_pipeline": [
+    "validate_snapshot_for_strategy",
+    "route_regime",
+    "direction_candidates_for_route",
+    "check_v1_entry",
+    "score_v1_signal",
+    "build_proposed_trade",
+    "decide_strategy_signal"
+  ],
+  "lifecycle_features_not_implemented_yet": {
+    "adaptive_stop_loss": "Phase 18 realistic execution simulator",
+    "tp1_reprice_stop_to_half_risk": "Phase 18 position manager",
+    "tp2_reprice_stop_to_breakeven": "Phase 18 position manager",
+    "regime_change_sl2": "Phase 18/20 maintenance simulation",
+    "volatility_spike_sl2": "Phase 18 execution + Phase 20 forward comparison"
   }
 }
