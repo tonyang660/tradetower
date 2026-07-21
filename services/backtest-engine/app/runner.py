@@ -53,7 +53,9 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "guardian_read_only_mode": bool(payload.get("guardian_read_only_mode", False)),
         "guardian_maintenance_only_mode": bool(payload.get("guardian_maintenance_only_mode", False)),
         "guardian_max_concurrent_positions": int(payload.get("guardian_max_concurrent_positions", 3)),
-        "guardian_max_account_exposure_pct": float(payload.get("guardian_max_account_exposure_pct", 50.0)),
+        "guardian_max_account_exposure_pct": float(payload.get("guardian_max_account_exposure_pct", 100.0)),
+        "guardian_max_position_leverage": float(payload.get("guardian_max_position_leverage", payload.get("guardian_max_leverage", 15.0))),
+        "guardian_account_max_notional_multiplier": float(payload.get("guardian_account_max_notional_multiplier", payload.get("guardian_account_exposure_multiplier", 10.0))),
         "guardian_daily_loss_limit_pct": float(payload.get("guardian_daily_loss_limit_pct", 3.0)),
         "guardian_weekly_loss_limit_pct": float(payload.get("guardian_weekly_loss_limit_pct", 6.0)),
     }
