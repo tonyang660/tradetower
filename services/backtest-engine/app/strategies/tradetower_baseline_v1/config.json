@@ -1,0 +1,128 @@
+{
+  "strategy_name": "tradetower_baseline_v1",
+  "strategy_version": "0.1.0",
+  "strategy_family": "regime_adaptive",
+  "description": "Backtest baseline shaped after production Strategy Engine v1 orchestration.",
+  "parity_target": {
+    "production_service": "services/strategy-engine",
+    "pipeline": [
+      "snapshot_v1_adapter",
+      "regime_router",
+      "v1_entry_logic",
+      "v1_signal_scorer",
+      "v1_trade_levels",
+      "v1_decision_policy"
+    ],
+    "current_phase": "15B_config_metadata",
+    "parity_status": "partial_until_feature_rich_snapshots"
+  },
+  "timeframe_roles": {
+    "entry": "5m",
+    "primary": "15m",
+    "context": "1h",
+    "htf": "4h"
+  },
+  "required_timeframes": [
+    "5m",
+    "15m",
+    "4h"
+  ],
+  "optional_timeframes": [
+    "1h"
+  ],
+  "active_phase15b_timeframes": [
+    "15m"
+  ],
+  "required_indicators": [
+    "close_history",
+    "momentum_3",
+    "momentum_7",
+    "range_deviation"
+  ],
+  "future_required_indicators_for_full_parity": [
+    "ema_fast",
+    "ema_slow",
+    "ema_200",
+    "macd_hist",
+    "macd_histogram_slope",
+    "rsi_14",
+    "atr_14",
+    "atr_sma_20",
+    "atr_ratio",
+    "swing_high",
+    "swing_low",
+    "bos",
+    "mean_reversion_range",
+    "v1_regime",
+    "v1_regime_strategy",
+    "v1_trend_direction"
+  ],
+  "parameters": {
+    "strategy_trade_threshold": {
+      "type": "float",
+      "default": 75.0,
+      "min": 0,
+      "max": 100,
+      "description": "Normal trade-candidate score threshold."
+    },
+    "strategy_btc_trade_threshold": {
+      "type": "float",
+      "default": 80.0,
+      "min": 0,
+      "max": 100,
+      "description": "BTC-specific trade-candidate threshold."
+    },
+    "strategy_observe_threshold": {
+      "type": "float",
+      "default": 50.0,
+      "min": 0,
+      "max": 100,
+      "description": "Observe threshold parity metadata."
+    },
+    "trend_momentum_3_threshold": {
+      "type": "float",
+      "default": 0.003
+    },
+    "trend_momentum_7_threshold": {
+      "type": "float",
+      "default": 0.001
+    },
+    "mean_reversion_deviation_threshold": {
+      "type": "float",
+      "default": 0.006
+    },
+    "stop_distance_pct": {
+      "type": "float",
+      "default": 0.015
+    },
+    "tp1_r": {
+      "type": "float",
+      "default": 1.5
+    },
+    "tp2_r": {
+      "type": "float",
+      "default": 2.5
+    },
+    "tp3_r": {
+      "type": "float",
+      "default": 3.5
+    },
+    "tp1_close_percent": {
+      "type": "float",
+      "default": 50
+    },
+    "tp2_close_percent": {
+      "type": "float",
+      "default": 30
+    },
+    "tp3_close_percent": {
+      "type": "float",
+      "default": 20
+    }
+  },
+  "candidate_filter": {
+    "registry_role": "standalone_upstream_context",
+    "included_in_strategy_registry": false,
+    "context_key": "candidate_filter_context"
+  }
+}

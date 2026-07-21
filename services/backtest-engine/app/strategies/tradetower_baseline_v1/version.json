@@ -1,0 +1,11 @@
+{
+  "name": "tradetower_baseline_v1",
+  "version": "0.1.0",
+  "schema_version": "strategy_config_v1",
+  "created_in_phase": "15B",
+  "status": "baseline_partial_parity",
+  "compatibility_aliases": [
+    "phase14a_baseline",
+    "baseline"
+  ]
+}

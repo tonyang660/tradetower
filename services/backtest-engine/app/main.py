@@ -17,7 +17,7 @@ from result_api import (
     fetch_trades,
 )
 from runner import list_runs, run_backtest, run_detail
-from strategies.registry import list_strategies
+from strategies.registry import get_strategy_detail, list_strategies
 
 
 def _read_json(handler: BaseHTTPRequestHandler) -> dict:
@@ -97,6 +97,14 @@ class Handler(BaseHTTPRequestHandler):
                     "/backtests/run/result-bundle",
                 ],
             })
+            return
+
+        if parsed.path == "/strategies/detail":
+            strategy_name = query.get("strategy_name", ["tradetower_baseline_v1"])[0]
+            try:
+                self._send_json({"ok": True, "strategy": get_strategy_detail(strategy_name)})
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=404)
             return
 
         if parsed.path == "/strategies":

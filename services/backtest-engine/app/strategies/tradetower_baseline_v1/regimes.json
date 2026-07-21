@@ -1,0 +1,34 @@
+{
+  "router_version": "phase15b_tradetower_baseline_regime_metadata",
+  "production_rule": {
+    "Uptrend": {
+      "selected_strategy": "trend_following",
+      "direction_hint": "long",
+      "reason_tags": [
+        "REGIME_UPTREND",
+        "ROUTE_TREND_FOLLOWING"
+      ]
+    },
+    "Downtrend": {
+      "selected_strategy": "trend_following",
+      "direction_hint": "short",
+      "reason_tags": [
+        "REGIME_DOWNTREND",
+        "ROUTE_TREND_FOLLOWING"
+      ]
+    },
+    "Sideways": {
+      "selected_strategy": "mean_reversion",
+      "direction_hint": "neutral",
+      "reason_tags": [
+        "REGIME_SIDEWAYS",
+        "ROUTE_MEAN_REVERSION"
+      ]
+    }
+  },
+  "phase15b_proxy_rule": {
+    "Uptrend": "m3 > threshold and m7 > threshold",
+    "Downtrend": "m3 < -threshold and m7 < -threshold",
+    "Sideways": "otherwise"
+  }
+}
