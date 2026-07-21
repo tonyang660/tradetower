@@ -6,6 +6,7 @@ from typing import Any
 
 from config import DEFAULT_MAX_CYCLES, DEFAULT_RISK_PER_TRADE_PCT, DEFAULT_SLIPPAGE_BPS, DEFAULT_STARTING_CAPITAL
 from strategies.registry import build_strategy
+from strategies.validation import validate_strategy_run_config
 from db import get_conn
 from historical_feed import build_historical_feed, parse_time
 from market_snapshot import MarketSnapshotBuilder
@@ -49,6 +50,7 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "preflight_strict": bool(payload.get("preflight_strict", True)),
         "warmup_required_bars": int(payload.get("warmup_required_bars", 8)),
         "cycle_decision_log_interval": int(payload.get("cycle_decision_log_interval", 25)),
+        "strategy_validation_strict_timeframes": bool(payload.get("strategy_validation_strict_timeframes", False)),
         "guardian_trading_enabled": bool(payload.get("guardian_trading_enabled", True)),
         "guardian_read_only_mode": bool(payload.get("guardian_read_only_mode", False)),
         "guardian_maintenance_only_mode": bool(payload.get("guardian_maintenance_only_mode", False)),
@@ -233,6 +235,14 @@ def _unrealized(position: dict[str, Any], price: float) -> float:
 
 def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     config = _normalize_config(payload)
+    strategy_validation = validate_strategy_run_config(config)
+    if not strategy_validation.get("valid"):
+        return {
+            "ok": False,
+            "error": "strategy_validation_failed",
+            "validation": strategy_validation,
+            "config": config,
+        }
     run_id = _create_run(config)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("UPDATE backtest_runs SET status='running', started_at=NOW() WHERE run_id=%s", (run_id,))
@@ -456,6 +466,7 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
             "risk_notional_requested": risk_notional_requested,
             "guardian_policy": guardian_policy.to_dict(),
             "fee_model": fee_model.to_dict(),
+            "strategy_validation": strategy_validation,
         }
         _log(run_id, "BACKTEST_COMPLETED", "Phase 14C completed.", {**summary, **diagnostics})
         return {"ok": True, "run_id": run_id, "summary": summary, "diagnostics": diagnostics, "preflight": preflight.to_dict(), "config": config}

@@ -18,6 +18,7 @@ from result_api import (
 )
 from runner import list_runs, run_backtest, run_detail
 from strategies.registry import get_strategy_detail, list_strategies
+from strategies.validation import validate_strategy_payload
 
 
 def _read_json(handler: BaseHTTPRequestHandler) -> dict:
@@ -99,6 +100,21 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
+        if parsed.path == "/strategies/validate":
+            strategy_name = query.get("strategy_name", ["tradetower_baseline_v1"])[0]
+            timeframes = query.get("timeframes", [])
+            cycle_timeframe = query.get("cycle_timeframe", [None])[0]
+            strict = query.get("strict", ["false"])[0].lower() in {"1", "true", "yes"}
+            payload = {
+                "strategy_name": strategy_name,
+                "timeframes": timeframes,
+                "cycle_timeframe": cycle_timeframe,
+                "strategy_validation_strict_timeframes": strict,
+            }
+            validation = validate_strategy_payload(payload)
+            self._send_json({"ok": validation.get("valid", False), "validation": validation}, status=200 if validation.get("valid") else 400)
+            return
+
         if parsed.path == "/strategies/detail":
             strategy_name = query.get("strategy_name", ["tradetower_baseline_v1"])[0]
             try:
@@ -123,6 +139,16 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         # Legacy full payload endpoint kept for compatibility.
+        if parsed.path == "/strategies/validate-run":
+            try:
+                payload = _read_json(self)
+            except Exception:
+                self._send_json({"ok": False, "error": "invalid_json"}, status=400)
+                return
+            validation = validate_strategy_payload(payload)
+            self._send_json({"ok": validation.get("valid", False), "validation": validation}, status=200 if validation.get("valid") else 400)
+            return
+
         if parsed.path == "/backtests/run":
             run_id = self._run_id_or_error(query)
             if run_id is None:
