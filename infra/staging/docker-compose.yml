@@ -218,6 +218,25 @@ services:
     ports:
       - "8113:80"
 
+
+  backtest-engine:
+    build:
+      context: ../..
+      dockerfile: services/backtest-engine/Dockerfile
+    container_name: trading-backtest-engine
+    restart: unless-stopped
+    env_file:
+      - ../env/staging.env
+    environment:
+      - BACKTEST_DEFAULT_STARTING_CAPITAL=2000
+      - BACKTEST_DEFAULT_FEE_BPS=6
+      - BACKTEST_DEFAULT_SLIPPAGE_BPS=3
+      - BACKTEST_DEFAULT_RISK_PER_TRADE_PCT=1.0
+      - BACKTEST_DEFAULT_MAX_CYCLES=300
+    ports:
+      - "8114:8080"
+
+
   api-gateway:
     build: ../../services/api-gateway
     container_name: trading-api-gateway
