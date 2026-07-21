@@ -295,11 +295,37 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
                     filled_exit = requested_exit * (1 - slip if position["side"] == "long" else 1 + slip)
                     gross = _unrealized(position, filled_exit)
                     exit_fee = abs(filled_exit * position["qty"]) * config["fee_bps"] / 10000
-                    net = gross - exit_fee
-                    cash += net
-                    realized_pnl += net
-                    _record_order(run_id, symbol, "sell" if position["side"] == "long" else "buy", "market_exit", requested_exit, filled_exit, position["qty"], exit_fee, exit_reason, timestamp, {"position_id": position["position_id"]})
-                    _close_position(run_id, position, timestamp, filled_exit, gross, exit_fee, net, exit_reason)
+                    cash_delta = gross - exit_fee
+                    trade_net = gross - position["fees"] - exit_fee
+
+                    cash += cash_delta
+                    realized_pnl += cash_delta
+
+                    _record_order(
+                        run_id,
+                        symbol,
+                        "sell" if position["side"] == "long" else "buy",
+                        "market_exit",
+                        requested_exit,
+                        filled_exit,
+                        position["qty"],
+                        exit_fee,
+                        exit_reason,
+                        timestamp,
+                        {"position_id": position["position_id"]},
+                    )
+
+                    _close_position(
+                        run_id,
+                        position,
+                        timestamp,
+                        filled_exit,
+                        gross,
+                        exit_fee,
+                        trade_net,
+                        exit_reason,
+                    )
+
                     del open_positions[symbol]
 
             unrealized = sum(_unrealized(p, closes[s]) for s, p in open_positions.items())
@@ -364,11 +390,36 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
                 filled_exit = requested_exit * (1 - slip if position["side"] == "long" else 1 + slip)
                 gross = _unrealized(position, filled_exit)
                 exit_fee = abs(filled_exit * position["qty"]) * config["fee_bps"] / 10000
-                net = gross - exit_fee
-                cash += net
-                realized_pnl += net
-                _record_order(run_id, symbol, "sell" if position["side"] == "long" else "buy", "market_exit", requested_exit, filled_exit, position["qty"], exit_fee, "END_OF_BACKTEST", timestamp, {"position_id": position["position_id"]})
-                _close_position(run_id, position, timestamp, filled_exit, gross, exit_fee, net, "END_OF_BACKTEST")
+                cash_delta = gross - exit_fee
+                trade_net = gross - position["fees"] - exit_fee
+
+                cash += cash_delta
+                realized_pnl += cash_delta
+
+                _record_order(
+                    run_id,
+                    symbol,
+                    "sell" if position["side"] == "long" else "buy",
+                    "market_exit",
+                    requested_exit,
+                    filled_exit,
+                    position["qty"],
+                    exit_fee,
+                    "END_OF_BACKTEST",
+                    timestamp,
+                    {"position_id": position["position_id"]},
+                )
+
+                _close_position(
+                    run_id,
+                    position,
+                    timestamp,
+                    filled_exit,
+                    gross,
+                    exit_fee,
+                    trade_net,
+                    "END_OF_BACKTEST",
+                )
 
         summary = _finalize_run(run_id, cash, config["starting_capital"], max_drawdown_pct)
         _log(run_id, "BACKTEST_COMPLETED", "Phase 14A completed.", summary)
