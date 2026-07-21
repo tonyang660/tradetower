@@ -1,8 +1,8 @@
+
 from __future__ import annotations
 
 import json
-import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from config import (
@@ -13,22 +13,11 @@ from config import (
     DEFAULT_STARTING_CAPITAL,
 )
 from db import get_conn
+from historical_feed import CandleBar, build_historical_feed, parse_time
 
 
 def _json(value: Any) -> str:
     return json.dumps(value, default=str)
-
-
-def _parse_time(value: str | None, fallback: datetime) -> datetime:
-    if not value:
-        return fallback
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-    except Exception:
-        return fallback
 
 
 def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
@@ -41,32 +30,25 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(timeframes, str):
         timeframes = [timeframes]
 
+    data_mode = payload.get("data_mode", "phase14b_sample_historical_feed")
+
     return {
         "strategy_name": payload.get("strategy_name", "phase14a_baseline"),
         "strategy_version": payload.get("strategy_version", "0.1.0"),
         "symbols": [str(s).upper().replace("/", "").replace("-", "") for s in symbols],
         "timeframes": [str(t) for t in timeframes],
         "cycle_timeframe": cycle_timeframe,
-        "start_time": _parse_time(payload.get("start_time"), datetime(2024, 1, 1, tzinfo=timezone.utc)),
-        "end_time": payload.get("end_time"),
+        "start_time": parse_time(payload.get("start_time"), datetime(2024, 1, 1, tzinfo=timezone.utc)),
+        "end_time": parse_time(payload.get("end_time"), None) if payload.get("end_time") else None,
         "starting_capital": float(payload.get("starting_capital", DEFAULT_STARTING_CAPITAL)),
         "max_cycles": int(payload.get("max_cycles", DEFAULT_MAX_CYCLES)),
         "risk_per_trade_pct": float(payload.get("risk_per_trade_pct", DEFAULT_RISK_PER_TRADE_PCT)),
         "fee_bps": float(payload.get("fee_bps", DEFAULT_FEE_BPS)),
         "slippage_bps": float(payload.get("slippage_bps", DEFAULT_SLIPPAGE_BPS)),
-        "data_mode": "phase14a_sample_stream",
+        "data_mode": data_mode,
         "execution_model": "market_with_fee_slippage_bps",
+        "preflight_strict": bool(payload.get("preflight_strict", True)),
     }
-
-
-def _sample_price(symbol_index: int, cycle_index: int) -> float:
-    return (
-        100
-        + symbol_index * 35
-        + cycle_index * (0.015 + symbol_index * 0.002)
-        + math.sin(cycle_index / 9 + symbol_index) * 1.25
-        + math.sin(cycle_index / 29 + symbol_index * 3) * 0.75
-    )
 
 
 def _create_run(config: dict[str, Any]) -> int:
@@ -251,12 +233,37 @@ def _unrealized(position: dict[str, Any], price: float) -> float:
     return (position["entry"] - price) * position["qty"]
 
 
+def _bar_maps(candles: list[CandleBar]) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    closes = {bar.symbol: bar.close for bar in candles}
+    highs = {bar.symbol: bar.high for bar in candles}
+    lows = {bar.symbol: bar.low for bar in candles}
+    return closes, highs, lows
+
+
 def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     config = _normalize_config(payload)
     run_id = _create_run(config)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("UPDATE backtest_runs SET status='running', started_at=NOW() WHERE run_id=%s", (run_id,))
-    _log(run_id, "BACKTEST_STARTED", "Phase 14A event-driven backtest started.", config)
+    _log(run_id, "BACKTEST_STARTED", "Phase 14B event-driven backtest started.", config)
+
+    feed = build_historical_feed(config)
+    preflight = feed.preflight()
+    _log(run_id, "DATA_PREFLIGHT", "Historical feed preflight completed.", preflight.to_dict(), "INFO" if preflight.ok else "ERROR")
+
+    if not preflight.ok and config["preflight_strict"]:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE backtest_runs SET status='failed', completed_at=NOW(), error=%s WHERE run_id=%s",
+                ("data_preflight_failed", run_id),
+            )
+        return {
+            "ok": False,
+            "run_id": run_id,
+            "error": "data_preflight_failed",
+            "preflight": preflight.to_dict(),
+            "config": config,
+        }
 
     cash = config["starting_capital"]
     realized_pnl = 0.0
@@ -264,14 +271,17 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     max_drawdown_pct = 0.0
     open_positions: dict[str, dict[str, Any]] = {}
     history = {symbol: [] for symbol in config["symbols"]}
-    minutes = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240}.get(config["cycle_timeframe"], 15)
 
     try:
-        for i in range(config["max_cycles"]):
-            timestamp = config["start_time"] + timedelta(minutes=minutes * i)
-            closes = {symbol: _sample_price(idx, i) for idx, symbol in enumerate(config["symbols"])}
-            highs = {symbol: price + 0.6 for symbol, price in closes.items()}
-            lows = {symbol: price - 0.6 for symbol, price in closes.items()}
+        last_candles: list[CandleBar] = []
+
+        for candles in feed.iter_cycles():
+            if not candles:
+                continue
+
+            last_candles = candles
+            timestamp = candles[0].timestamp
+            closes, highs, lows = _bar_maps(candles)
 
             for symbol, position in list(open_positions.items()):
                 position["bars"] += 1
@@ -295,37 +305,14 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
                     filled_exit = requested_exit * (1 - slip if position["side"] == "long" else 1 + slip)
                     gross = _unrealized(position, filled_exit)
                     exit_fee = abs(filled_exit * position["qty"]) * config["fee_bps"] / 10000
+
                     cash_delta = gross - exit_fee
                     trade_net = gross - position["fees"] - exit_fee
-
                     cash += cash_delta
                     realized_pnl += cash_delta
 
-                    _record_order(
-                        run_id,
-                        symbol,
-                        "sell" if position["side"] == "long" else "buy",
-                        "market_exit",
-                        requested_exit,
-                        filled_exit,
-                        position["qty"],
-                        exit_fee,
-                        exit_reason,
-                        timestamp,
-                        {"position_id": position["position_id"]},
-                    )
-
-                    _close_position(
-                        run_id,
-                        position,
-                        timestamp,
-                        filled_exit,
-                        gross,
-                        exit_fee,
-                        trade_net,
-                        exit_reason,
-                    )
-
+                    _record_order(run_id, symbol, "sell" if position["side"] == "long" else "buy", "market_exit", requested_exit, filled_exit, position["qty"], exit_fee, exit_reason, timestamp, {"position_id": position["position_id"]})
+                    _close_position(run_id, position, timestamp, filled_exit, gross, exit_fee, trade_net, exit_reason)
                     del open_positions[symbol]
 
             unrealized = sum(_unrealized(p, closes[s]) for s, p in open_positions.items())
@@ -336,9 +323,13 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
             _record_equity(run_id, timestamp, equity, cash, realized_pnl, unrealized, drawdown_pct)
 
             for symbol_index, symbol in enumerate(config["symbols"]):
+                if symbol not in closes:
+                    continue
+
                 history[symbol].append(closes[symbol])
                 if symbol in open_positions or len(history[symbol]) < 8:
                     continue
+
                 m3 = (history[symbol][-1] - history[symbol][-4]) / history[symbol][-4]
                 m7 = (history[symbol][-1] - history[symbol][-8]) / history[symbol][-8]
                 side = None
@@ -355,11 +346,13 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
                 qty = risk / abs(entry - stop) if abs(entry - stop) > 0 else 0
                 if qty <= 0:
                     continue
+
                 slip = config["slippage_bps"] / 10000
                 filled_entry = entry * (1 + slip if side == "long" else 1 - slip)
                 entry_fee = abs(filled_entry * qty) * config["fee_bps"] / 10000
                 cash -= entry_fee
                 realized_pnl -= entry_fee
+
                 position = {
                     "symbol": symbol,
                     "side": side,
@@ -376,59 +369,39 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
                     "score": 70.0,
                     "confidence": 0.70,
                     "reason_tags": ["PHASE14A_BASELINE", "EVENT_DRIVEN_TEST"],
-                    "debug": {"m3": m3, "m7": m7},
+                    "debug": {"m3": m3, "m7": m7, "data_mode": config["data_mode"]},
                 }
                 _record_order(run_id, symbol, "buy" if side == "long" else "sell", "market_entry", entry, filled_entry, qty, entry_fee, "STRATEGY_ENTRY", timestamp, {"score": 70})
                 _open_position(run_id, position)
                 open_positions[symbol] = position
 
-        if config["max_cycles"] > 0:
-            timestamp = config["start_time"] + timedelta(minutes=minutes * (config["max_cycles"] - 1))
+        if last_candles:
+            timestamp = last_candles[0].timestamp
+            closes, _, _ = _bar_maps(last_candles)
             for symbol, position in list(open_positions.items()):
-                requested_exit = _sample_price(config["symbols"].index(symbol), config["max_cycles"] - 1)
+                requested_exit = closes[symbol]
                 slip = config["slippage_bps"] / 10000
                 filled_exit = requested_exit * (1 - slip if position["side"] == "long" else 1 + slip)
                 gross = _unrealized(position, filled_exit)
                 exit_fee = abs(filled_exit * position["qty"]) * config["fee_bps"] / 10000
+
                 cash_delta = gross - exit_fee
                 trade_net = gross - position["fees"] - exit_fee
-
                 cash += cash_delta
                 realized_pnl += cash_delta
 
-                _record_order(
-                    run_id,
-                    symbol,
-                    "sell" if position["side"] == "long" else "buy",
-                    "market_exit",
-                    requested_exit,
-                    filled_exit,
-                    position["qty"],
-                    exit_fee,
-                    "END_OF_BACKTEST",
-                    timestamp,
-                    {"position_id": position["position_id"]},
-                )
-
-                _close_position(
-                    run_id,
-                    position,
-                    timestamp,
-                    filled_exit,
-                    gross,
-                    exit_fee,
-                    trade_net,
-                    "END_OF_BACKTEST",
-                )
+                _record_order(run_id, symbol, "sell" if position["side"] == "long" else "buy", "market_exit", requested_exit, filled_exit, position["qty"], exit_fee, "END_OF_BACKTEST", timestamp, {"position_id": position["position_id"]})
+                _close_position(run_id, position, timestamp, filled_exit, gross, exit_fee, trade_net, "END_OF_BACKTEST")
+                del open_positions[symbol]
 
         summary = _finalize_run(run_id, cash, config["starting_capital"], max_drawdown_pct)
-        _log(run_id, "BACKTEST_COMPLETED", "Phase 14A completed.", summary)
-        return {"ok": True, "run_id": run_id, "summary": summary, "config": config}
+        _log(run_id, "BACKTEST_COMPLETED", "Phase 14B completed.", {**summary, "preflight": preflight.to_dict()})
+        return {"ok": True, "run_id": run_id, "summary": summary, "preflight": preflight.to_dict(), "config": config}
     except Exception as exc:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute("UPDATE backtest_runs SET status='failed', completed_at=NOW(), error=%s WHERE run_id=%s", (str(exc), run_id))
         _log(run_id, "BACKTEST_FAILED", str(exc), config, "ERROR")
-        return {"ok": False, "run_id": run_id, "error": str(exc), "config": config}
+        return {"ok": False, "run_id": run_id, "error": str(exc), "config": config, "preflight": preflight.to_dict()}
 
 
 def list_runs(limit: int = 20) -> list[dict[str, Any]]:
