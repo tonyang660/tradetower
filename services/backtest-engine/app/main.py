@@ -6,6 +6,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from config import PORT, SERVICE_NAME
+from datasets.registry import (
+    create_download_job,
+    dataset_defaults,
+    get_dataset,
+    list_dataset_sources,
+    list_datasets,
+    register_dataset,
+)
 from result_api import (
     fetch_equity_curve,
     fetch_logs,
@@ -81,6 +89,31 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
 
+        if parsed.path == "/datasets/defaults":
+            self._send_json({"ok": True, "defaults": dataset_defaults()})
+            return
+
+        if parsed.path == "/datasets/sources":
+            self._send_json({"ok": True, "sources": list_dataset_sources()})
+            return
+
+        if parsed.path == "/datasets":
+            limit = _query_int(query, "limit", 50)
+            self._send_json({"ok": True, "datasets": list_datasets(limit=limit)})
+            return
+
+        if parsed.path == "/datasets/detail":
+            dataset_id = _query_int(query, "dataset_id", 0)
+            if dataset_id <= 0:
+                self._send_json({"ok": False, "error": "invalid_dataset_id"}, status=400)
+                return
+            dataset = get_dataset(dataset_id)
+            if not dataset:
+                self._send_json({"ok": False, "error": "dataset_not_found", "dataset_id": dataset_id}, status=404)
+                return
+            self._send_json({"ok": True, "dataset": dataset})
+            return
+
         if parsed.path == "/health":
             self._send_json({
                 "ok": True,
@@ -139,6 +172,24 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         # Legacy full payload endpoint kept for compatibility.
+        if parsed.path == "/datasets/register":
+            try:
+                payload = _read_json(self)
+                result = register_dataset(payload)
+                self._send_json(result)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if parsed.path == "/datasets/download-jobs":
+            try:
+                payload = _read_json(self)
+                result = create_download_job(payload)
+                self._send_json(result)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
         if parsed.path == "/strategies/validate-run":
             try:
                 payload = _read_json(self)
