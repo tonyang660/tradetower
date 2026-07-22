@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from config import PORT, SERVICE_NAME
+from datasets.binance_downloader import run_download_job
 from datasets.registry import (
     create_download_job,
     dataset_defaults,
@@ -177,6 +178,15 @@ class Handler(BaseHTTPRequestHandler):
                 payload = _read_json(self)
                 result = register_dataset(payload)
                 self._send_json(result)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if parsed.path == "/datasets/download-binance":
+            try:
+                payload = _read_json(self)
+                result = run_download_job(payload)
+                self._send_json(result, status=200 if result.get("ok") else 500)
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, status=400)
             return

@@ -17,3 +17,23 @@ config/symbol_universe.json
 # Local environment files
 infra/env/*.env
 !infra/env/*.env.example
+
+# Historical market datasets / Binance archives
+/data/
+/data/historical/
+/historical_data/
+/datasets/
+/binance_data/
+/candles/
+/klines/
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.arrow
+*.duckdb
+*.sqlite
+*.zip
+*.csv.gz
+*.csv.tmp
+candles.csv
