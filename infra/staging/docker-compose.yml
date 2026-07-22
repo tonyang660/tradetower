@@ -233,6 +233,8 @@ services:
       - BACKTEST_DEFAULT_SLIPPAGE_BPS=3
       - BACKTEST_DEFAULT_RISK_PER_TRADE_PCT=1.0
       - BACKTEST_DEFAULT_MAX_CYCLES=300
+    volumes:
+      - ../../data/historical/binance:/data/historical/binance
     ports:
       - "8114:8080"
 
