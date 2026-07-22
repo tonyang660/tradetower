@@ -172,44 +172,6 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
-        # Legacy full payload endpoint kept for compatibility.
-        if parsed.path == "/datasets/register":
-            try:
-                payload = _read_json(self)
-                result = register_dataset(payload)
-                self._send_json(result)
-            except Exception as exc:
-                self._send_json({"ok": False, "error": str(exc)}, status=400)
-            return
-
-        if parsed.path == "/datasets/download-binance":
-            try:
-                payload = _read_json(self)
-                result = run_download_job(payload)
-                self._send_json(result, status=200 if result.get("ok") else 500)
-            except Exception as exc:
-                self._send_json({"ok": False, "error": str(exc)}, status=400)
-            return
-
-        if parsed.path == "/datasets/download-jobs":
-            try:
-                payload = _read_json(self)
-                result = create_download_job(payload)
-                self._send_json(result)
-            except Exception as exc:
-                self._send_json({"ok": False, "error": str(exc)}, status=400)
-            return
-
-        if parsed.path == "/strategies/validate-run":
-            try:
-                payload = _read_json(self)
-            except Exception:
-                self._send_json({"ok": False, "error": "invalid_json"}, status=400)
-                return
-            validation = validate_strategy_payload(payload)
-            self._send_json({"ok": validation.get("valid", False), "validation": validation}, status=200 if validation.get("valid") else 400)
-            return
-
         if parsed.path == "/backtests/run":
             run_id = self._run_id_or_error(query)
             if run_id is None:
@@ -277,6 +239,43 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+
+        if parsed.path == "/datasets/register":
+            try:
+                payload = _read_json(self)
+                result = register_dataset(payload)
+                self._send_json(result)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if parsed.path == "/datasets/download-binance":
+            try:
+                payload = _read_json(self)
+                result = run_download_job(payload)
+                self._send_json(result, status=200 if result.get("ok") else 500)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if parsed.path == "/datasets/download-jobs":
+            try:
+                payload = _read_json(self)
+                result = create_download_job(payload)
+                self._send_json(result)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if parsed.path == "/strategies/validate-run":
+            try:
+                payload = _read_json(self)
+            except Exception:
+                self._send_json({"ok": False, "error": "invalid_json"}, status=400)
+                return
+            validation = validate_strategy_payload(payload)
+            self._send_json({"ok": validation.get("valid", False), "validation": validation}, status=200 if validation.get("valid") else 400)
+            return
 
         if parsed.path == "/backtests/run":
             try:
