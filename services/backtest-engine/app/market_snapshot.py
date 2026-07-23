@@ -20,6 +20,7 @@ class MarketSnapshot:
     warmup_required_bars: int
     warmup_ready: dict[str, bool]
     lookahead_guard: dict[str, Any]
+    timeframe_history: dict[str, dict[str, list[CandleBar]]]
 
     def to_log_dict(self) -> dict[str, Any]:
         return {
@@ -30,20 +31,19 @@ class MarketSnapshot:
             "warmup_ready": self.warmup_ready,
             "lookahead_guard": self.lookahead_guard,
             "closes": self.closes,
+            "timeframe_history": {
+                symbol: {tf: len(rows) for tf, rows in tf_map.items()}
+                for symbol, tf_map in self.timeframe_history.items()
+            },
         }
 
 
 class MarketSnapshotBuilder:
-    """Build point-in-time snapshots from the historical event stream.
-
-    The builder appends only candles that have already arrived. Strategies see
-    current + past bars only, never future bars.
-    """
-
     def __init__(self, symbols: list[str], warmup_required_bars: int = 8):
         self.symbols = [str(s).upper().replace("/", "").replace("-", "") for s in symbols]
         self.warmup_required_bars = max(1, int(warmup_required_bars))
         self._close_history: dict[str, list[float]] = {symbol: [] for symbol in self.symbols}
+        self._timeframe_history: dict[str, dict[str, list[CandleBar]]] = {symbol: {} for symbol in self.symbols}
         self._last_timestamp: datetime | None = None
 
     def build(self, cycle_index: int, candles: list[CandleBar]) -> MarketSnapshot:
@@ -55,10 +55,15 @@ class MarketSnapshotBuilder:
             raise ValueError("historical_feed_timestamp_regressed")
         self._last_timestamp = timestamp
 
-        bars = {bar.symbol: bar for bar in candles}
-        closes = {symbol: bar.close for symbol, bar in bars.items()}
-        highs = {symbol: bar.high for symbol, bar in bars.items()}
-        lows = {symbol: bar.low for symbol, bar in bars.items()}
+        cycle_tf = candles[0].timeframe
+        cycle_bars = {bar.symbol: bar for bar in candles if bar.timeframe == cycle_tf}
+
+        for bar in candles:
+            self._timeframe_history.setdefault(bar.symbol, {}).setdefault(bar.timeframe, []).append(bar)
+
+        closes = {symbol: bar.close for symbol, bar in cycle_bars.items()}
+        highs = {symbol: bar.high for symbol, bar in cycle_bars.items()}
+        lows = {symbol: bar.low for symbol, bar in cycle_bars.items()}
 
         for symbol in self.symbols:
             if symbol in closes:
@@ -73,7 +78,7 @@ class MarketSnapshotBuilder:
             timestamp=timestamp,
             cycle_index=cycle_index,
             symbols=self.symbols,
-            bars=bars,
+            bars=cycle_bars,
             closes=closes,
             highs=highs,
             lows=lows,
@@ -86,5 +91,10 @@ class MarketSnapshotBuilder:
                 "future_candle_access": False,
                 "cycle_index": cycle_index,
                 "current_timestamp": timestamp.isoformat(),
+                "phase16f_hf1_timeframe_history": True,
+            },
+            timeframe_history={
+                symbol: {tf: list(rows) for tf, rows in tf_map.items()}
+                for symbol, tf_map in self._timeframe_history.items()
             },
         )

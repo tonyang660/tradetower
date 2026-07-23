@@ -305,6 +305,9 @@ def build_historical_feed(config: dict) -> HistoricalFeed:
             max_cycles=config["max_cycles"],
         )
 
+    if data_mode == "local_historical_dataset":
+        return LocalHistoricalDatasetFeed(config)
+
     if data_mode in {"data_hub", "data_hub_historical_range"}:
         return DataHubHistoricalFeed(
             symbols=config["symbols"],

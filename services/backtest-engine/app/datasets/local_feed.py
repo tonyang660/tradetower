@@ -102,8 +102,9 @@ class LocalHistoricalDatasetFeed:
         self._load()
         for ts in self._cycle_timestamps:
             cycle = []
+            ordered_timeframes = [self.cycle_timeframe] + [tf for tf in self.timeframes if tf != self.cycle_timeframe]
             for symbol in self.symbols:
-                for timeframe in self.timeframes:
+                for timeframe in ordered_timeframes:
                     row = self._latest_at_or_before(self._candles[symbol][timeframe], ts)
                     if row is not None:
                         cycle.append(row)
