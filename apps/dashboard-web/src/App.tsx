@@ -5,18 +5,10 @@ import LiveCycleMonitorPage from "./pages/LiveCycleMonitorPage";
 import PositionsOrdersPage from "./pages/PositionsOrdersPage";
 import PerformancePage from "./pages/PerformancePage";
 import StrategyAnalyticsPage from "./pages/StrategyAnalyticsPage";
+import BacktestPage from "./pages/BacktestPage";
 import SystemHealthPage from "./pages/SystemHealthPage";
 import ConfigurationPage from "./pages/ConfigurationPage";
 import { AccountProvider } from "./lib/accountContext";
-
-function PlaceholderPage({ title }: { title: string }) {
-  return (
-    <div className="rounded-[28px] border border-white/10 bg-white/6 p-6 shadow-glass backdrop-blur-xl">
-      <div className="text-2xl font-semibold tracking-tight text-white">{title}</div>
-      <div className="mt-2 text-white/50">This page is currently under construction.</div>
-    </div>
-  );
-}
 
 export default function App() {
   return (
@@ -28,7 +20,7 @@ export default function App() {
         <Route path="/positions-orders" element={<PositionsOrdersPage />} />
         <Route path="/performance" element={<PerformancePage />} />
         <Route path="/strategy-analytics" element={<StrategyAnalyticsPage />} />
-        <Route path="/backtest" element={<PlaceholderPage title="Backtest"/>} />
+        <Route path="/backtest" element={<BacktestPage />} />
         <Route path="/system-health" element={<SystemHealthPage />} />
         <Route path="/configuration" element={<ConfigurationPage />} />
         </Routes>
