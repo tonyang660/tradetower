@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlparse
 from config import PORT, SERVICE_NAME
 from datasets.binance_downloader import run_download_job
 from datasets.parquet_store import convert_dataset_to_parquet, read_candles
+from datasets.quality_scanner import quality_summary, scan_dataset_quality
 from datasets.registry import (
     create_download_job,
     dataset_defaults,
@@ -90,6 +91,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
+
+        if parsed.path == "/datasets/quality-summary":
+            dataset_id = _query_int(query, "dataset_id", 0)
+            if dataset_id <= 0:
+                self._send_json({"ok": False, "error": "invalid_dataset_id"}, status=400)
+                return
+            self._send_json(quality_summary(dataset_id))
+            return
 
         if parsed.path == "/datasets/candles":
             dataset_id = _query_int(query, "dataset_id", 0)
@@ -258,6 +267,16 @@ class Handler(BaseHTTPRequestHandler):
                 payload = _read_json(self)
                 result = register_dataset(payload)
                 self._send_json(result)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if parsed.path == "/datasets/scan-quality":
+            try:
+                payload = _read_json(self)
+                dataset_id = int(payload.get("dataset_id"))
+                result = scan_dataset_quality(dataset_id=dataset_id, symbols=payload.get("symbols"), timeframes=payload.get("timeframes"))
+                self._send_json(result, status=200 if result.get("ok") else 500)
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, status=400)
             return
