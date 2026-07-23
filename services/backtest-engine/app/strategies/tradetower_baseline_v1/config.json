@@ -1,6 +1,6 @@
 {
   "strategy_name": "tradetower_baseline_v1",
-  "strategy_version": "0.1.0",
+  "strategy_version": "0.2.0",
   "strategy_family": "regime_adaptive",
   "description": "Backtest baseline shaped after production Strategy Engine v1 orchestration.",
   "parity_target": {
@@ -121,9 +121,9 @@
     }
   },
   "candidate_filter": {
-    "registry_role": "standalone_upstream_context",
-    "included_in_strategy_registry": false,
-    "context_key": "candidate_filter_context"
+    "included": true,
+    "mode": "lenient_screener",
+    "role": "pre-screen before strategy decision; does not make final trade decision"
   },
   "parity_adapter_version": "phase15c_strategy_engine_parity_adapter",
   "phase15c_pipeline": [
@@ -141,5 +141,16 @@
     "tp2_reprice_stop_to_breakeven": "Phase 18 position manager",
     "regime_change_sl2": "Phase 18/20 maintenance simulation",
     "volatility_spike_sl2": "Phase 18 execution + Phase 20 forward comparison"
-  }
+  },
+  "parity_status": "phase16f_feature_candidate_strategy_parity",
+  "production_parity_components": [
+    "feature_factory_v2",
+    "candidate_filter_v2",
+    "snapshot_v1_adapter",
+    "regime_router",
+    "v1_entry_logic",
+    "v1_signal_scorer",
+    "v1_trade_levels",
+    "v1_decision_policy"
+  ]
 }
