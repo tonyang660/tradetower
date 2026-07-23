@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 
 from config import PORT, SERVICE_NAME
 from datasets.binance_downloader import run_download_job
+from datasets.parquet_store import convert_dataset_to_parquet, read_candles
 from datasets.registry import (
     create_download_job,
     dataset_defaults,
@@ -89,6 +90,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
+
+        if parsed.path == "/datasets/candles":
+            dataset_id = _query_int(query, "dataset_id", 0)
+            symbol = query.get("symbol", [""])[0]
+            timeframe = query.get("timeframe", [""])[0]
+            limit = _query_int(query, "limit", 100)
+            if not symbol or not timeframe:
+                self._send_json({"ok": False, "error": "symbol_and_timeframe_required"}, status=400)
+                return
+            candles = read_candles(symbol=symbol, timeframe=timeframe, dataset_id=dataset_id or None, limit=limit)
+            self._send_json({"ok": True, "dataset_id": dataset_id or None, "symbol": symbol, "timeframe": timeframe, "count": len(candles), "candles": candles})
+            return
 
         if parsed.path == "/datasets/defaults":
             self._send_json({"ok": True, "defaults": dataset_defaults()})
@@ -245,6 +258,16 @@ class Handler(BaseHTTPRequestHandler):
                 payload = _read_json(self)
                 result = register_dataset(payload)
                 self._send_json(result)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if parsed.path == "/datasets/convert-parquet":
+            try:
+                payload = _read_json(self)
+                dataset_id = int(payload.get("dataset_id"))
+                result = convert_dataset_to_parquet(dataset_id=dataset_id, symbols=payload.get("symbols"), timeframes=payload.get("timeframes"))
+                self._send_json(result, status=200 if result.get("ok") else 500)
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc)}, status=400)
             return
