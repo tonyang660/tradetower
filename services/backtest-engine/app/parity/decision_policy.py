@@ -1,10 +1,78 @@
 from __future__ import annotations
-DECISION_POLICY_VERSION='phase16f_v1_decision_policy'; TRADE_DECISION='trade_candidate'; OBSERVE_DECISION='observe'; NO_TRADE_DECISION='no_trade'
-def decide_strategy_signal(*,symbol,regime_route,entry_validation,score_result,account_context,snapshot_refs,candidate_filter_context,proposed_trade):
-    account_context=account_context or {}; candidate_filter_context=candidate_filter_context or {}; base=float(account_context.get('strategy_trade_threshold',75)); btc=float(account_context.get('strategy_btc_trade_threshold',80)); obs=float(account_context.get('strategy_observe_threshold',50)); thr=btc if symbol.upper().startswith('BTC') else base; score=float(score_result.get('score',0) or 0); valid=bool(entry_validation.get('valid')); tags=[]; tags+=regime_route.get('reason_tags',[])+entry_validation.get('passed_conditions',[])+entry_validation.get('failed_conditions',[])+score_result.get('reason_tags',[])
-    if not candidate_filter_context.get('passed',True): dec,legacy,reason=NO_TRADE_DECISION,'no_trade','CANDIDATE_FILTER_REJECTED'
-    elif valid and proposed_trade and proposed_trade.get('valid') and score>=thr: dec,legacy,reason=TRADE_DECISION,'trade','TRADE_CANDIDATE'
-    elif score>=obs: dec,legacy,reason=OBSERVE_DECISION,'observe','OBSERVE_ONLY'
-    else: dec,legacy,reason=NO_TRADE_DECISION,'no_trade',entry_validation.get('reason') or 'SCORE_BELOW_THRESHOLD'
+
+DECISION_POLICY_VERSION = 'phase16f_v1_decision_policy'
+TRADE_DECISION = 'trade_candidate'
+OBSERVE_DECISION = 'observe'
+NO_TRADE_DECISION = 'no_trade'
+
+
+def decide_strategy_signal(
+    *,
+    symbol,
+    regime_route,
+    entry_validation,
+    score_result,
+    account_context,
+    snapshot_refs,
+    candidate_filter_context,
+    proposed_trade,
+):
+    account_context = account_context or {}
+    candidate_filter_context = candidate_filter_context or {}
+
+    base = float(account_context.get('strategy_trade_threshold', 75))
+    btc = float(account_context.get('strategy_btc_trade_threshold', 80))
+    obs = float(account_context.get('strategy_observe_threshold', 50))
+    
+    thr = btc if symbol.upper().startswith('BTC') else base
+    score = float(score_result.get('score', 0) or 0)
+    valid = bool(entry_validation.get('valid'))
+
+    tags = []
+    tags += (
+        regime_route.get('reason_tags', [])
+        + entry_validation.get('passed_conditions', [])
+        + entry_validation.get('failed_conditions', [])
+        + score_result.get('reason_tags', [])
+    )
+
+    if not candidate_filter_context.get('passed', True):
+        dec, legacy, reason = NO_TRADE_DECISION, 'no_trade', 'CANDIDATE_FILTER_REJECTED'
+    elif valid and proposed_trade and proposed_trade.get('valid') and score >= thr:
+        dec, legacy, reason = TRADE_DECISION, 'trade', 'TRADE_CANDIDATE'
+    elif score >= obs:
+        dec, legacy, reason = OBSERVE_DECISION, 'observe', 'OBSERVE_ONLY'
+    else:
+        dec, legacy, reason = (
+            NO_TRADE_DECISION,
+            'no_trade',
+            entry_validation.get('reason') or 'SCORE_BELOW_THRESHOLD',
+        )
+
     tags.append(reason)
-    return {'ok':True,'decision_policy_version':DECISION_POLICY_VERSION,'symbol':symbol,'decision':dec,'legacy_decision':legacy,'decision_side':entry_validation.get('direction') if entry_validation.get('direction') in ('long','short') else None,'regime':regime_route.get('regime'),'selected_strategy':regime_route.get('selected_strategy'),'score':score,'confidence':min(.95,max(0,score/100)),'reason':reason,'reason_tags':sorted(set(tags)),'thresholds':{'trade':thr,'observe':obs},'regime_route':regime_route,'entry_validation':entry_validation,'score_result':score_result,'proposed_trade':proposed_trade,'candidate_filter_context':candidate_filter_context,'snapshot_refs':snapshot_refs}
+
+    return {
+        'ok': True,
+        'decision_policy_version': DECISION_POLICY_VERSION,
+        'symbol': symbol,
+        'decision': dec,
+        'legacy_decision': legacy,
+        'decision_side': (
+            entry_validation.get('direction')
+            if entry_validation.get('direction') in ('long', 'short')
+            else None
+        ),
+        'regime': regime_route.get('regime'),
+        'selected_strategy': regime_route.get('selected_strategy'),
+        'score': score,
+        'confidence': min(0.95, max(0, score / 100)),
+        'reason': reason,
+        'reason_tags': sorted(set(tags)),
+        'thresholds': {'trade': thr, 'observe': obs},
+        'regime_route': regime_route,
+        'entry_validation': entry_validation,
+        'score_result': score_result,
+        'proposed_trade': proposed_trade,
+        'candidate_filter_context': candidate_filter_context,
+        'snapshot_refs': snapshot_refs,
+    }
