@@ -46,6 +46,7 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "limit_order_fill_ratio": float(payload.get("limit_order_fill_ratio", 0.80)),
         "slippage_bps": float(payload.get("slippage_bps", DEFAULT_SLIPPAGE_BPS)),
         "data_mode": payload.get("data_mode", "phase14b_sample_historical_feed"),
+        "dataset_id": int(payload.get("dataset_id", 0) or 0),
         "execution_model": "market_with_fee_slippage_bps",
         "preflight_strict": bool(payload.get("preflight_strict", True)),
         "warmup_required_bars": int(payload.get("warmup_required_bars", 8)),

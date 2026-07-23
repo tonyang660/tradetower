@@ -1,3 +1,4 @@
+from datasets.local_feed import LocalHistoricalDatasetFeed
 
 from __future__ import annotations
 
@@ -322,3 +323,8 @@ def build_historical_feed(config: dict) -> HistoricalFeed:
         end_time=config.get("end_time"),
         max_cycles=config["max_cycles"],
     )
+
+
+# Phase 16E fallback helper. Route data_mode=local_historical_dataset to this if your feed factory is custom.
+def build_local_historical_dataset_feed(config):
+    return LocalHistoricalDatasetFeed(config)

@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlparse
 from config import PORT, SERVICE_NAME
 from datasets.binance_downloader import run_download_job
 from datasets.parquet_store import convert_dataset_to_parquet, read_candles
+from datasets.local_dataset import dataset_assets_summary, validate_local_dataset_request
 from datasets.quality_scanner import quality_summary, scan_dataset_quality
 from datasets.registry import (
     create_download_job,
@@ -91,6 +92,27 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
+
+        if parsed.path == "/datasets/feed-preflight":
+            dataset_id = _query_int(query, "dataset_id", 0)
+            symbols = query.get("symbols", [])
+            timeframes = query.get("timeframes", [])
+            start_time = query.get("start_time", [None])[0]
+            end_time = query.get("end_time", [None])[0]
+            if dataset_id <= 0:
+                self._send_json({"ok": False, "error": "invalid_dataset_id"}, status=400)
+                return
+            validation = validate_local_dataset_request(dataset_id=dataset_id, symbols=symbols, timeframes=timeframes, start_time=start_time, end_time=end_time)
+            self._send_json({"ok": validation.get("ok", False), "validation": validation}, status=200 if validation.get("ok") else 400)
+            return
+
+        if parsed.path == "/datasets/assets-summary":
+            dataset_id = _query_int(query, "dataset_id", 0)
+            if dataset_id <= 0:
+                self._send_json({"ok": False, "error": "invalid_dataset_id"}, status=400)
+                return
+            self._send_json({"ok": True, "dataset_id": dataset_id, "assets": dataset_assets_summary(dataset_id)})
+            return
 
         if parsed.path == "/datasets/quality-summary":
             dataset_id = _query_int(query, "dataset_id", 0)
