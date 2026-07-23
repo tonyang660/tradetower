@@ -31,7 +31,7 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "strategy_name": payload.get("strategy_name", "tradetower_baseline_v1"),
-        "strategy_version": payload.get("strategy_version", "0.1.0"),
+        "strategy_version": payload.get("strategy_version", "0.2.0" if payload.get("strategy_name", "tradetower_baseline_v1") == "tradetower_baseline_v1" else "0.1.0"),
         "symbols": [str(s).upper().replace("/", "").replace("-", "") for s in symbols],
         "timeframes": [str(t) for t in timeframes],
         "cycle_timeframe": cycle_timeframe,

@@ -1,11 +1,16 @@
 {
   "strategy_name": "tradetower_baseline_v1",
   "strategy_version": "0.2.0",
-  "strategy_family": "regime_adaptive",
-  "description": "Backtest baseline shaped after production Strategy Engine v1 orchestration.",
+  "schema_version": "strategy_config_v1",
+  "created_in_phase": "16F",
+  "status": "phase16f_feature_candidate_strategy_parity",
+  "strategy_family": "production_parity",
+  "description": "Production-parity TradeTower baseline using Feature Factory v2, Candidate Filter v2, and Strategy Engine v1 parity modules.",
   "parity_target": {
     "production_service": "services/strategy-engine",
     "pipeline": [
+      "feature_factory_v2",
+      "candidate_filter_v2",
       "snapshot_v1_adapter",
       "regime_router",
       "v1_entry_logic",
@@ -13,8 +18,9 @@
       "v1_trade_levels",
       "v1_decision_policy"
     ],
-    "current_phase": "15B_config_metadata",
-    "parity_status": "partial_until_feature_rich_snapshots"
+    "current_phase": "16F",
+    "parity_status": "implemented_for_signal_generation",
+    "note": "Execution lifecycle features such as adaptive stop movement remain Phase 18."
   },
   "timeframe_roles": {
     "entry": "5m",
@@ -30,18 +36,19 @@
   "optional_timeframes": [
     "1h"
   ],
-  "active_phase15b_timeframes": [
-    "15m"
+  "active_phase_timeframes": [
+    "5m",
+    "15m",
+    "1h",
+    "4h"
   ],
   "required_indicators": [
-    "close_history",
-    "momentum_3",
-    "momentum_7",
-    "range_deviation"
-  ],
-  "future_required_indicators_for_full_parity": [
+    "market_snapshot_v2",
+    "candidate_filter_v2",
+    "strategy_signal_v2",
     "ema_fast",
-    "ema_slow",
+    "ema_21",
+    "ema_50",
     "ema_200",
     "macd_hist",
     "macd_histogram_slope",
@@ -51,7 +58,7 @@
     "atr_ratio",
     "swing_high",
     "swing_low",
-    "bos",
+    "break_of_structure",
     "mean_reversion_range",
     "v1_regime",
     "v1_regime_strategy",
@@ -77,23 +84,12 @@
       "default": 50.0,
       "min": 0,
       "max": 100,
-      "description": "Observe threshold parity metadata."
+      "description": "Observe threshold."
     },
-    "trend_momentum_3_threshold": {
+    "stop_atr_multiplier": {
       "type": "float",
-      "default": 0.003
-    },
-    "trend_momentum_7_threshold": {
-      "type": "float",
-      "default": 0.001
-    },
-    "mean_reversion_deviation_threshold": {
-      "type": "float",
-      "default": 0.006
-    },
-    "stop_distance_pct": {
-      "type": "float",
-      "default": 0.015
+      "default": 2.5,
+      "description": "Initial stop distance in ATR units for signal-level trade proposal."
     },
     "tp1_r": {
       "type": "float",
@@ -122,27 +118,10 @@
   },
   "candidate_filter": {
     "included": true,
+    "schema_version": "candidate_filter_v2",
     "mode": "lenient_screener",
-    "role": "pre-screen before strategy decision; does not make final trade decision"
+    "role": "pre-screen before Strategy Engine; does not make final trade/no-trade decision"
   },
-  "parity_adapter_version": "phase15c_strategy_engine_parity_adapter",
-  "phase15c_pipeline": [
-    "validate_snapshot_for_strategy",
-    "route_regime",
-    "direction_candidates_for_route",
-    "check_v1_entry",
-    "score_v1_signal",
-    "build_proposed_trade",
-    "decide_strategy_signal"
-  ],
-  "lifecycle_features_not_implemented_yet": {
-    "adaptive_stop_loss": "Phase 18 realistic execution simulator",
-    "tp1_reprice_stop_to_half_risk": "Phase 18 position manager",
-    "tp2_reprice_stop_to_breakeven": "Phase 18 position manager",
-    "regime_change_sl2": "Phase 18/20 maintenance simulation",
-    "volatility_spike_sl2": "Phase 18 execution + Phase 20 forward comparison"
-  },
-  "parity_status": "phase16f_feature_candidate_strategy_parity",
   "production_parity_components": [
     "feature_factory_v2",
     "candidate_filter_v2",
@@ -152,5 +131,16 @@
     "v1_signal_scorer",
     "v1_trade_levels",
     "v1_decision_policy"
+  ],
+  "lifecycle_features_not_implemented_yet": {
+    "adaptive_stop_loss": "Phase 18 realistic execution simulator",
+    "tp1_reprice_stop_to_half_risk": "Phase 18 position manager",
+    "tp2_reprice_stop_to_breakeven": "Phase 18 position manager",
+    "regime_change_sl2": "Phase 18/20 maintenance simulation",
+    "volatility_spike_sl2": "Phase 18 execution + Phase 20 forward comparison"
+  },
+  "compatibility_aliases": [
+    "phase14a_baseline",
+    "baseline"
   ]
 }
