@@ -8,7 +8,8 @@ import urllib.request
 from typing import Any
 
 
-BACKTEST_ENGINE_URL = os.getenv("BACKTEST_ENGINE_URL", "http://backtest-engine:8114").rstrip("/")
+
+BACKTEST_ENGINE_BASE_URL = os.getenv("BACKTEST_ENGINE_BASE_URL", "http://backtest-engine:8080").rstrip("/")
 
 
 def _read_response(response) -> tuple[dict[str, Any], int]:
@@ -20,7 +21,7 @@ def _read_response(response) -> tuple[dict[str, Any], int]:
 
 
 def _proxy_get(path: str, query: str = "") -> tuple[dict[str, Any], int]:
-    url = f"{BACKTEST_ENGINE_URL}{path}"
+    url = f"{BACKTEST_ENGINE_BASE_URL}{path}"
     if query:
         url = f"{url}?{query}"
     try:
@@ -37,7 +38,7 @@ def _proxy_get(path: str, query: str = "") -> tuple[dict[str, Any], int]:
 
 
 def _proxy_post(path: str, payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    url = f"{BACKTEST_ENGINE_URL}{path}"
+    url = f"{BACKTEST_ENGINE_BASE_URL}{path}"
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/json"})
     try:
