@@ -1,2 +1,4 @@
 psycopg[binary]
 requests
+pandas
+pyarrow
