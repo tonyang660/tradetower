@@ -1,6 +1,6 @@
-from datasets.local_feed import LocalHistoricalDatasetFeed
-
 from __future__ import annotations
+
+from datasets.local_feed import LocalHistoricalDatasetFeed
 
 import math
 from dataclasses import dataclass, asdict
