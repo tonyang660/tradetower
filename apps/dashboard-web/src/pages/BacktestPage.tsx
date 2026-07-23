@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import {
   AlertTriangle,
   BarChart3,
@@ -51,6 +52,67 @@ const DEFAULT_CONFIG: BacktestRunConfig = {
 
 const TIMEFRAME_OPTIONS = ["5m", "15m", "1h", "4h", "1d"];
 
+function asArray(value: unknown): any[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function asStringArray(value: unknown, fallback: string[] = []): string[] {
+  if (!Array.isArray(value)) return fallback;
+  const values = value
+    .map((item) => {
+      if (typeof item === "string") return item;
+      if (item && typeof item === "object" && "name" in item) return String((item as any).name);
+      if (item && typeof item === "object" && "strategy_name" in item) return String((item as any).strategy_name);
+      return "";
+    })
+    .filter(Boolean);
+  return values.length ? values : fallback;
+}
+
+function getStrategyObject(payload: any): any {
+  if (!payload) return null;
+  return payload.strategy ?? payload.detail ?? payload.item ?? payload;
+}
+
+function normalizeStrategies(payload: any): string[] {
+  const merged = [
+    ...asStringArray(payload?.items),
+    ...asStringArray(payload?.strategies),
+    ...asStringArray(payload?.data),
+  ];
+  return Array.from(new Set(merged.length ? merged : ["tradetower_baseline_v1"]));
+}
+
+function normalizeRuns(payload: any): any[] {
+  return asArray(payload?.runs ?? payload?.items ?? payload?.data);
+}
+
+function tagsFrom(detail: any): string[] {
+  return asStringArray(
+    detail?.tags ??
+      detail?.strategy?.tags ??
+      detail?.metadata?.tags ??
+      detail?.config?.tags,
+    ["phase17"]
+  );
+}
+
+function requiredTimeframesFrom(detail: any): string[] {
+  return asStringArray(
+    detail?.required_timeframes ??
+      detail?.strategy?.required_timeframes ??
+      detail?.metadata?.required_timeframes ??
+      detail?.config?.required_timeframes,
+    ["5m", "15m", "4h"]
+  );
+}
+
+function textValue(value: unknown, fallback = "—") {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  return fallback;
+}
+
 function money(value: number | null | undefined) {
   if (value === null || value === undefined || Number.isNaN(value)) return "—";
   return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -61,22 +123,12 @@ function pct(value: number | null | undefined) {
   return `${value.toFixed(2)}%`;
 }
 
-function number(value: number | null | undefined, digits = 2) {
+function numberFmt(value: number | null | undefined, digits = 2) {
   if (value === null || value === undefined || Number.isNaN(value)) return "—";
   return value.toFixed(digits);
 }
 
-function Panel({
-  title,
-  subtitle,
-  icon,
-  children,
-}: {
-  title: string;
-  subtitle?: string;
-  icon?: React.ReactNode;
-  children: React.ReactNode;
-}) {
+function Panel({ title, subtitle, icon, children }: { title: string; subtitle?: string; icon?: ReactNode; children: ReactNode }) {
   return (
     <section className="rounded-[28px] border border-white/10 bg-white/6 p-5 shadow-glass backdrop-blur-xl">
       <div className="mb-4 flex items-start justify-between gap-4">
@@ -93,15 +145,7 @@ function Panel({
   );
 }
 
-function Field({
-  label,
-  children,
-  hint,
-}: {
-  label: string;
-  children: React.ReactNode;
-  hint?: string;
-}) {
+function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return (
     <label className="block">
       <div className="mb-1.5 text-xs font-medium uppercase tracking-[0.16em] text-white/40">{label}</div>
@@ -120,7 +164,7 @@ function MetricTile({ label, value, tone = "neutral" }: { label: string; value: 
   return (
     <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
       <div className="text-xs uppercase tracking-[0.18em] text-white/35">{label}</div>
-      <div className={`mt-2 text-2xl font-semibold ${color}`}>{value}</div>
+      <div className={`mt-2 truncate text-2xl font-semibold ${color}`}>{value}</div>
     </div>
   );
 }
@@ -138,6 +182,7 @@ export default function BacktestPage() {
 
   useEffect(() => {
     loadBootstrap();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -151,13 +196,15 @@ export default function BacktestPage() {
         fetchBacktestRuns(8).catch(() => ({ ok: false, runs: [] })),
       ]);
 
-      const rawStrategies =
-        strategyPayload.items?.map((item) => item.name) ??
-        strategyPayload.strategies ??
-        ["tradetower_baseline_v1"];
+      const names = normalizeStrategies(strategyPayload);
+      setStrategies(names);
+      setRuns(normalizeRuns(runPayload));
 
-      setStrategies(Array.from(new Set(rawStrategies)));
-      setRuns(runPayload.runs ?? []);
+      if (!names.includes(config.strategy_name) && names[0]) {
+        setConfig((current) => ({ ...current, strategy_name: names[0] }));
+      }
+
+      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load backtest bootstrap");
     }
@@ -166,7 +213,7 @@ export default function BacktestPage() {
   async function loadStrategyDetail(strategyName: string) {
     try {
       const payload = await fetchBacktestStrategyDetail(strategyName);
-      setStrategyDetail(payload.strategy ?? payload);
+      setStrategyDetail(getStrategyObject(payload));
     } catch {
       setStrategyDetail(null);
     }
@@ -179,18 +226,13 @@ export default function BacktestPage() {
   function toggleTimeframe(timeframe: string) {
     setConfig((current) => {
       const exists = current.timeframes.includes(timeframe);
-      const next = exists
-        ? current.timeframes.filter((item) => item !== timeframe)
-        : [...current.timeframes, timeframe];
+      const next = exists ? current.timeframes.filter((item) => item !== timeframe) : [...current.timeframes, timeframe];
       return { ...current, timeframes: next };
     });
   }
 
   const payload = useMemo<BacktestRunConfig>(() => {
-    const symbols = symbolsText
-      .split(",")
-      .map((value) => value.trim().toUpperCase())
-      .filter(Boolean);
+    const symbols = symbolsText.split(",").map((value) => value.trim().toUpperCase()).filter(Boolean);
     return { ...config, symbols };
   }, [config, symbolsText]);
 
@@ -208,13 +250,11 @@ export default function BacktestPage() {
 
   async function handleRun() {
     if (validation.length > 0) return;
-
     try {
       setRunning(true);
       setError(null);
       setResult(null);
       setLastStartedAt(new Date());
-
       const response = await runBacktest(payload);
       setResult(response);
       await loadBootstrap();
@@ -227,6 +267,8 @@ export default function BacktestPage() {
 
   const summary = result?.summary;
   const returnTone = (summary?.return_pct ?? 0) > 0 ? "good" : (summary?.return_pct ?? 0) < 0 ? "bad" : "neutral";
+  const strategyTags = tagsFrom(strategyDetail);
+  const requiredTimeframes = requiredTimeframesFrom(strategyDetail);
 
   return (
     <div className="space-y-6">
@@ -236,58 +278,32 @@ export default function BacktestPage() {
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white">Backtest Lab</h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-white/50">
             Configure real historical dataset runs, launch the backtest engine, and inspect the first result summary.
-            Phase 17A-C focuses on the page shell, API layer, and run configuration panel.
           </p>
         </div>
-
         <div className="flex items-center gap-2 rounded-2xl border border-cyan-300/15 bg-cyan-400/10 px-4 py-2 text-sm text-cyan-100">
           <Database size={16} />
           Dataset #{config.dataset_id} · {config.data_mode}
         </div>
       </div>
 
-      {error ? (
-        <div className="rounded-3xl border border-rose-400/20 bg-rose-500/10 p-4 text-sm text-rose-100">
-          {error}
-        </div>
-      ) : null}
+      {error ? <div className="rounded-3xl border border-rose-400/20 bg-rose-500/10 p-4 text-sm text-rose-100">{error}</div> : null}
 
       <div className="grid gap-5 xl:grid-cols-[420px_1fr]">
-        <Panel
-          title="Run Configuration"
-          subtitle="Production-parity defaults for dataset_id=1."
-          icon={<SlidersHorizontal size={18} className="text-cyan-200" />}
-        >
+        <Panel title="Run Configuration" subtitle="Production-parity defaults for dataset_id=1." icon={<SlidersHorizontal size={18} className="text-cyan-200" />}>
           <div className="space-y-5">
             <div className="grid gap-3">
               <Field label="Strategy">
-                <select
-                  className={inputClass()}
-                  value={config.strategy_name}
-                  onChange={(event) => update("strategy_name", event.target.value)}
-                >
+                <select className={inputClass()} value={config.strategy_name} onChange={(event) => update("strategy_name", event.target.value)}>
                   {strategies.map((name) => (
-                    <option key={name} value={name} className="bg-slate-950">
-                      {name}
-                    </option>
+                    <option key={name} value={name} className="bg-slate-950">{name}</option>
                   ))}
                 </select>
               </Field>
-
               <Field label="Strategy version">
-                <input
-                  className={inputClass()}
-                  value={config.strategy_version ?? ""}
-                  onChange={(event) => update("strategy_version", event.target.value)}
-                />
+                <input className={inputClass()} value={config.strategy_version ?? ""} onChange={(event) => update("strategy_version", event.target.value)} />
               </Field>
-
               <Field label="Symbols" hint="Comma-separated symbols.">
-                <input
-                  className={inputClass()}
-                  value={symbolsText}
-                  onChange={(event) => setSymbolsText(event.target.value)}
-                />
+                <input className={inputClass()} value={symbolsText} onChange={(event) => setSymbolsText(event.target.value)} />
               </Field>
             </div>
 
@@ -301,11 +317,7 @@ export default function BacktestPage() {
                       key={timeframe}
                       type="button"
                       onClick={() => toggleTimeframe(timeframe)}
-                      className={`rounded-2xl border px-3 py-2 text-sm transition ${
-                        active
-                          ? "border-cyan-300/30 bg-cyan-400/15 text-cyan-100"
-                          : "border-white/10 bg-white/6 text-white/55 hover:bg-white/10"
-                      }`}
+                      className={`rounded-2xl border px-3 py-2 text-sm transition ${active ? "border-cyan-300/30 bg-cyan-400/15 text-cyan-100" : "border-white/10 bg-white/6 text-white/55 hover:bg-white/10"}`}
                     >
                       {timeframe}
                     </button>
@@ -315,42 +327,18 @@ export default function BacktestPage() {
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
-              <Field label="Start date">
-                <input className={inputClass()} value={config.start_time} onChange={(event) => update("start_time", event.target.value)} />
-              </Field>
-              <Field label="End date">
-                <input className={inputClass()} value={config.end_time} onChange={(event) => update("end_time", event.target.value)} />
-              </Field>
-              <Field label="Starting capital">
-                <input className={inputClass()} type="number" value={config.starting_capital} onChange={(event) => update("starting_capital", Number(event.target.value))} />
-              </Field>
-              <Field label="Max cycles">
-                <input className={inputClass()} type="number" value={config.max_cycles} onChange={(event) => update("max_cycles", Number(event.target.value))} />
-              </Field>
-              <Field label="Risk / trade %">
-                <input className={inputClass()} type="number" step="0.1" value={config.risk_per_trade_pct} onChange={(event) => update("risk_per_trade_pct", Number(event.target.value))} />
-              </Field>
-              <Field label="Position leverage">
-                <input className={inputClass()} type="number" value={config.guardian_max_position_leverage} onChange={(event) => update("guardian_max_position_leverage", Number(event.target.value))} />
-              </Field>
-              <Field label="Maker fee bps">
-                <input className={inputClass()} type="number" value={config.maker_fee_bps} onChange={(event) => update("maker_fee_bps", Number(event.target.value))} />
-              </Field>
-              <Field label="Taker fee bps">
-                <input className={inputClass()} type="number" value={config.taker_fee_bps} onChange={(event) => update("taker_fee_bps", Number(event.target.value))} />
-              </Field>
-              <Field label="Limit fill ratio">
-                <input className={inputClass()} type="number" step="0.05" value={config.limit_order_fill_ratio} onChange={(event) => update("limit_order_fill_ratio", Number(event.target.value))} />
-              </Field>
-              <Field label="Slippage bps">
-                <input className={inputClass()} type="number" value={config.slippage_bps} onChange={(event) => update("slippage_bps", Number(event.target.value))} />
-              </Field>
-              <Field label="Spread bps" hint="UI-only until Phase 18 model.">
-                <input className={inputClass()} type="number" value={config.spread_bps ?? 0} onChange={(event) => update("spread_bps", Number(event.target.value))} />
-              </Field>
-              <Field label="Dataset ID">
-                <input className={inputClass()} type="number" value={config.dataset_id} onChange={(event) => update("dataset_id", Number(event.target.value))} />
-              </Field>
+              <Field label="Start date"><input className={inputClass()} value={config.start_time} onChange={(event) => update("start_time", event.target.value)} /></Field>
+              <Field label="End date"><input className={inputClass()} value={config.end_time} onChange={(event) => update("end_time", event.target.value)} /></Field>
+              <Field label="Starting capital"><input className={inputClass()} type="number" value={config.starting_capital} onChange={(event) => update("starting_capital", Number(event.target.value))} /></Field>
+              <Field label="Max cycles"><input className={inputClass()} type="number" value={config.max_cycles} onChange={(event) => update("max_cycles", Number(event.target.value))} /></Field>
+              <Field label="Risk / trade %"><input className={inputClass()} type="number" step="0.1" value={config.risk_per_trade_pct} onChange={(event) => update("risk_per_trade_pct", Number(event.target.value))} /></Field>
+              <Field label="Position leverage"><input className={inputClass()} type="number" value={config.guardian_max_position_leverage} onChange={(event) => update("guardian_max_position_leverage", Number(event.target.value))} /></Field>
+              <Field label="Maker fee bps"><input className={inputClass()} type="number" value={config.maker_fee_bps} onChange={(event) => update("maker_fee_bps", Number(event.target.value))} /></Field>
+              <Field label="Taker fee bps"><input className={inputClass()} type="number" value={config.taker_fee_bps} onChange={(event) => update("taker_fee_bps", Number(event.target.value))} /></Field>
+              <Field label="Limit fill ratio"><input className={inputClass()} type="number" step="0.05" value={config.limit_order_fill_ratio} onChange={(event) => update("limit_order_fill_ratio", Number(event.target.value))} /></Field>
+              <Field label="Slippage bps"><input className={inputClass()} type="number" value={config.slippage_bps} onChange={(event) => update("slippage_bps", Number(event.target.value))} /></Field>
+              <Field label="Spread bps" hint="UI-only until Phase 18 model."><input className={inputClass()} type="number" value={config.spread_bps ?? 0} onChange={(event) => update("spread_bps", Number(event.target.value))} /></Field>
+              <Field label="Dataset ID"><input className={inputClass()} type="number" value={config.dataset_id} onChange={(event) => update("dataset_id", Number(event.target.value))} /></Field>
             </div>
 
             <div className="grid gap-3">
@@ -374,15 +362,8 @@ export default function BacktestPage() {
 
             {validation.length ? (
               <div className="rounded-2xl border border-amber-300/20 bg-amber-400/10 p-3 text-sm text-amber-100">
-                <div className="mb-1 flex items-center gap-2 font-medium">
-                  <AlertTriangle size={15} />
-                  Fix before running
-                </div>
-                <ul className="list-disc space-y-1 pl-5 text-amber-100/80">
-                  {validation.map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
+                <div className="mb-1 flex items-center gap-2 font-medium"><AlertTriangle size={15} />Fix before running</div>
+                <ul className="list-disc space-y-1 pl-5 text-amber-100/80">{validation.map((item) => <li key={item}>{item}</li>)}</ul>
               </div>
             ) : null}
 
@@ -400,51 +381,38 @@ export default function BacktestPage() {
 
         <div className="space-y-5">
           <div className="grid gap-5 xl:grid-cols-2">
-            <Panel
-              title="Strategy Detail"
-              subtitle="Fetched through dashboard-api proxy."
-              icon={<Cpu size={18} className="text-violet-200" />}
-            >
+            <Panel title="Strategy Detail" subtitle="Defensive rendering against backend shape changes." icon={<Cpu size={18} className="text-violet-200" />}>
               <div className="space-y-3">
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                   <div className="text-sm text-white/45">Selected strategy</div>
                   <div className="mt-1 text-xl font-semibold text-white">{config.strategy_name}</div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {(strategyDetail?.tags ?? strategyDetail?.strategy?.tags ?? ["phase17"]).map((tag: string) => (
-                      <span key={tag} className="rounded-full border border-white/10 bg-white/8 px-2.5 py-1 text-xs text-white/60">
-                        {tag}
-                      </span>
+                    {strategyTags.map((tag) => (
+                      <span key={tag} className="rounded-full border border-white/10 bg-white/8 px-2.5 py-1 text-xs text-white/60">{tag}</span>
                     ))}
                   </div>
                 </div>
 
                 <div className="grid gap-3 md:grid-cols-2">
-                  <MetricTile label="Version" value={strategyDetail?.version?.version ?? strategyDetail?.config?.strategy_version ?? config.strategy_version ?? "—"} />
-                  <MetricTile label="Family" value={strategyDetail?.family ?? strategyDetail?.config?.strategy_family ?? "—"} />
-                  <MetricTile label="Required TFs" value={(strategyDetail?.required_timeframes ?? ["5m", "15m", "4h"]).join(", ")} />
-                  <MetricTile label="Candidate filter" value={strategyDetail?.config?.candidate_filter?.included ? "Included" : "Unknown"} tone="good" />
+                  <MetricTile label="Version" value={textValue(strategyDetail?.version?.version ?? strategyDetail?.config?.strategy_version ?? config.strategy_version)} />
+                  <MetricTile label="Family" value={textValue(strategyDetail?.family ?? strategyDetail?.config?.strategy_family)} />
+                  <MetricTile label="Required TFs" value={requiredTimeframes.join(", ")} />
+                  <MetricTile label="Candidate filter" value={strategyDetail?.config?.candidate_filter?.included ? "Included" : "Unknown"} tone={strategyDetail?.config?.candidate_filter?.included ? "good" : "neutral"} />
                 </div>
 
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm leading-6 text-white/50">
-                  Phase 17 keeps lifecycle execution features honest: spread and realistic fills are displayed in the form,
-                  but full order/position simulation belongs to Phase 18.
+                  Phase 17 keeps lifecycle execution features honest: spread and realistic fills are displayed in the form, but full order/position simulation belongs to Phase 18.
                 </div>
               </div>
             </Panel>
 
-            <Panel
-              title="Progress"
-              subtitle="Synchronous backend run for now."
-              icon={<Zap size={18} className="text-yellow-200" />}
-            >
+            <Panel title="Progress" subtitle="Synchronous backend run for now." icon={<Zap size={18} className="text-yellow-200" />}>
               <div className="space-y-4">
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                   <div className="flex items-center justify-between">
                     <div>
                       <div className="text-sm text-white/45">Current status</div>
-                      <div className="mt-1 text-xl font-semibold text-white">
-                        {running ? "Running" : result?.ok ? "Completed" : "Idle"}
-                      </div>
+                      <div className="mt-1 text-xl font-semibold text-white">{running ? "Running" : result?.ok ? "Completed" : "Idle"}</div>
                     </div>
                     {running ? <Loader2 className="animate-spin text-cyan-200" /> : <ShieldCheck className="text-emerald-200" />}
                   </div>
@@ -452,14 +420,12 @@ export default function BacktestPage() {
                     <div className={`h-full rounded-full ${running ? "w-2/3 animate-pulse bg-cyan-300" : result ? "w-full bg-emerald-300" : "w-0 bg-white/30"}`} />
                   </div>
                 </div>
-
                 <div className="grid gap-3 md:grid-cols-2">
                   <MetricTile label="Cycles processed" value={String(result?.diagnostics?.cycle_count ?? "—")} />
                   <MetricTile label="Trades generated" value={String(result?.summary?.total_trades ?? "—")} />
                   <MetricTile label="Candles processed" value="—" />
-                  <MetricTile label="Simulated date" value={result?.preflight?.end_time ?? result?.diagnostics?.preflight?.end_time ?? "—"} />
+                  <MetricTile label="Simulated date" value={textValue(result?.preflight?.end_time ?? result?.diagnostics?.preflight?.end_time)} />
                 </div>
-
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-white/50">
                   Cancel/progress streaming requires an async backend endpoint. Current `/backtests/run` blocks until completion.
                   Started: {lastStartedAt ? ` ${lastStartedAt.toLocaleString()}` : " —"}
@@ -468,11 +434,7 @@ export default function BacktestPage() {
             </Panel>
           </div>
 
-          <Panel
-            title="Results"
-            subtitle="Phase 17A-C renders the core metrics already returned by backtest-engine."
-            icon={<BarChart3 size={18} className="text-emerald-200" />}
-          >
+          <Panel title="Results" subtitle="Core metrics already returned by backtest-engine." icon={<BarChart3 size={18} className="text-emerald-200" />}>
             {summary ? (
               <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
                 <MetricTile label="Final equity" value={money(summary.final_equity)} />
@@ -482,7 +444,7 @@ export default function BacktestPage() {
                 <MetricTile label="Max DD" value={pct(summary.max_drawdown_pct)} tone="bad" />
                 <MetricTile label="Trades" value={String(summary.total_trades ?? "—")} />
                 <MetricTile label="Win rate" value={summary.win_rate === null || summary.win_rate === undefined ? "—" : pct(summary.win_rate * 100)} />
-                <MetricTile label="Profit factor" value={number(summary.profit_factor)} />
+                <MetricTile label="Profit factor" value={numberFmt(summary.profit_factor)} />
                 <MetricTile label="Sharpe" value="Not calculated" />
                 <MetricTile label="Sortino" value="Not calculated" />
                 <MetricTile label="Expectancy" value="Not calculated" />
@@ -495,11 +457,7 @@ export default function BacktestPage() {
             )}
           </Panel>
 
-          <Panel
-            title="Recent Runs"
-            subtitle="Quick visibility before full result browser/charts in 17F-17H."
-            icon={<CalendarDays size={18} className="text-cyan-200" />}
-          >
+          <Panel title="Recent Runs" subtitle="Quick visibility before full result browser/charts in 17F-17H." icon={<CalendarDays size={18} className="text-cyan-200" />}>
             <div className="overflow-hidden rounded-2xl border border-white/10">
               <table className="min-w-full divide-y divide-white/10 text-sm">
                 <thead className="bg-white/5 text-left text-xs uppercase tracking-[0.16em] text-white/35">
@@ -512,19 +470,17 @@ export default function BacktestPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/8 text-white/65">
-                  {runs.length ? runs.map((run) => (
-                    <tr key={run.run_id}>
-                      <td className="px-4 py-3 text-white">#{run.run_id}</td>
-                      <td className="px-4 py-3">{run.status}</td>
-                      <td className="px-4 py-3">{run.strategy_name}</td>
-                      <td className="px-4 py-3">{pct(run.return_pct)}</td>
-                      <td className="px-4 py-3">{run.total_trades ?? "—"}</td>
+                  {runs.length ? runs.map((run, index) => (
+                    <tr key={run.run_id ?? index}>
+                      <td className="px-4 py-3 text-white">#{run.run_id ?? "—"}</td>
+                      <td className="px-4 py-3">{textValue(run.status)}</td>
+                      <td className="px-4 py-3">{textValue(run.strategy_name)}</td>
+                      <td className="px-4 py-3">{pct(typeof run.return_pct === "number" ? run.return_pct : undefined)}</td>
+                      <td className="px-4 py-3">{textValue(run.total_trades)}</td>
                     </tr>
                   )) : (
                     <tr>
-                      <td className="px-4 py-6 text-center text-white/40" colSpan={5}>
-                        No recent runs loaded.
-                      </td>
+                      <td className="px-4 py-6 text-center text-white/40" colSpan={5}>No recent runs loaded.</td>
                     </tr>
                   )}
                 </tbody>
@@ -535,11 +491,9 @@ export default function BacktestPage() {
       </div>
 
       <Panel title="Phase 17 roadmap preview" icon={<RefreshCcw size={18} className="text-white/60" />}>
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-5">
           {["17D Strategy detail polish", "17E async progress", "17F full metrics", "17G charts", "17H trades/logs/debug"].map((item) => (
-            <div key={item} className="rounded-2xl border border-white/10 bg-black/18 p-4 text-sm text-white/55">
-              {item}
-            </div>
+            <div key={item} className="rounded-2xl border border-white/10 bg-black/18 p-4 text-sm text-white/55">{item}</div>
           ))}
         </div>
       </Panel>
