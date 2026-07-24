@@ -234,7 +234,16 @@ def _unrealized(position: dict[str, Any], price: float) -> float:
     return (position["entry"] - price) * position["qty"]
 
 
-def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
+
+def _emit_progress(progress_callback, **event):
+    if not progress_callback:
+        return
+    try:
+        progress_callback(event)
+    except Exception:
+        pass
+
+def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=None) -> dict[str, Any]:
     config = _normalize_config(payload)
     strategy_validation = validate_strategy_run_config(config)
     if not strategy_validation.get("valid"):
@@ -271,6 +280,8 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
     risk_approved = 0
     risk_notional_requested = 0.0
 
+    _emit_progress(progress_callback, status="running", run_id=run_id, cycle_count=0, cycles_processed=0, candles_processed=0, trades_generated=0, progress_pct=0.0, message="Backtest initialized")
+
     snapshot_builder = MarketSnapshotBuilder(config["symbols"], warmup_required_bars=config["warmup_required_bars"])
     strategy = build_strategy(config["strategy_name"], config)
     cycle_count = 0
@@ -280,12 +291,23 @@ def run_backtest(payload: dict[str, Any]) -> dict[str, Any]:
 
     try:
         for cycle_index, candles in enumerate(feed.iter_cycles()):
+            if cancel_event is not None and cancel_event.is_set():
+                with get_conn() as conn, conn.cursor() as cur:
+                    cur.execute("UPDATE backtest_runs SET status='cancelled', completed_at=NOW(), error=%s WHERE run_id=%s", ("backtest_cancel_requested", run_id))
+                _log(run_id, "BACKTEST_CANCELLED", "Backtest cancelled by dashboard.", {"cycle_index": cycle_index}, "WARN")
+                _emit_progress(progress_callback, status="cancelled", run_id=run_id, cycle_index=cycle_index, cycle_count=cycle_count, cycles_processed=cycle_count, candles_processed=cycle_count * len(candles), trades_generated=risk_approved, current_simulated_date=candles[0].timestamp.isoformat() if candles else None, progress_pct=100.0, message="Backtest cancelled")
+                return {"ok": False, "cancelled": True, "run_id": run_id, "error": "backtest_cancel_requested", "config": config}
+
             if not candles:
                 continue
 
             cycle_count += 1
             snapshot = snapshot_builder.build(cycle_index, candles)
             last_snapshot = snapshot
+
+            if cycle_count == 1 or cycle_count % max(1, config["cycle_decision_log_interval"]) == 0:
+                expected = max(1, int(getattr(preflight, "expected_cycles", config["max_cycles"]) or config["max_cycles"]))
+                _emit_progress(progress_callback, status="running", run_id=run_id, cycle_index=cycle_index, cycle_count=cycle_count, cycles_processed=cycle_count, candles_processed=cycle_count * len(candles), trades_generated=risk_approved, current_simulated_date=snapshot.timestamp.isoformat(), progress_pct=min(99.0, cycle_count / expected * 100.0), message="Backtest cycle progress")
 
             # 1) Manage existing positions before new entries.
             for symbol, position in list(open_positions.items()):

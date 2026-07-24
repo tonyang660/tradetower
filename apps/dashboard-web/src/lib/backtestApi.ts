@@ -3,6 +3,7 @@ import type {
   BacktestRunDetailResponse,
   BacktestRunListResponse,
   BacktestRunResponse,
+  BacktestJobProgress,
   BacktestValidationResponse,
   StrategyDetailResponse,
   StrategyListResponse,
@@ -65,4 +66,17 @@ export function fetchBacktestRunDetail(runId: number) {
 
 export function validateBacktestRunConfig(payload: BacktestRunConfig) {
   return postJson<BacktestValidationResponse>("/backtest/validate-run", payload);
+}
+
+
+export function startBacktestAsync(payload: BacktestRunConfig) {
+  return postJson<BacktestJobProgress>("/backtest/start", payload);
+}
+
+export function fetchBacktestProgress(jobId: string) {
+  return getJson<BacktestJobProgress>(`/backtest/progress?job_id=${encodeURIComponent(jobId)}`);
+}
+
+export function cancelBacktest(jobId: string) {
+  return postJson<BacktestJobProgress>("/backtest/cancel", { job_id: jobId });
 }

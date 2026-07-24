@@ -68,6 +68,7 @@ def handle_backtest_get(handler, parsed) -> bool:
         "/backtest/metrics": "/backtests/run/metrics",
         "/backtest/logs": "/backtests/run/logs",
         "/backtest/result-bundle": "/backtests/run/result-bundle",
+        "/backtest/progress": "/backtests/progress",
     }
 
     target = route_map.get(parsed.path)
@@ -82,6 +83,8 @@ def handle_backtest_get(handler, parsed) -> bool:
 def handle_backtest_post(handler, parsed, payload: dict[str, Any]) -> bool:
     route_map = {
         "/backtest/run": "/backtests/run",
+        "/backtest/start": "/backtests/start",
+        "/backtest/cancel": "/backtests/cancel",
         "/backtest/validate-run": "/strategies/validate-run",
     }
 

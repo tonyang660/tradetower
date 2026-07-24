@@ -101,3 +101,27 @@ export type BacktestValidationResponse = {
   errors?: string[];
   warnings?: string[];
 };
+
+
+export type BacktestJobProgress = {
+  ok: boolean;
+  job_id?: string;
+  job?: {
+    job_id: string;
+    status: string;
+    run_id?: number | null;
+    elapsed_seconds?: number;
+    estimated_remaining_seconds?: number | null;
+    progress_pct?: number;
+    candles_processed?: number;
+    cycles_processed?: number;
+    trades_generated?: number;
+    current_simulated_date?: string | null;
+    current_status?: string;
+    logs?: Array<{ timestamp?: string; level?: string; event_type?: string; message?: string; details?: any }>;
+    result?: BacktestRunResponse | null;
+    error?: string | null;
+    cancel_requested?: boolean;
+  };
+  error?: string;
+};

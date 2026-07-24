@@ -29,6 +29,7 @@ from result_api import (
     fetch_trades,
 )
 from runner import list_runs, run_backtest, run_detail
+from backtest_async import start_backtest_job, get_backtest_job, cancel_backtest_job
 from strategies.registry import get_strategy_detail, list_strategies
 from strategies.validation import validate_strategy_payload
 
@@ -208,12 +209,25 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
+        if parsed.path == "/backtests/progress":
+            job_id = query.get("job_id", [""])[0]
+            self._send_json(get_backtest_job(job_id))
+            return
+
         if parsed.path == "/backtests/runs":
             limit = _query_int(query, "limit", 20)
             self._send_json({
                 "ok": True,
                 "runs": list_runs(limit=max(1, min(limit, 100))),
             })
+            return
+
+        if parsed.path == "/backtests/start":
+            self._send_json(start_backtest_job(payload))
+            return
+
+        if parsed.path == "/backtests/cancel":
+            self._send_json(cancel_backtest_job(str(payload.get("job_id", ""))))
             return
 
         if parsed.path == "/backtests/run":
