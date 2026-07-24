@@ -13,13 +13,15 @@ import {
   Zap,
 } from "lucide-react";
 import {
+  cancelBacktest,
+  fetchBacktestProgress,
   fetchBacktestRuns,
   fetchBacktestStrategies,
   fetchBacktestStrategyDetail,
-  runBacktest,
+  startBacktestAsync,
   validateBacktestRunConfig,
 } from "../lib/backtestApi";
-import type { BacktestRunConfig, BacktestRunResponse, BacktestValidationResponse } from "../types/backtests";
+import type { BacktestJobProgress, BacktestRunConfig, BacktestRunResponse, BacktestValidationResponse } from "../types/backtests";
 import BacktestStrategyDetailPanel from "../components/backtest/BacktestStrategyDetailPanel";
 import BacktestValidationPanel from "../components/backtest/BacktestValidationPanel";
 
@@ -163,6 +165,9 @@ export default function BacktestPage() {
   const [lastStartedAt, setLastStartedAt] = useState<Date | null>(null);
   const [backendValidation, setBackendValidation] = useState<BacktestValidationResponse | null>(null);
   const [validatingConfig, setValidatingConfig] = useState(false);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [jobProgress, setJobProgress] = useState<BacktestJobProgress | null>(null);
+  const [cancellingJob, setCancellingJob] = useState(false);
 
   useEffect(() => {
     loadBootstrap();
@@ -172,6 +177,50 @@ export default function BacktestPage() {
   useEffect(() => {
     loadStrategyDetail(config.strategy_name);
   }, [config.strategy_name]);
+
+  useEffect(() => {
+    if (!activeJobId) return;
+
+    const jobId = activeJobId;
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        const progress = await fetchBacktestProgress(jobId);
+        if (cancelled) return;
+
+        setJobProgress(progress);
+
+        const status = progress.job?.status;
+        const finalResult = progress.job?.result;
+
+        if (finalResult) {
+          setResult(finalResult);
+        }
+
+        if (status === "completed" || status === "failed" || status === "cancelled") {
+          setRunning(false);
+          setActiveJobId(null);
+          await loadBootstrap();
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to poll backtest progress");
+          setRunning(false);
+          setActiveJobId(null);
+        }
+      }
+    }
+
+    poll();
+    const timer = window.setInterval(poll, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeJobId]);
 
   async function loadBootstrap() {
     try {
@@ -248,30 +297,62 @@ export default function BacktestPage() {
 
   async function handleRun() {
     if (validation.length > 0) return;
+
     try {
       setRunning(true);
       setError(null);
       setResult(null);
+      setJobProgress(null);
+      setActiveJobId(null);
       setLastStartedAt(new Date());
+
       const validationResponse = await validateBacktestRunConfig(payload);
       setBackendValidation(validationResponse);
+
       if (validationResponse?.validation?.valid === false || validationResponse?.valid === false) {
         setError("Backtest configuration validation failed. Check the validation panel.");
+        setRunning(false);
         return;
       }
 
-      const response = await runBacktest(payload);
-      setResult(response);
-      await loadBootstrap();
+      const started = await startBacktestAsync(payload);
+      const jobId = started.job_id ?? started.job?.job_id;
+
+      if (!started.ok || !jobId) {
+        setError(started.error ?? "Failed to start async backtest job");
+        setRunning(false);
+        return;
+      }
+
+      setJobProgress(started);
+      setActiveJobId(jobId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Backtest run failed");
-    } finally {
       setRunning(false);
+    }
+  }
+
+  async function handleCancelBacktest() {
+    if (!activeJobId) return;
+
+    try {
+      setCancellingJob(true);
+      const response = await cancelBacktest(activeJobId);
+      setJobProgress(response);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to cancel backtest");
+    } finally {
+      setCancellingJob(false);
     }
   }
 
   const summary = result?.summary;
   const returnTone = (summary?.return_pct ?? 0) > 0 ? "good" : (summary?.return_pct ?? 0) < 0 ? "bad" : "neutral";
+  const activeJob = jobProgress?.job;
+  const progressPct = Math.max(0, Math.min(100, activeJob?.progress_pct ?? (running ? 2 : result ? 100 : 0)));
+  const elapsedSeconds = activeJob?.elapsed_seconds ?? 0;
+  const etaSeconds = activeJob?.estimated_remaining_seconds ?? null;
+  const progressLogs = activeJob?.logs ?? [];
 
   return (
     <div className="space-y-6">
@@ -400,28 +481,76 @@ export default function BacktestPage() {
               onValidate={handleValidateConfig}
             />
 
-            <Panel title="Progress" subtitle="Synchronous backend run for now." icon={<Zap size={18} className="text-yellow-200" />}>
+            <Panel title="Progress" subtitle="Async job polling every second." icon={<Zap size={18} className="text-yellow-200" />}>
               <div className="space-y-4">
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-4">
                     <div>
                       <div className="text-sm text-white/45">Current status</div>
-                      <div className="mt-1 text-xl font-semibold text-white">{running ? "Running" : result?.ok ? "Completed" : "Idle"}</div>
+                      <div className="mt-1 text-xl font-semibold text-white">
+                        {activeJob?.current_status ?? activeJob?.status ?? (running ? "Running" : result?.ok ? "Completed" : "Idle")}
+                      </div>
+                      <div className="mt-1 text-xs text-white/35">
+                        {activeJobId ? `Job ${activeJobId.slice(0, 8)}...` : result?.run_id ? `Run #${result.run_id}` : "No active job"}
+                      </div>
                     </div>
-                    {running ? <Loader2 className="animate-spin text-cyan-200" /> : <ShieldCheck className="text-emerald-200" />}
+
+                    <div className="flex items-center gap-2">
+                      {activeJobId ? (
+                        <button
+                          type="button"
+                          onClick={handleCancelBacktest}
+                          disabled={cancellingJob}
+                          className="rounded-2xl border border-rose-300/20 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-100 transition hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {cancellingJob ? "Cancelling..." : "Cancel"}
+                        </button>
+                      ) : null}
+                      {running ? <Loader2 className="animate-spin text-cyan-200" /> : <ShieldCheck className="text-emerald-200" />}
+                    </div>
                   </div>
+
                   <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10">
-                    <div className={`h-full rounded-full ${running ? "w-2/3 animate-pulse bg-cyan-300" : result ? "w-full bg-emerald-300" : "w-0 bg-white/30"}`} />
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${running ? "bg-cyan-300" : result ? "bg-emerald-300" : "bg-white/30"}`}
+                      style={{ width: `${progressPct}%` }}
+                    />
+                  </div>
+
+                  <div className="mt-2 flex justify-between text-xs text-white/40">
+                    <span>{progressPct.toFixed(1)}%</span>
+                    <span>
+                      elapsed {Math.round(elapsedSeconds)}s
+                      {etaSeconds !== null && etaSeconds !== undefined ? ` · ETA ${Math.round(etaSeconds)}s` : ""}
+                    </span>
                   </div>
                 </div>
+
                 <div className="grid gap-3 md:grid-cols-2">
-                  <MetricTile label="Cycles processed" value={String(result?.diagnostics?.cycle_count ?? "—")} />
-                  <MetricTile label="Trades generated" value={String(result?.summary?.total_trades ?? "—")} />
-                  <MetricTile label="Candles processed" value="—" />
-                  <MetricTile label="Simulated date" value={textValue(result?.preflight?.end_time ?? result?.diagnostics?.preflight?.end_time)} />
+                  <MetricTile label="Cycles processed" value={String(activeJob?.cycles_processed ?? result?.diagnostics?.cycle_count ?? "—")} />
+                  <MetricTile label="Trades generated" value={String(activeJob?.trades_generated ?? result?.summary?.total_trades ?? "—")} />
+                  <MetricTile label="Candles processed" value={String(activeJob?.candles_processed ?? "—")} />
+                  <MetricTile label="Simulated date" value={textValue(activeJob?.current_simulated_date ?? result?.preflight?.end_time ?? result?.diagnostics?.preflight?.end_time)} />
                 </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="mb-2 text-xs uppercase tracking-[0.18em] text-white/35">Progress logs</div>
+                  <div className="max-h-44 space-y-2 overflow-auto pr-1 text-xs">
+                    {progressLogs.length ? progressLogs.slice(-8).reverse().map((log, index) => (
+                      <div key={`${log.timestamp ?? "log"}-${index}`} className="rounded-xl border border-white/8 bg-white/5 p-2 text-white/55">
+                        <span className="text-white/35">{log.timestamp ?? "—"}</span>
+                        <span className="mx-2 text-white/25">·</span>
+                        <span className="text-white/70">{log.event_type ?? log.level ?? "LOG"}</span>
+                        <span className="mx-2 text-white/25">·</span>
+                        <span>{log.message ?? "—"}</span>
+                      </div>
+                    )) : (
+                      <div className="text-white/35">No progress logs yet.</div>
+                    )}
+                  </div>
+                </div>
+
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-white/50">
-                  Cancel/progress streaming requires an async backend endpoint. Current `/backtests/run` blocks until completion.
                   Started: {lastStartedAt ? ` ${lastStartedAt.toLocaleString()}` : " —"}
                 </div>
               </div>
