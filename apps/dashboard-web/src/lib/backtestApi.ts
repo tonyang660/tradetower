@@ -5,6 +5,7 @@ import type {
   BacktestRunResponse,
   BacktestJobProgress,
   BacktestAnalyticsResponse,
+  BacktestChartDataResponse,
   BacktestValidationResponse,
   StrategyDetailResponse,
   StrategyListResponse,
@@ -85,4 +86,9 @@ export function cancelBacktest(jobId: string) {
 
 export function fetchBacktestAnalytics(runId: number) {
   return getJson<BacktestAnalyticsResponse>(`/backtest/analytics?run_id=${runId}`);
+}
+
+
+export function fetchBacktestCharts(runId: number) {
+  return getJson<BacktestChartDataResponse>(`/backtest/charts?run_id=${runId}`);
 }

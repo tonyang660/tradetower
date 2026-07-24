@@ -25,6 +25,7 @@ import type { BacktestJobProgress, BacktestRunConfig, BacktestRunResponse, Backt
 import BacktestStrategyDetailPanel from "../components/backtest/BacktestStrategyDetailPanel";
 import BacktestValidationPanel from "../components/backtest/BacktestValidationPanel";
 import BacktestExpandedMetricsPanel from "../components/backtest/BacktestExpandedMetricsPanel";
+import BacktestChartsPanel from "../components/backtest/BacktestChartsPanel";
 
 const DEFAULT_CONFIG: BacktestRunConfig = {
   strategy_name: "tradetower_baseline_v1",
@@ -583,6 +584,8 @@ export default function BacktestPage() {
           </Panel>
 
           <BacktestExpandedMetricsPanel runId={currentRunId} />
+
+          <BacktestChartsPanel runId={currentRunId} />
 
           <Panel title="Recent Runs" subtitle="Quick visibility before full result browser/charts in 17F-17H." icon={<CalendarDays size={18} className="text-cyan-200" />}>
             <div className="overflow-hidden rounded-2xl border border-white/10">

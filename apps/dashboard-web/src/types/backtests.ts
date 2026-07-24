@@ -159,3 +159,22 @@ export type BacktestAnalyticsResponse = {
   availability?: Record<string, boolean>;
   error?: string;
 };
+
+
+export type BacktestChartDataResponse = {
+  ok: boolean;
+  run_id: number;
+  charts?: {
+    equity_curve?: any[];
+    drawdown_curve?: any[];
+    monthly_returns?: any[];
+    pnl_by_symbol?: any[];
+    pnl_by_regime?: any[];
+    score_bucket_performance?: any[];
+    holding_time_performance?: any[];
+    fee_pressure?: any[];
+    trade_distribution?: any[];
+  };
+  availability?: Record<string, boolean>;
+  error?: string;
+};
