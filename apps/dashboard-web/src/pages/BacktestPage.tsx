@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   BarChart3,
   CalendarDays,
-  Cpu,
   Database,
   Loader2,
   Play,
@@ -18,8 +17,11 @@ import {
   fetchBacktestStrategies,
   fetchBacktestStrategyDetail,
   runBacktest,
+  validateBacktestRunConfig,
 } from "../lib/backtestApi";
-import type { BacktestRunConfig, BacktestRunResponse } from "../types/backtests";
+import type { BacktestRunConfig, BacktestRunResponse, BacktestValidationResponse } from "../types/backtests";
+import BacktestStrategyDetailPanel from "../components/backtest/BacktestStrategyDetailPanel";
+import BacktestValidationPanel from "../components/backtest/BacktestValidationPanel";
 
 const DEFAULT_CONFIG: BacktestRunConfig = {
   strategy_name: "tradetower_baseline_v1",
@@ -85,26 +87,6 @@ function normalizeStrategies(payload: any): string[] {
 
 function normalizeRuns(payload: any): any[] {
   return asArray(payload?.runs ?? payload?.items ?? payload?.data);
-}
-
-function tagsFrom(detail: any): string[] {
-  return asStringArray(
-    detail?.tags ??
-      detail?.strategy?.tags ??
-      detail?.metadata?.tags ??
-      detail?.config?.tags,
-    ["phase17"]
-  );
-}
-
-function requiredTimeframesFrom(detail: any): string[] {
-  return asStringArray(
-    detail?.required_timeframes ??
-      detail?.strategy?.required_timeframes ??
-      detail?.metadata?.required_timeframes ??
-      detail?.config?.required_timeframes,
-    ["5m", "15m", "4h"]
-  );
 }
 
 function textValue(value: unknown, fallback = "—") {
@@ -179,6 +161,8 @@ export default function BacktestPage() {
   const [result, setResult] = useState<BacktestRunResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastStartedAt, setLastStartedAt] = useState<Date | null>(null);
+  const [backendValidation, setBackendValidation] = useState<BacktestValidationResponse | null>(null);
+  const [validatingConfig, setValidatingConfig] = useState(false);
 
   useEffect(() => {
     loadBootstrap();
@@ -248,6 +232,20 @@ export default function BacktestPage() {
     return issues;
   }, [payload]);
 
+  async function handleValidateConfig() {
+    try {
+      setValidatingConfig(true);
+      setError(null);
+      const response = await validateBacktestRunConfig(payload);
+      setBackendValidation(response);
+    } catch (err) {
+      setBackendValidation(null);
+      setError(err instanceof Error ? err.message : "Strategy validation failed");
+    } finally {
+      setValidatingConfig(false);
+    }
+  }
+
   async function handleRun() {
     if (validation.length > 0) return;
     try {
@@ -255,6 +253,13 @@ export default function BacktestPage() {
       setError(null);
       setResult(null);
       setLastStartedAt(new Date());
+      const validationResponse = await validateBacktestRunConfig(payload);
+      setBackendValidation(validationResponse);
+      if (validationResponse?.validation?.valid === false || validationResponse?.valid === false) {
+        setError("Backtest configuration validation failed. Check the validation panel.");
+        return;
+      }
+
       const response = await runBacktest(payload);
       setResult(response);
       await loadBootstrap();
@@ -267,8 +272,6 @@ export default function BacktestPage() {
 
   const summary = result?.summary;
   const returnTone = (summary?.return_pct ?? 0) > 0 ? "good" : (summary?.return_pct ?? 0) < 0 ? "bad" : "neutral";
-  const strategyTags = tagsFrom(strategyDetail);
-  const requiredTimeframes = requiredTimeframesFrom(strategyDetail);
 
   return (
     <div className="space-y-6">
@@ -381,30 +384,21 @@ export default function BacktestPage() {
 
         <div className="space-y-5">
           <div className="grid gap-5 xl:grid-cols-2">
-            <Panel title="Strategy Detail" subtitle="Defensive rendering against backend shape changes." icon={<Cpu size={18} className="text-violet-200" />}>
-              <div className="space-y-3">
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <div className="text-sm text-white/45">Selected strategy</div>
-                  <div className="mt-1 text-xl font-semibold text-white">{config.strategy_name}</div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {strategyTags.map((tag) => (
-                      <span key={tag} className="rounded-full border border-white/10 bg-white/8 px-2.5 py-1 text-xs text-white/60">{tag}</span>
-                    ))}
-                  </div>
-                </div>
+            <BacktestStrategyDetailPanel
+              strategyName={config.strategy_name}
+              detail={strategyDetail}
+              selectedTimeframes={config.timeframes}
+              dataMode={config.data_mode}
+              datasetId={config.dataset_id}
+              backendValidation={backendValidation}
+            />
 
-                <div className="grid gap-3 md:grid-cols-2">
-                  <MetricTile label="Version" value={textValue(strategyDetail?.version?.version ?? strategyDetail?.config?.strategy_version ?? config.strategy_version)} />
-                  <MetricTile label="Family" value={textValue(strategyDetail?.family ?? strategyDetail?.config?.strategy_family)} />
-                  <MetricTile label="Required TFs" value={requiredTimeframes.join(", ")} />
-                  <MetricTile label="Candidate filter" value={strategyDetail?.config?.candidate_filter?.included ? "Included" : "Unknown"} tone={strategyDetail?.config?.candidate_filter?.included ? "good" : "neutral"} />
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm leading-6 text-white/50">
-                  Phase 17 keeps lifecycle execution features honest: spread and realistic fills are displayed in the form, but full order/position simulation belongs to Phase 18.
-                </div>
-              </div>
-            </Panel>
+            <BacktestValidationPanel
+              localIssues={validation}
+              backendValidation={backendValidation}
+              validating={validatingConfig}
+              onValidate={handleValidateConfig}
+            />
 
             <Panel title="Progress" subtitle="Synchronous backend run for now." icon={<Zap size={18} className="text-yellow-200" />}>
               <div className="space-y-4">

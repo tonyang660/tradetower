@@ -81,3 +81,23 @@ export type BacktestRunDetailResponse = {
   run?: any;
   error?: string;
 };
+
+
+export type BacktestValidationResponse = {
+  ok?: boolean;
+  valid?: boolean;
+  validation?: {
+    valid?: boolean;
+    errors?: string[];
+    warnings?: string[];
+    requested_timeframes?: string[];
+    required_timeframes?: string[];
+    active_phase_timeframes?: string[];
+    strict_timeframes?: boolean;
+    strategy?: any;
+  };
+  config?: BacktestRunConfig;
+  error?: string;
+  errors?: string[];
+  warnings?: string[];
+};

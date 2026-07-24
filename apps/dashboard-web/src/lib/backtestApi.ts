@@ -3,6 +3,7 @@ import type {
   BacktestRunDetailResponse,
   BacktestRunListResponse,
   BacktestRunResponse,
+  BacktestValidationResponse,
   StrategyDetailResponse,
   StrategyListResponse,
 } from "../types/backtests";
@@ -59,4 +60,9 @@ export function fetchBacktestRuns(limit = 10) {
 
 export function fetchBacktestRunDetail(runId: number) {
   return getJson<BacktestRunDetailResponse>(`/backtest/run-detail?run_id=${runId}`);
+}
+
+
+export function validateBacktestRunConfig(payload: BacktestRunConfig) {
+  return postJson<BacktestValidationResponse>("/backtest/validate-run", payload);
 }
