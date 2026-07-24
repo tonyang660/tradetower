@@ -18,12 +18,37 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+
 def _public(job: dict[str, Any]) -> dict[str, Any]:
-    payload = deepcopy(job)
-    payload.pop("thread", None)
-    payload.pop("cancel_event", None)
-    payload.pop("started_at_monotonic", None)
-    return payload
+    """Return only JSON-safe/public job fields.
+
+    Do not deepcopy the whole job because it contains thread/cancel_event objects,
+    and those contain internal locks that cannot be copied or JSON-serialized.
+    """
+    public_keys = [
+        "ok",
+        "job_id",
+        "status",
+        "run_id",
+        "created_at",
+        "started_at",
+        "completed_at",
+        "elapsed_seconds",
+        "estimated_remaining_seconds",
+        "progress_pct",
+        "candles_processed",
+        "cycles_processed",
+        "trades_generated",
+        "current_simulated_date",
+        "current_status",
+        "logs",
+        "payload",
+        "result",
+        "error",
+        "cancel_requested",
+    ]
+
+    return {key: job.get(key) for key in public_keys if key in job}
 
 
 def _elapsed(job: dict[str, Any]) -> float:
