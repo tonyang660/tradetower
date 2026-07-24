@@ -30,6 +30,7 @@ from result_api import (
 )
 from runner import list_runs, run_backtest, run_detail
 from backtest_async import start_backtest_job, get_backtest_job, cancel_backtest_job
+from backtest_analytics import fetch_backtest_analytics
 from strategies.registry import get_strategy_detail, list_strategies
 from strategies.validation import validate_strategy_payload
 
@@ -220,6 +221,14 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/backtests/progress":
             job_id = query.get("job_id", [""])[0]
             self._send_json(get_backtest_job(job_id))
+            return
+
+        if parsed.path == "/backtests/run/analytics":
+            run_id = self._run_id_or_error(query)
+            if run_id is None:
+                return
+            result = fetch_backtest_analytics(run_id)
+            self._send_json(result, status=200 if result.get("ok") else 404)
             return
 
         if parsed.path == "/backtests/run/summary":

@@ -125,3 +125,37 @@ export type BacktestJobProgress = {
   };
   error?: string;
 };
+
+
+export type BacktestAnalyticsMetric = {
+  name: string;
+  value: any;
+  available: boolean;
+  unit?: string | null;
+  description?: string | null;
+};
+
+export type BacktestAnalyticsBreakdownRow = {
+  key: string;
+  trades: number;
+  gross_pnl: number;
+  net_pnl: number;
+  fees: number;
+  win_rate: number;
+};
+
+export type BacktestAnalyticsResponse = {
+  ok: boolean;
+  run_id: number;
+  run?: any;
+  metrics?: BacktestAnalyticsMetric[];
+  summary?: any;
+  breakdowns?: {
+    symbols?: BacktestAnalyticsBreakdownRow[];
+    regimes?: BacktestAnalyticsBreakdownRow[];
+    exit_reasons?: BacktestAnalyticsBreakdownRow[];
+    score_buckets?: BacktestAnalyticsBreakdownRow[];
+  };
+  availability?: Record<string, boolean>;
+  error?: string;
+};

@@ -24,6 +24,7 @@ import {
 import type { BacktestJobProgress, BacktestRunConfig, BacktestRunResponse, BacktestValidationResponse } from "../types/backtests";
 import BacktestStrategyDetailPanel from "../components/backtest/BacktestStrategyDetailPanel";
 import BacktestValidationPanel from "../components/backtest/BacktestValidationPanel";
+import BacktestExpandedMetricsPanel from "../components/backtest/BacktestExpandedMetricsPanel";
 
 const DEFAULT_CONFIG: BacktestRunConfig = {
   strategy_name: "tradetower_baseline_v1",
@@ -353,6 +354,7 @@ export default function BacktestPage() {
   const elapsedSeconds = activeJob?.elapsed_seconds ?? 0;
   const etaSeconds = activeJob?.estimated_remaining_seconds ?? null;
   const progressLogs = activeJob?.logs ?? [];
+  const currentRunId = result?.run_id ?? result?.summary?.run_id ?? activeJob?.run_id ?? null;
 
   return (
     <div className="space-y-6">
@@ -579,6 +581,8 @@ export default function BacktestPage() {
               </div>
             )}
           </Panel>
+
+          <BacktestExpandedMetricsPanel runId={currentRunId} />
 
           <Panel title="Recent Runs" subtitle="Quick visibility before full result browser/charts in 17F-17H." icon={<CalendarDays size={18} className="text-cyan-200" />}>
             <div className="overflow-hidden rounded-2xl border border-white/10">

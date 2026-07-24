@@ -63,6 +63,7 @@ def handle_backtest_get(handler, parsed) -> bool:
         "/backtest/runs": "/backtests/runs",
         "/backtest/run-detail": "/backtests/run",
         "/backtest/summary": "/backtests/run/summary",
+        "/backtest/analytics": "/backtests/run/analytics",
         "/backtest/trades": "/backtests/run/trades",
         "/backtest/equity-curve": "/backtests/run/equity-curve",
         "/backtest/metrics": "/backtests/run/metrics",
