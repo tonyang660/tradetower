@@ -209,11 +209,6 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
-        if parsed.path == "/backtests/progress":
-            job_id = query.get("job_id", [""])[0]
-            self._send_json(get_backtest_job(job_id))
-            return
-
         if parsed.path == "/backtests/runs":
             limit = _query_int(query, "limit", 20)
             self._send_json({
@@ -340,10 +335,22 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/backtests/start":
+            try:
+                payload = _read_json(self)
+            except Exception:
+                self._send_json({"ok": False, "error": "invalid_json"}, status=400)
+                return
+
             self._send_json(start_backtest_job(payload))
             return
 
         if parsed.path == "/backtests/cancel":
+            try:
+                payload = _read_json(self)
+            except Exception:
+                self._send_json({"ok": False, "error": "invalid_json"}, status=400)
+                return
+
             self._send_json(cancel_backtest_job(str(payload.get("job_id", ""))))
             return
 
