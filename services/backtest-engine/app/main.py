@@ -222,25 +222,9 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
-        if parsed.path == "/backtests/start":
-            self._send_json(start_backtest_job(payload))
-            return
-
-        if parsed.path == "/backtests/cancel":
-            self._send_json(cancel_backtest_job(str(payload.get("job_id", ""))))
-            return
-
-        if parsed.path == "/backtests/run":
-            run_id = self._run_id_or_error(query)
-            if run_id is None:
-                return
-
-            detail = run_detail(run_id)
-            if not detail:
-                self._send_json({"ok": False, "error": "run_not_found", "run_id": run_id}, status=404)
-                return
-
-            self._send_json({"ok": True, **detail})
+        if parsed.path == "/backtests/progress":
+            job_id = query.get("job_id", [""])[0]
+            self._send_json(get_backtest_job(job_id))
             return
 
         if parsed.path == "/backtests/run/summary":
@@ -353,6 +337,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             validation = validate_strategy_payload(payload)
             self._send_json({"ok": validation.get("valid", False), "validation": validation}, status=200 if validation.get("valid") else 400)
+            return
+
+        if parsed.path == "/backtests/start":
+            self._send_json(start_backtest_job(payload))
+            return
+
+        if parsed.path == "/backtests/cancel":
+            self._send_json(cancel_backtest_job(str(payload.get("job_id", ""))))
             return
 
         if parsed.path == "/backtests/run":
