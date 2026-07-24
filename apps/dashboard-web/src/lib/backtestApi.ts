@@ -6,6 +6,8 @@ import type {
   BacktestJobProgress,
   BacktestAnalyticsResponse,
   BacktestChartDataResponse,
+  BacktestPagedRowsResponse,
+  BacktestResultBundleResponse,
   BacktestValidationResponse,
   StrategyDetailResponse,
   StrategyListResponse,
@@ -91,4 +93,17 @@ export function fetchBacktestAnalytics(runId: number) {
 
 export function fetchBacktestCharts(runId: number) {
   return getJson<BacktestChartDataResponse>(`/backtest/charts?run_id=${runId}`);
+}
+
+
+export function fetchBacktestTrades(runId: number, limit = 250, offset = 0) {
+  return getJson<BacktestPagedRowsResponse>(`/backtest/trades?run_id=${runId}&limit=${limit}&offset=${offset}`);
+}
+
+export function fetchBacktestLogs(runId: number, limit = 250, offset = 0) {
+  return getJson<BacktestPagedRowsResponse>(`/backtest/logs?run_id=${runId}&limit=${limit}&offset=${offset}`);
+}
+
+export function fetchBacktestResultBundle(runId: number) {
+  return getJson<BacktestResultBundleResponse>(`/backtest/result-bundle?run_id=${runId}`);
 }

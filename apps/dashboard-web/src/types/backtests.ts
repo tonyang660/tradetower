@@ -178,3 +178,29 @@ export type BacktestChartDataResponse = {
   availability?: Record<string, boolean>;
   error?: string;
 };
+
+
+export type BacktestPagedRowsResponse = {
+  ok: boolean;
+  run_id?: number;
+  trades?: any[];
+  logs?: any[];
+  rows?: any[];
+  total?: number;
+  count?: number;
+  limit?: number;
+  offset?: number;
+  has_more?: boolean;
+  error?: string;
+};
+
+export type BacktestResultBundleResponse = {
+  ok: boolean;
+  run_id?: number;
+  run?: any;
+  metrics?: any;
+  trades?: any;
+  equity_curve?: any;
+  logs?: any;
+  error?: string;
+};
