@@ -10,6 +10,8 @@ from strategies.validation import validate_strategy_run_config
 from db import get_conn
 from historical_feed import build_historical_feed, parse_time
 from market_snapshot import MarketSnapshotBuilder
+from execution_timeline import normalize_execution_timeline_config, ensure_timeframes_for_timeline, virtual_execution_slots
+from order_lifecycle import build_instant_fill_lifecycle, phase18_lifecycle_contract
 
 from fee_model import FeeModel
 from guardian_risk import GuardianPolicy, evaluate_entry_guard
@@ -24,17 +26,32 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(symbols, str):
         symbols = [symbols]
 
-    cycle_timeframe = str(payload.get("cycle_timeframe") or "15m")
-    timeframes = payload.get("timeframes") or [cycle_timeframe]
+    cycle_timeframe = str(payload.get("cycle_timeframe") or payload.get("decision_timeframe") or "5m")
+    timeframes = payload.get("timeframes") or [cycle_timeframe, "15m", "1h", "4h"]
     if isinstance(timeframes, str):
         timeframes = [timeframes]
+
+    timeline = normalize_execution_timeline_config(
+        payload,
+        existing_timeframes=[str(t) for t in timeframes],
+        cycle_timeframe=cycle_timeframe,
+    )
+    timeframes = ensure_timeframes_for_timeline([str(t) for t in timeframes], timeline)
 
     return {
         "strategy_name": payload.get("strategy_name", "tradetower_baseline_v1"),
         "strategy_version": payload.get("strategy_version", "0.2.0" if payload.get("strategy_name", "tradetower_baseline_v1") == "tradetower_baseline_v1" else "0.1.0"),
         "symbols": [str(s).upper().replace("/", "").replace("-", "") for s in symbols],
         "timeframes": [str(t) for t in timeframes],
-        "cycle_timeframe": cycle_timeframe,
+        "cycle_timeframe": timeline.decision_timeframe,
+        "decision_timeframe": timeline.decision_timeframe,
+        "execution_timeframe": timeline.execution_timeframe,
+        "execution_data_timeframe": timeline.execution_data_timeframe,
+        "feature_timeframes": timeline.feature_timeframes,
+        "virtual_execution": timeline.virtual_execution,
+        "virtual_execution_steps_per_decision": timeline.virtual_execution_steps_per_decision,
+        "execution_timeline": timeline.to_dict(),
+        "timeout_exits_enabled": False,
         "start_time": parse_time(payload.get("start_time"), datetime(2024, 1, 1, tzinfo=timezone.utc)),
         "end_time": parse_time(payload.get("end_time"), None) if payload.get("end_time") else None,
         "starting_capital": float(payload.get("starting_capital", DEFAULT_STARTING_CAPITAL)),
@@ -47,7 +64,7 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "slippage_bps": float(payload.get("slippage_bps", DEFAULT_SLIPPAGE_BPS)),
         "data_mode": payload.get("data_mode", "phase14b_sample_historical_feed"),
         "dataset_id": int(payload.get("dataset_id", 0) or 0),
-        "execution_model": "market_with_fee_slippage_bps",
+        "execution_model": payload.get("execution_model", "phase18_virtual_1m_order_lifecycle"),
         "preflight_strict": bool(payload.get("preflight_strict", True)),
         "warmup_required_bars": int(payload.get("warmup_required_bars", 8)),
         "cycle_decision_log_interval": int(payload.get("cycle_decision_log_interval", 25)),
@@ -256,7 +273,9 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     run_id = _create_run(config)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("UPDATE backtest_runs SET status='running', started_at=NOW() WHERE run_id=%s", (run_id,))
-    _log(run_id, "BACKTEST_STARTED", "Phase 14C production-like cycle simulation started.", config)
+    _log(run_id, "BACKTEST_STARTED", "Backtest started.", config)
+    _log(run_id, "EXECUTION_TIMELINE_INITIALIZED", "Execution timeline initialized.", config["execution_timeline"])
+    _log(run_id, "ORDER_LIFECYCLE_INITIALIZED", "Order lifecycle model initialized.", phase18_lifecycle_contract())
 
     feed = build_historical_feed(config)
     preflight = feed.preflight()
@@ -309,6 +328,9 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 expected = max(1, int(getattr(preflight, "expected_cycles", config["max_cycles"]) or config["max_cycles"]))
                 _emit_progress(progress_callback, status="running", run_id=run_id, cycle_index=cycle_index, cycle_count=cycle_count, cycles_processed=cycle_count, candles_processed=cycle_count * len(candles), trades_generated=risk_approved, current_simulated_date=snapshot.timestamp.isoformat(), progress_pct=min(99.0, cycle_count / expected * 100.0), message="Backtest cycle progress")
 
+            execution_slots = virtual_execution_slots(snapshot.timestamp, config["execution_timeline"])
+            execution_steps_processed = cycle_count * int(config.get("virtual_execution_steps_per_decision", 1) or 1)
+
             # 1) Manage existing positions before new entries.
             for symbol, position in list(open_positions.items()):
                 if symbol not in snapshot.closes:
@@ -329,8 +351,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     elif snapshot.lows[symbol] <= position["tp3"]:
                         exit_reason, requested_exit = "TP3", position["tp3"]
 
-                if position["bars"] >= 48 and not exit_reason:
-                    exit_reason = "TIMEOUT_CLOSE"
+                # Timeout/stale-trade exits are intentionally disabled.
+                # Remaining positions close only at protective exits or final backtest settlement.
 
                 if exit_reason:
                     slip = config["slippage_bps"] / 10000
@@ -341,7 +363,20 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     trade_net = gross - position["fees"] - exit_fee
                     cash += cash_delta
                     realized_pnl += cash_delta
-                    _record_order(run_id, symbol, "sell" if position["side"] == "long" else "buy", "market_exit", requested_exit, filled_exit, position["qty"], exit_fee, exit_reason, snapshot.timestamp, {"position_id": position["position_id"], "cycle_index": cycle_index})
+                    exit_side = "sell" if position["side"] == "long" else "buy"
+                    exit_lifecycle = build_instant_fill_lifecycle(
+                        role="stop_loss" if exit_reason == "STOP_LOSS" else "tp3",
+                        order_type="market_exit",
+                        side=exit_side,
+                        requested_price=requested_exit,
+                        requested_size=position["qty"],
+                        filled_price=filled_exit,
+                        filled_size=position["qty"],
+                        timestamp=snapshot.timestamp,
+                        reason=exit_reason,
+                        details={"position_id": position["position_id"], "cycle_index": cycle_index, "execution_slots": execution_slots},
+                    )
+                    _record_order(run_id, symbol, exit_side, "market_exit", requested_exit, filled_exit, position["qty"], exit_fee, exit_reason, snapshot.timestamp, {"position_id": position["position_id"], "cycle_index": cycle_index, "order_lifecycle": exit_lifecycle})
                     _close_position(run_id, position, snapshot.timestamp, filled_exit, gross, exit_fee, trade_net, exit_reason)
                     _log(run_id, "POSITION_CLOSED", f"{symbol} closed via {exit_reason}.", {"cycle_index": cycle_index, "symbol": symbol, "net_pnl": trade_net})
                     del open_positions[symbol]
@@ -427,10 +462,24 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     "reason_tags": plan["reason_tags"], "debug": plan["debug"],
                 }
 
+                entry_side = "buy" if side == "long" else "sell"
+                entry_lifecycle = build_instant_fill_lifecycle(
+                    role="entry",
+                    order_type="market_entry",
+                    side=entry_side,
+                    requested_price=entry,
+                    requested_size=qty,
+                    filled_price=filled_entry,
+                    filled_size=qty,
+                    timestamp=snapshot.timestamp,
+                    reason="STRATEGY_ENTRY",
+                    details={"cycle_index": cycle_index, "execution_slots": execution_slots},
+                )
+
                 _record_order(
                     run_id,
                     symbol,
-                    "buy" if side == "long" else "sell",
+                    entry_side,
                     "market_entry",
                     entry,
                     filled_entry,
@@ -445,6 +494,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                         "guardian": guard.to_dict(),
                         "fee_model": fee_model.to_dict(),
                         "planned_notional": planned_notional,
+                        "order_lifecycle": entry_lifecycle,
                     },
                 )
 
@@ -473,7 +523,20 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 trade_net = gross - position["fees"] - exit_fee
                 cash += cash_delta
                 realized_pnl += cash_delta
-                _record_order(run_id, symbol, "sell" if position["side"] == "long" else "buy", "market_exit", requested_exit, filled_exit, position["qty"], exit_fee, "END_OF_BACKTEST", last_snapshot.timestamp, {"position_id": position["position_id"], "cycle_index": last_snapshot.cycle_index})
+                final_exit_side = "sell" if position["side"] == "long" else "buy"
+                final_lifecycle = build_instant_fill_lifecycle(
+                    role="end_of_backtest",
+                    order_type="market_exit",
+                    side=final_exit_side,
+                    requested_price=requested_exit,
+                    requested_size=position["qty"],
+                    filled_price=filled_exit,
+                    filled_size=position["qty"],
+                    timestamp=last_snapshot.timestamp,
+                    reason="END_OF_BACKTEST",
+                    details={"position_id": position["position_id"], "cycle_index": last_snapshot.cycle_index},
+                )
+                _record_order(run_id, symbol, final_exit_side, "market_exit", requested_exit, filled_exit, position["qty"], exit_fee, "END_OF_BACKTEST", last_snapshot.timestamp, {"position_id": position["position_id"], "cycle_index": last_snapshot.cycle_index, "order_lifecycle": final_lifecycle})
                 _close_position(run_id, position, last_snapshot.timestamp, filled_exit, gross, exit_fee, trade_net, "END_OF_BACKTEST")
                 del open_positions[symbol]
 
@@ -490,8 +553,11 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             "guardian_policy": guardian_policy.to_dict(),
             "fee_model": fee_model.to_dict(),
             "strategy_validation": strategy_validation,
+            "execution_timeline": config["execution_timeline"],
+            "order_lifecycle": phase18_lifecycle_contract(),
+            "timeout_exits_enabled": False,
         }
-        _log(run_id, "BACKTEST_COMPLETED", "Phase 14C completed.", {**summary, **diagnostics})
+        _log(run_id, "BACKTEST_COMPLETED", "Backtest completed.", {**summary, **diagnostics})
         return {"ok": True, "run_id": run_id, "summary": summary, "diagnostics": diagnostics, "preflight": preflight.to_dict(), "config": config}
 
     except Exception as exc:
