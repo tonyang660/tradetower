@@ -375,6 +375,16 @@ def _finalize_run(run_id: int, final_equity: float, starting_capital: float, max
             (run_id,),
         )
         total_trades, gross_pnl, net_pnl, wins, gross_wins, gross_losses = cur.fetchone()
+
+        # Phase 18F-HF2:
+        # Partial TP rows are stored as realized trade rows before the remaining
+        # position is closed. Some in-memory equity paths can miss those partial
+        # realized exits. At finalization all positions have been settled, so the
+        # trade ledger is the source of truth for final equity.
+        ledger_final_equity = float(starting_capital) + float(net_pnl or 0.0)
+        equity_reconciliation_delta = ledger_final_equity - float(final_equity or 0.0)
+        final_equity = ledger_final_equity
+
         win_rate = wins / total_trades if total_trades else None
         profit_factor = gross_wins / gross_losses if gross_losses else None
         return_pct = ((final_equity - starting_capital) / starting_capital * 100.0) if starting_capital else 0
@@ -382,6 +392,7 @@ def _finalize_run(run_id: int, final_equity: float, starting_capital: float, max
             "run_id": run_id, "final_equity": final_equity, "return_pct": return_pct,
             "gross_pnl": gross_pnl, "net_pnl": net_pnl, "max_drawdown_pct": max_drawdown_pct,
             "total_trades": total_trades, "win_rate": win_rate, "profit_factor": profit_factor,
+            "equity_reconciliation_delta": equity_reconciliation_delta,
         }
         cur.execute(
             """
