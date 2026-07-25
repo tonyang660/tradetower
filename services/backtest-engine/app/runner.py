@@ -13,6 +13,7 @@ from market_snapshot import MarketSnapshotBuilder
 from execution_timeline import normalize_execution_timeline_config, ensure_timeframes_for_timeline, virtual_execution_slots
 from order_lifecycle import build_instant_fill_lifecycle, phase18_lifecycle_contract
 from execution_fill_model import simulate_market_entry_fill, simulate_market_exit_fill, fill_model_contract
+from entry_order_simulator import build_pending_limit_entry_order, evaluate_pending_entry_order, entry_order_model_contract
 
 from fee_model import FeeModel
 from guardian_risk import GuardianPolicy, evaluate_entry_guard
@@ -68,6 +69,10 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "exit_slippage_bps": float(payload.get("exit_slippage_bps", payload.get("slippage_bps", DEFAULT_SLIPPAGE_BPS))),
         "market_fill_ratio": float(payload.get("market_fill_ratio", 1.0)),
         "partial_fill_enabled": bool(payload.get("partial_fill_enabled", False)),
+        "entry_order_preference": str(payload.get("entry_order_preference", "limit")),
+        "entry_limit_max_wait_attempts": int(payload.get("entry_limit_max_wait_attempts", payload.get("entry_limit_max_wait_cycles", 15))),
+        "entry_limit_max_wait_cycles": int(payload.get("entry_limit_max_wait_cycles", 15)),
+        "entry_market_fallback_enabled": bool(payload.get("entry_market_fallback_enabled", True)),
         "data_mode": payload.get("data_mode", "phase14b_sample_historical_feed"),
         "dataset_id": int(payload.get("dataset_id", 0) or 0),
         "execution_model": payload.get("execution_model", "phase18_virtual_1m_order_lifecycle"),
@@ -115,7 +120,10 @@ def _log(run_id: int | None, event_type: str, message: str, details: dict[str, A
         )
 
 
-def _record_order(run_id: int, symbol: str, side: str, order_type: str, requested_price: float, filled_price: float, quantity: float, fee: float, reason: str, timestamp, details: dict[str, Any] | None = None) -> int:
+def _record_order(run_id: int, symbol: str, side: str, order_type: str, requested_price: float, filled_price: float | None, quantity: float, fee: float, reason: str, timestamp, details: dict[str, Any] | None = None, status: str = "filled") -> int:
+    filled_at = timestamp if status == "filled" else None
+    effective_price = filled_price if filled_price is not None else requested_price
+    slippage = abs(effective_price - requested_price) if filled_price is not None else 0.0
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -123,16 +131,49 @@ def _record_order(run_id: int, symbol: str, side: str, order_type: str, requeste
                 run_id, symbol, side, order_type, status, requested_price, filled_price,
                 quantity, notional, fee, slippage, reason, created_at, filled_at, details_json
             )
-            VALUES (%s, %s, %s, %s, 'filled', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
             RETURNING order_id
             """,
             (
-                run_id, symbol, side, order_type, requested_price, filled_price,
-                quantity, abs(filled_price * quantity), fee, abs(filled_price - requested_price),
-                reason, timestamp, timestamp, _json(details or {}),
+                run_id, symbol, side, order_type, status, requested_price, filled_price,
+                quantity, abs(effective_price * quantity), fee, slippage,
+                reason, timestamp, filled_at, _json(details or {}),
             ),
         )
         return int(cur.fetchone()[0])
+
+
+def _update_order_fill(order_id: int, filled_price: float, quantity: float, fee: float, timestamp, details: dict[str, Any] | None = None) -> None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE backtest_orders
+            SET status='filled',
+                filled_price=%s,
+                quantity=%s,
+                notional=ABS(%s * %s),
+                fee=%s,
+                slippage=ABS(%s - requested_price),
+                filled_at=%s,
+                details_json=COALESCE(details_json, '{}'::jsonb) || %s::jsonb
+            WHERE order_id=%s
+            """,
+            (filled_price, quantity, filled_price, quantity, fee, filled_price, timestamp, _json(details or {}), order_id),
+        )
+
+
+def _update_order_status(order_id: int, status: str, timestamp, details: dict[str, Any] | None = None) -> None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE backtest_orders
+            SET status=%s,
+                details_json=COALESCE(details_json, '{}'::jsonb) || %s::jsonb
+            WHERE order_id=%s
+            """,
+            (status, _json(details or {}), order_id),
+        )
+
 
 
 def _open_position(run_id: int, position: dict[str, Any]) -> None:
@@ -283,6 +324,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     _log(run_id, "EXECUTION_TIMELINE_INITIALIZED", "Execution timeline initialized.", config["execution_timeline"])
     _log(run_id, "ORDER_LIFECYCLE_INITIALIZED", "Order lifecycle model initialized.", phase18_lifecycle_contract())
     _log(run_id, "FILL_MODEL_INITIALIZED", "Fill model initialized.", fill_model_contract(config))
+    _log(run_id, "ENTRY_ORDER_MODEL_INITIALIZED", "Entry order model initialized.", entry_order_model_contract(config))
 
     feed = build_historical_feed(config)
     preflight = feed.preflight()
@@ -298,6 +340,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     peak_equity = cash
     max_drawdown_pct = 0.0
     open_positions: dict[str, dict[str, Any]] = {}
+    pending_entry_orders: dict[str, dict[str, Any]] = {}
 
     fee_model = FeeModel.from_config(config)
     guardian_policy = GuardianPolicy.from_config(config)
@@ -305,6 +348,10 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     guard_rejections = 0
     risk_approved = 0
     risk_notional_requested = 0.0
+    entry_orders_submitted = 0
+    entry_orders_filled = 0
+    entry_orders_expired = 0
+    entry_market_fallbacks = 0
 
     _emit_progress(progress_callback, status="running", run_id=run_id, cycle_count=0, cycles_processed=0, candles_processed=0, trades_generated=0, progress_pct=0.0, message="Backtest initialized")
 
@@ -337,6 +384,92 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
 
             execution_slots = virtual_execution_slots(snapshot.timestamp, config["execution_timeline"])
             execution_steps_processed = cycle_count * int(config.get("virtual_execution_steps_per_decision", 1) or 1)
+
+            # 0) Evaluate pending entry orders.
+            for symbol, pending_order in list(pending_entry_orders.items()):
+                if symbol not in snapshot.highs or symbol not in snapshot.lows:
+                    continue
+
+                entry_eval = evaluate_pending_entry_order(
+                    order=pending_order,
+                    candle_high=snapshot.highs[symbol],
+                    candle_low=snapshot.lows[symbol],
+                    cycle_index=cycle_index,
+                    timestamp=snapshot.timestamp,
+                    config=config,
+                )
+
+                if entry_eval["action"] == "waiting":
+                    continue
+
+                if entry_eval["action"] == "expired":
+                    entry_orders_expired += 1
+                    pending_order["lifecycle"]["status"] = "expired"
+                    pending_order["lifecycle"]["events"].append({"status": "expired", "timestamp": snapshot.timestamp, "details": entry_eval})
+                    _update_order_status(int(pending_order["order_id"]), "expired", snapshot.timestamp, {"entry_order_evaluation": entry_eval, "order_lifecycle": pending_order["lifecycle"]})
+                    _log(run_id, "ENTRY_ORDER_EXPIRED", f"{symbol} limit entry expired.", {"cycle_index": cycle_index, "entry_order_evaluation": entry_eval})
+                    del pending_entry_orders[symbol]
+                    continue
+
+                plan = pending_order["plan"]
+                side = pending_order["side"]
+
+                if entry_eval["action"] == "market_fallback":
+                    entry_market_fallbacks += 1
+                    entry_orders_expired += 1
+                    market_fill = simulate_market_entry_fill(
+                        config=config,
+                        position_side=side,
+                        requested_price=snapshot.closes[symbol],
+                        requested_size=pending_order["requested_size"],
+                        timestamp=snapshot.timestamp,
+                        reason="ENTRY_MARKET_FALLBACK",
+                    )
+                    filled_entry = float(market_fill["filled_price"])
+                    filled_entry_size = float(market_fill["filled_size"])
+                    entry_eval["market_fill"] = market_fill
+                    entry_eval["liquidity"] = market_fill.get("liquidity")
+                else:
+                    filled_entry = float(entry_eval["filled_price"])
+                    filled_entry_size = float(entry_eval["filled_size"])
+
+                planned_notional = abs(filled_entry * filled_entry_size)
+                entry_fee_details = fee_model.fee_details(planned_notional, entry_eval.get("liquidity"))
+                entry_fee = float(entry_fee_details["fee"])
+
+                cash -= entry_fee
+                realized_pnl -= entry_fee
+
+                position = {
+                    "symbol": symbol, "side": side, "entry_time": snapshot.timestamp,
+                    "entry": filled_entry, "stop": plan["stop"], "tp1": plan["tp1"],
+                    "tp2": plan["tp2"], "tp3": plan["tp3"], "qty": filled_entry_size,
+                    "fees": entry_fee, "bars": 0, "regime": plan["regime"],
+                    "score": plan["score"], "confidence": plan["confidence"],
+                    "reason_tags": plan["reason_tags"], "debug": plan["debug"],
+                }
+
+                _open_position(run_id, position)
+                open_positions[symbol] = position
+                entry_orders_filled += 1
+
+                pending_order["lifecycle"]["status"] = "filled"
+                pending_order["lifecycle"]["events"].append({"status": "filled", "timestamp": snapshot.timestamp, "details": {"entry_order_evaluation": entry_eval, "position_id": position["position_id"]}})
+                _update_order_fill(
+                    int(pending_order["order_id"]),
+                    filled_entry,
+                    filled_entry_size,
+                    entry_fee,
+                    snapshot.timestamp,
+                    {
+                        "position_id": position["position_id"],
+                        "entry_order_evaluation": entry_eval,
+                        "fee_details": entry_fee_details,
+                        "order_lifecycle": pending_order["lifecycle"],
+                    },
+                )
+                _log(run_id, "POSITION_OPENED", f"{symbol} {side} opened from entry order.", {"cycle_index": cycle_index, "entry": filled_entry, "quantity": filled_entry_size, "score": plan["score"], "entry_order_evaluation": entry_eval})
+                del pending_entry_orders[symbol]
 
             # 1) Manage existing positions before new entries.
             for symbol, position in list(open_positions.items()):
@@ -422,7 +555,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     "reason_tags": decision.reason_tags, "debug": decision.debug,
                 })
 
-                if symbol in open_positions:
+                if symbol in open_positions or symbol in pending_entry_orders:
                     continue
 
                 plan = strategy.build_entry_plan(snapshot, decision, equity, config["risk_per_trade_pct"])
@@ -430,17 +563,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     continue
 
                 entry, side, qty = plan["entry"], plan["side"], plan["qty"]
-                entry_fill = simulate_market_entry_fill(
-                    config=config,
-                    position_side=side,
-                    requested_price=entry,
-                    requested_size=qty,
-                    timestamp=snapshot.timestamp,
-                    reason="STRATEGY_ENTRY",
-                )
-                filled_entry = float(entry_fill["filled_price"])
-                filled_entry_size = float(entry_fill["filled_size"])
-                planned_notional = abs(filled_entry * filled_entry_size)
+                planned_notional = abs(entry * qty)
 
                 guard = evaluate_entry_guard(
                     policy=guardian_policy,
@@ -472,45 +595,40 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
 
                 risk_approved += 1
 
-                entry_fee_details = fee_model.fee_details(planned_notional, entry_fill.get("liquidity"))
-                entry_fee = float(entry_fee_details["fee"])
-
-                cash -= entry_fee
-                realized_pnl -= entry_fee
-
-                position = {
-                    "symbol": symbol, "side": side, "entry_time": snapshot.timestamp,
-                    "entry": filled_entry, "stop": plan["stop"], "tp1": plan["tp1"],
-                    "tp2": plan["tp2"], "tp3": plan["tp3"], "qty": filled_entry_size,
-                    "fees": entry_fee, "bars": 0, "regime": plan["regime"],
-                    "score": plan["score"], "confidence": plan["confidence"],
-                    "reason_tags": plan["reason_tags"], "debug": plan["debug"],
-                }
-
                 entry_side = "buy" if side == "long" else "sell"
-                entry_lifecycle = build_instant_fill_lifecycle(
-                    role="entry",
-                    order_type="market_entry",
-                    side=entry_side,
-                    requested_price=entry,
+                pending_order = build_pending_limit_entry_order(
+                    run_id=run_id,
+                    symbol=symbol,
+                    side=side,
+                    limit_price=entry,
                     requested_size=qty,
-                    filled_price=filled_entry,
-                    filled_size=filled_entry_size,
-                    timestamp=snapshot.timestamp,
-                    reason="STRATEGY_ENTRY",
-                    details={"cycle_index": cycle_index, "execution_slots": execution_slots, "fill_model": entry_fill, "fee_details": entry_fee_details},
+                    created_cycle_index=cycle_index,
+                    created_at=snapshot.timestamp,
+                    plan=plan,
+                    decision={
+                        "symbol": decision.symbol,
+                        "action": decision.action,
+                        "side": decision.side,
+                        "reason": decision.reason,
+                        "score": decision.score,
+                        "confidence": decision.confidence,
+                        "reason_tags": decision.reason_tags,
+                    },
+                    guard=guard.to_dict(),
+                    execution_slots=execution_slots,
+                    config=config,
                 )
 
-                _record_order(
+                entry_order_id = _record_order(
                     run_id,
                     symbol,
                     entry_side,
-                    "market_entry",
+                    "limit_entry",
                     entry,
-                    filled_entry,
-                    filled_entry_size,
-                    entry_fee,
-                    "STRATEGY_ENTRY",
+                    None,
+                    qty,
+                    0.0,
+                    "ENTRY_ORDER_SUBMITTED",
                     snapshot.timestamp,
                     {
                         "score": plan["score"],
@@ -519,15 +637,15 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                         "guardian": guard.to_dict(),
                         "fee_model": fee_model.to_dict(),
                         "planned_notional": planned_notional,
-                        "fill_model": entry_fill,
-                        "fee_details": entry_fee_details,
-                        "order_lifecycle": entry_lifecycle,
+                        "order_lifecycle": pending_order["lifecycle"],
+                        "entry_order_model": entry_order_model_contract(config),
                     },
+                    status="open",
                 )
-
-                _open_position(run_id, position)
-                open_positions[symbol] = position
-                _log(run_id, "POSITION_OPENED", f"{symbol} {side} opened.", {"cycle_index": cycle_index, "entry": filled_entry, "quantity": qty, "score": plan["score"], "lookahead_guard": snapshot.lookahead_guard})
+                pending_order["order_id"] = entry_order_id
+                pending_entry_orders[symbol] = pending_order
+                entry_orders_submitted += 1
+                _log(run_id, "ENTRY_ORDER_SUBMITTED", f"{symbol} {side} limit entry submitted.", {"cycle_index": cycle_index, "entry": entry, "quantity": qty, "score": plan["score"], "lookahead_guard": snapshot.lookahead_guard})
 
             if cycle_index < 3 or cycle_index % max(1, config["cycle_decision_log_interval"]) == 0:
                 _log(run_id, "CYCLE_DECISIONS", "Cycle decisions recorded.", {
@@ -536,8 +654,15 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     "snapshot": snapshot.to_log_dict(), "decisions": cycle_decisions,
                 })
 
-        # 4) Close remaining positions at final snapshot close.
+        # 4) Expire remaining pending entry orders, then close remaining positions at final snapshot close.
         if last_snapshot is not None:
+            for symbol, pending_order in list(pending_entry_orders.items()):
+                pending_order["lifecycle"]["status"] = "expired"
+                pending_order["lifecycle"]["events"].append({"status": "expired", "timestamp": last_snapshot.timestamp, "details": {"reason": "END_OF_BACKTEST"}})
+                _update_order_status(int(pending_order["order_id"]), "expired", last_snapshot.timestamp, {"reason": "END_OF_BACKTEST", "order_lifecycle": pending_order["lifecycle"]})
+                _log(run_id, "ENTRY_ORDER_END_OF_BACKTEST_EXPIRED", f"{symbol} pending entry expired at end of backtest.", {"cycle_index": last_snapshot.cycle_index})
+                del pending_entry_orders[symbol]
+
             for symbol, position in list(open_positions.items()):
                 if symbol not in last_snapshot.closes:
                     continue
