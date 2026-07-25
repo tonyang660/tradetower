@@ -1,3 +1,4 @@
+from paper_stop_reprice_guard import protective_exit_price_for_breached_paper_stop, apply_paper_stop_reprice_to_payload, decision_to_dict
 """
 Phase 6 Step 5 — Protective order lifecycle parity.
 
@@ -317,3 +318,7 @@ def build_protective_order_policy_contract() -> dict[str, Any]:
             "partial fills",
         ],
     }
+
+
+def apply_paper_stop_breach_reprice_guard(payload: dict, buffer_bps: float = 10.0) -> tuple[dict, dict]:
+    return apply_paper_stop_reprice_to_payload(payload, buffer_bps=buffer_bps)

@@ -1,3 +1,4 @@
+from guardian_account_isolation import assert_kill_switch_update_is_account_scoped, set_account_kill_switch
 import json
 from datetime import datetime, timedelta
 
@@ -6,7 +7,7 @@ from reconciliation import (
     evaluate_reconciliation_gate,
     fetch_reconciliation_state,
 )
-from time_utils import iso_now, start_of_week_utc, sunday_end_utc, utc_now
+from time_utils import start_of_week_utc, sunday_end_utc, utc_now
 
 
 def get_realized_pnl_for_period(account_id: int, start_ts: datetime, end_ts: datetime | None = None) -> float:
@@ -77,6 +78,7 @@ def update_guardian_state_fields(account_id: int, fields: dict):
         updated_at = NOW()
     WHERE account_id = %s
     """
+    assert_kill_switch_update_is_account_scoped(query, values)
 
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -624,3 +626,10 @@ def set_manual_halt(account_id: int, enabled: bool, reason_code: str):
             )
 
         conn.commit()
+
+
+def set_daily_kill_switch_for_account(account_id: int, enabled: bool, details: dict | None = None) -> dict:
+    return set_account_kill_switch(account_id=account_id, daily=enabled, reason_code="DAILY_KILL_SWITCH_ACCOUNT_SCOPED", details=details)
+
+def set_weekly_kill_switch_for_account(account_id: int, enabled: bool, details: dict | None = None) -> dict:
+    return set_account_kill_switch(account_id=account_id, weekly=enabled, reason_code="WEEKLY_KILL_SWITCH_ACCOUNT_SCOPED", details=details)
