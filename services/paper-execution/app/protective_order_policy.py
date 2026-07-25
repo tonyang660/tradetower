@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from paper_stop_reprice_guard import apply_paper_stop_reprice_to_payload
 """
 Phase 6 Step 5 — Protective order lifecycle parity.
@@ -17,8 +19,6 @@ position:
 It does not implement adaptive stop/breakeven behavior. That starts later in
 Phase 6.
 """
-
-from __future__ import annotations
 
 from typing import Any
 
