@@ -14,6 +14,7 @@ from execution_timeline import normalize_execution_timeline_config, ensure_timef
 from order_lifecycle import build_instant_fill_lifecycle, phase18_lifecycle_contract
 from execution_fill_model import simulate_market_entry_fill, simulate_market_exit_fill, fill_model_contract
 from entry_order_simulator import build_pending_limit_entry_order, evaluate_pending_entry_order, entry_order_model_contract
+from protective_order_simulator import reprice_levels_to_actual_entry, build_protective_orders_for_position, protective_order_model_contract
 
 from fee_model import FeeModel
 from guardian_risk import GuardianPolicy, evaluate_entry_guard
@@ -73,6 +74,12 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "entry_limit_max_wait_attempts": int(payload.get("entry_limit_max_wait_attempts", payload.get("entry_limit_max_wait_cycles", 15))),
         "entry_limit_max_wait_cycles": int(payload.get("entry_limit_max_wait_cycles", 15)),
         "entry_market_fallback_enabled": bool(payload.get("entry_market_fallback_enabled", True)),
+        "protective_orders_enabled": bool(payload.get("protective_orders_enabled", True)),
+        "tp1_close_pct": float(payload.get("tp1_close_pct", 50.0)),
+        "tp2_close_pct": float(payload.get("tp2_close_pct", 30.0)),
+        "tp3_close_pct": float(payload.get("tp3_close_pct", 20.0)),
+        "protective_stop_order_type": str(payload.get("protective_stop_order_type", "protective_limit")),
+        "take_profit_order_type": str(payload.get("take_profit_order_type", "limit_exit")),
         "data_mode": payload.get("data_mode", "phase14b_sample_historical_feed"),
         "dataset_id": int(payload.get("dataset_id", 0) or 0),
         "execution_model": payload.get("execution_model", "phase18_virtual_1m_order_lifecycle"),
@@ -229,6 +236,87 @@ def _close_position(run_id: int, position: dict[str, Any], exit_time, exit_price
         )
 
 
+
+def _record_protective_orders_for_position(run_id: int, position: dict[str, Any], timestamp, config: dict[str, Any], details: dict[str, Any] | None = None) -> int:
+    if not config.get("protective_orders_enabled", True):
+        return 0
+
+    orders = build_protective_orders_for_position(
+        run_id=run_id,
+        position_id=int(position["position_id"]),
+        symbol=position["symbol"],
+        side=position["side"],
+        entry_price=position["entry"],
+        size=position["qty"],
+        stop=position["stop"],
+        tp1=position["tp1"],
+        tp2=position["tp2"],
+        tp3=position["tp3"],
+        timestamp=timestamp,
+        config=config,
+    )
+
+    count = 0
+    for order in orders:
+        lifecycle = {
+            "version": order["version"],
+            "role": order["role"],
+            "order_type": order["order_type"],
+            "side": order["side"],
+            "requested_price": order["requested_price"],
+            "requested_size": order["requested_size"],
+            "status": "open",
+            "events": [
+                {
+                    "status": "created",
+                    "timestamp": timestamp,
+                    "details": {
+                        "reason": order["reason"],
+                        "position_id": position["position_id"],
+                    },
+                },
+                {
+                    "status": "open",
+                    "timestamp": timestamp,
+                    "details": {
+                        "reason": "RESTING_PROTECTIVE_ORDER",
+                        "position_id": position["position_id"],
+                    },
+                },
+            ],
+        }
+
+        order_details = {
+            "position_id": position["position_id"],
+            "role": order["role"],
+            "position_side": order["position_side"],
+            "entry_price": order["entry_price"],
+            "protective_order_model": protective_order_model_contract(config),
+            "order_lifecycle": lifecycle,
+            **(details or {}),
+        }
+        if "close_pct" in order:
+            order_details["close_pct"] = order["close_pct"]
+
+        _record_order(
+            run_id,
+            order["symbol"],
+            order["side"],
+            order["order_type"],
+            order["requested_price"],
+            None,
+            order["requested_size"],
+            0.0,
+            order["reason"],
+            timestamp,
+            order_details,
+            status="open",
+        )
+        count += 1
+
+    return count
+
+
 def _record_equity(run_id: int, timestamp, equity: float, cash: float, realized_pnl: float, unrealized_pnl: float, drawdown_pct: float) -> None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -325,6 +413,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     _log(run_id, "ORDER_LIFECYCLE_INITIALIZED", "Order lifecycle model initialized.", phase18_lifecycle_contract())
     _log(run_id, "FILL_MODEL_INITIALIZED", "Fill model initialized.", fill_model_contract(config))
     _log(run_id, "ENTRY_ORDER_MODEL_INITIALIZED", "Entry order model initialized.", entry_order_model_contract(config))
+    _log(run_id, "PROTECTIVE_ORDER_MODEL_INITIALIZED", "Protective order model initialized.", protective_order_model_contract(config))
 
     feed = build_historical_feed(config)
     preflight = feed.preflight()
@@ -352,6 +441,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     entry_orders_filled = 0
     entry_orders_expired = 0
     entry_market_fallbacks = 0
+    protective_orders_created = 0
 
     _emit_progress(progress_callback, status="running", run_id=run_id, cycle_count=0, cycles_processed=0, candles_processed=0, trades_generated=0, progress_pct=0.0, message="Backtest initialized")
 
@@ -440,16 +530,39 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 cash -= entry_fee
                 realized_pnl -= entry_fee
 
+                level_reprice = reprice_levels_to_actual_entry(
+                    side=side,
+                    planned_entry=float(plan["entry"]),
+                    actual_entry=filled_entry,
+                    stop=float(plan["stop"]),
+                    tp1=float(plan["tp1"]),
+                    tp2=float(plan["tp2"]),
+                    tp3=float(plan["tp3"]),
+                )
+                repriced_levels = level_reprice["repriced_levels"]
+
                 position = {
                     "symbol": symbol, "side": side, "entry_time": snapshot.timestamp,
-                    "entry": filled_entry, "stop": plan["stop"], "tp1": plan["tp1"],
-                    "tp2": plan["tp2"], "tp3": plan["tp3"], "qty": filled_entry_size,
+                    "entry": filled_entry, "stop": repriced_levels["stop"], "tp1": repriced_levels["tp1"],
+                    "tp2": repriced_levels["tp2"], "tp3": repriced_levels["tp3"], "qty": filled_entry_size,
                     "fees": entry_fee, "bars": 0, "regime": plan["regime"],
                     "score": plan["score"], "confidence": plan["confidence"],
                     "reason_tags": plan["reason_tags"], "debug": plan["debug"],
+                    "level_reprice": level_reprice,
                 }
 
                 _open_position(run_id, position)
+                protective_orders_created += _record_protective_orders_for_position(
+                    run_id,
+                    position,
+                    snapshot.timestamp,
+                    config,
+                    {
+                        "entry_order_id": pending_order.get("order_id"),
+                        "entry_order_evaluation": entry_eval,
+                        "level_reprice": level_reprice,
+                    },
+                )
                 open_positions[symbol] = position
                 entry_orders_filled += 1
 
