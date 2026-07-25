@@ -15,6 +15,7 @@ from order_lifecycle import build_instant_fill_lifecycle, phase18_lifecycle_cont
 from execution_fill_model import simulate_market_entry_fill, simulate_market_exit_fill, fill_model_contract
 from entry_order_simulator import build_pending_limit_entry_order, evaluate_pending_entry_order, entry_order_model_contract
 from protective_order_simulator import reprice_levels_to_actual_entry, build_protective_orders_for_position, protective_order_model_contract
+from partial_tp_simulator import next_triggered_tp, partial_tp_size, realized_gross_for_exit, partial_tp_model_contract
 
 from fee_model import FeeModel
 from guardian_risk import GuardianPolicy, evaluate_entry_guard
@@ -80,6 +81,7 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "tp3_close_pct": float(payload.get("tp3_close_pct", 20.0)),
         "protective_stop_order_type": str(payload.get("protective_stop_order_type", "protective_limit")),
         "take_profit_order_type": str(payload.get("take_profit_order_type", "limit_exit")),
+        "partial_tp_enabled": bool(payload.get("partial_tp_enabled", True)),
         "data_mode": payload.get("data_mode", "phase14b_sample_historical_feed"),
         "dataset_id": int(payload.get("dataset_id", 0) or 0),
         "execution_model": payload.get("execution_model", "phase18_virtual_1m_order_lifecycle"),
@@ -205,7 +207,8 @@ def _open_position(run_id: int, position: dict[str, Any]) -> None:
 
 def _close_position(run_id: int, position: dict[str, Any], exit_time, exit_price: float, gross_pnl: float, exit_fee: float, net_pnl: float, exit_reason: str) -> None:
     total_fees = position["fees"] + exit_fee
-    initial_risk = abs(position["entry"] - position["stop"]) * position["qty"]
+    original_qty = float(position.get("original_qty", position["qty"]))
+    initial_risk = abs(position["entry"] - position["stop"]) * original_qty
     r_multiple = net_pnl / initial_risk if initial_risk else None
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -229,7 +232,7 @@ def _close_position(run_id: int, position: dict[str, Any], exit_time, exit_price
             (
                 run_id, position["position_id"], position["symbol"], position["side"],
                 position["entry_time"], exit_time, position["entry"], exit_price,
-                position["qty"], gross_pnl, total_fees, net_pnl, r_multiple, exit_reason,
+                original_qty, gross_pnl, total_fees, net_pnl, r_multiple, exit_reason,
                 position["regime"], position["score"], position["confidence"],
                 position["reason_tags"], _json(position["debug"]),
             ),
@@ -237,9 +240,9 @@ def _close_position(run_id: int, position: dict[str, Any], exit_time, exit_price
 
 
 
-def _record_protective_orders_for_position(run_id: int, position: dict[str, Any], timestamp, config: dict[str, Any], details: dict[str, Any] | None = None) -> int:
+def _record_protective_orders_for_position(run_id: int, position: dict[str, Any], timestamp, config: dict[str, Any], details: dict[str, Any] | None = None) -> dict[str, int]:
     if not config.get("protective_orders_enabled", True):
-        return 0
+        return {}
 
     orders = build_protective_orders_for_position(
         run_id=run_id,
@@ -256,7 +259,7 @@ def _record_protective_orders_for_position(run_id: int, position: dict[str, Any]
         config=config,
     )
 
-    count = 0
+    order_ids: dict[str, int] = {}
     for order in orders:
         lifecycle = {
             "version": order["version"],
@@ -267,22 +270,8 @@ def _record_protective_orders_for_position(run_id: int, position: dict[str, Any]
             "requested_size": order["requested_size"],
             "status": "open",
             "events": [
-                {
-                    "status": "created",
-                    "timestamp": timestamp,
-                    "details": {
-                        "reason": order["reason"],
-                        "position_id": position["position_id"],
-                    },
-                },
-                {
-                    "status": "open",
-                    "timestamp": timestamp,
-                    "details": {
-                        "reason": "RESTING_PROTECTIVE_ORDER",
-                        "position_id": position["position_id"],
-                    },
-                },
+                {"status": "created", "timestamp": timestamp, "details": {"reason": order["reason"], "position_id": position["position_id"]}},
+                {"status": "open", "timestamp": timestamp, "details": {"reason": "RESTING_PROTECTIVE_ORDER", "position_id": position["position_id"]}},
             ],
         }
 
@@ -292,13 +281,14 @@ def _record_protective_orders_for_position(run_id: int, position: dict[str, Any]
             "position_side": order["position_side"],
             "entry_price": order["entry_price"],
             "protective_order_model": protective_order_model_contract(config),
+            "partial_tp_model": partial_tp_model_contract(config),
             "order_lifecycle": lifecycle,
             **(details or {}),
         }
         if "close_pct" in order:
             order_details["close_pct"] = order["close_pct"]
 
-        _record_order(
+        order_id = _record_order(
             run_id,
             order["symbol"],
             order["side"],
@@ -312,9 +302,46 @@ def _record_protective_orders_for_position(run_id: int, position: dict[str, Any]
             order_details,
             status="open",
         )
-        count += 1
+        order_ids[order["role"]] = order_id
 
-    return count
+    return order_ids
+
+
+def _update_open_order_quantity(order_id: int, quantity: float, timestamp, details: dict[str, Any] | None = None) -> None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE backtest_orders
+            SET quantity=%s,
+                notional=ABS(requested_price * %s),
+                details_json=COALESCE(details_json, '{}'::jsonb) || %s::jsonb
+            WHERE order_id=%s
+            """,
+            (quantity, quantity, _json(details or {}), order_id),
+        )
+
+
+def _insert_partial_trade(run_id: int, position: dict[str, Any], role: str, exit_time, exit_price: float, quantity: float, gross_pnl: float, fee: float, net_pnl: float, details: dict[str, Any] | None = None) -> None:
+    initial_risk = abs(position["entry"] - position["stop"]) * float(position.get("original_qty", position["qty"]))
+    r_multiple = net_pnl / initial_risk if initial_risk else None
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO backtest_trades(
+                run_id, position_id, symbol, side, entry_time, exit_time, entry_price,
+                exit_price, quantity, gross_pnl, fees, net_pnl, r_multiple, exit_reason,
+                regime, strategy_score, confidence, reason_tags, debug_components
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            """,
+            (
+                run_id, position["position_id"], position["symbol"], position["side"],
+                position["entry_time"], exit_time, position["entry"], exit_price,
+                quantity, gross_pnl, fee, net_pnl, r_multiple, role,
+                position["regime"], position["score"], position["confidence"],
+                position["reason_tags"], _json({**(position.get("debug") or {}), "partial_tp": details or {}}),
+            ),
+        )
 
 
 def _record_equity(run_id: int, timestamp, equity: float, cash: float, realized_pnl: float, unrealized_pnl: float, drawdown_pct: float) -> None:
@@ -414,6 +441,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     _log(run_id, "FILL_MODEL_INITIALIZED", "Fill model initialized.", fill_model_contract(config))
     _log(run_id, "ENTRY_ORDER_MODEL_INITIALIZED", "Entry order model initialized.", entry_order_model_contract(config))
     _log(run_id, "PROTECTIVE_ORDER_MODEL_INITIALIZED", "Protective order model initialized.", protective_order_model_contract(config))
+    _log(run_id, "PARTIAL_TP_MODEL_INITIALIZED", "Partial TP model initialized.", partial_tp_model_contract(config))
 
     feed = build_historical_feed(config)
     preflight = feed.preflight()
@@ -442,6 +470,9 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     entry_orders_expired = 0
     entry_market_fallbacks = 0
     protective_orders_created = 0
+    partial_tp_fills = 0
+    partial_tp_realized_gross = 0.0
+    partial_tp_fees = 0.0
 
     _emit_progress(progress_callback, status="running", run_id=run_id, cycle_count=0, cycles_processed=0, candles_processed=0, trades_generated=0, progress_pct=0.0, message="Backtest initialized")
 
@@ -545,6 +576,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     "symbol": symbol, "side": side, "entry_time": snapshot.timestamp,
                     "entry": filled_entry, "stop": repriced_levels["stop"], "tp1": repriced_levels["tp1"],
                     "tp2": repriced_levels["tp2"], "tp3": repriced_levels["tp3"], "qty": filled_entry_size,
+                    "original_qty": filled_entry_size, "partial_tp_filled": [],
+                    "realized_exit_gross": 0.0, "exit_fees": 0.0,
                     "fees": entry_fee, "bars": 0, "regime": plan["regime"],
                     "score": plan["score"], "confidence": plan["confidence"],
                     "reason_tags": plan["reason_tags"], "debug": plan["debug"],
@@ -552,7 +585,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 }
 
                 _open_position(run_id, position)
-                protective_orders_created += _record_protective_orders_for_position(
+                protective_order_ids = _record_protective_orders_for_position(
                     run_id,
                     position,
                     snapshot.timestamp,
@@ -563,6 +596,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                         "level_reprice": level_reprice,
                     },
                 )
+                position["protective_order_ids"] = protective_order_ids
+                protective_orders_created += len(protective_order_ids)
                 open_positions[symbol] = position
                 entry_orders_filled += 1
 
@@ -593,15 +628,90 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 requested_exit = snapshot.closes[symbol]
                 exit_reason = None
 
+                stop_hit = False
                 if position["side"] == "long":
-                    if snapshot.lows[symbol] <= position["stop"]:
-                        exit_reason, requested_exit = "STOP_LOSS", position["stop"]
-                    elif snapshot.highs[symbol] >= position["tp3"]:
+                    stop_hit = snapshot.lows[symbol] <= position["stop"]
+                else:
+                    stop_hit = snapshot.highs[symbol] >= position["stop"]
+
+                if stop_hit:
+                    exit_reason, requested_exit = "STOP_LOSS", position["stop"]
+                elif config.get("partial_tp_enabled", True):
+                    partial_tp_event = next_triggered_tp(
+                        position,
+                        candle_high=snapshot.highs[symbol],
+                        candle_low=snapshot.lows[symbol],
+                    )
+
+                    if partial_tp_event and partial_tp_event["role"] in ("tp1", "tp2"):
+                        role = partial_tp_event["role"]
+                        tp_price = float(partial_tp_event["target_price"])
+                        tp_size = partial_tp_size(position, role, config)
+                        if tp_size > 0:
+                            tp_gross = realized_gross_for_exit(position, tp_price, tp_size)
+                            tp_fee_details = fee_model.fee_details(abs(tp_price * tp_size), "maker")
+                            tp_fee = float(tp_fee_details["fee"])
+                            tp_net = tp_gross - tp_fee
+                            cash += tp_net
+                            realized_pnl += tp_net
+                            position["qty"] = max(0.0, float(position["qty"]) - tp_size)
+                            position["fees"] += tp_fee
+                            position["exit_fees"] = float(position.get("exit_fees", 0.0)) + tp_fee
+                            position["realized_exit_gross"] = float(position.get("realized_exit_gross", 0.0)) + tp_gross
+                            position.setdefault("partial_tp_filled", []).append(role)
+
+                            order_id = (position.get("protective_order_ids") or {}).get(role)
+                            if order_id:
+                                _update_order_fill(
+                                    int(order_id),
+                                    tp_price,
+                                    tp_size,
+                                    tp_fee,
+                                    snapshot.timestamp,
+                                    {
+                                        "partial_tp_event": partial_tp_event,
+                                        "fee_details": tp_fee_details,
+                                        "remaining_position_size": position["qty"],
+                                    },
+                                )
+
+                            stop_id = (position.get("protective_order_ids") or {}).get("stop_loss")
+                            if stop_id:
+                                _update_open_order_quantity(
+                                    int(stop_id),
+                                    position["qty"],
+                                    snapshot.timestamp,
+                                    {
+                                        "reason": "STOP_RESIZED_AFTER_PARTIAL_TP",
+                                        "filled_tp_role": role,
+                                        "remaining_position_size": position["qty"],
+                                    },
+                                )
+
+                            _insert_partial_trade(
+                                run_id,
+                                position,
+                                role.upper(),
+                                snapshot.timestamp,
+                                tp_price,
+                                tp_size,
+                                tp_gross,
+                                tp_fee,
+                                tp_net,
+                                {"partial_tp_event": partial_tp_event, "fee_details": tp_fee_details},
+                            )
+                            partial_tp_fills += 1
+                            partial_tp_realized_gross += tp_gross
+                            partial_tp_fees += tp_fee
+                            _log(run_id, "PARTIAL_TP_FILLED", f"{symbol} {role.upper()} partial take-profit filled.", {"cycle_index": cycle_index, "symbol": symbol, "price": tp_price, "size": tp_size, "net_pnl": tp_net, "remaining_size": position["qty"]})
+                            continue
+
+                    if partial_tp_event and partial_tp_event["role"] == "tp3":
                         exit_reason, requested_exit = "TP3", position["tp3"]
                 else:
-                    if snapshot.highs[symbol] >= position["stop"]:
-                        exit_reason, requested_exit = "STOP_LOSS", position["stop"]
-                    elif snapshot.lows[symbol] <= position["tp3"]:
+                    if position["side"] == "long" and snapshot.highs[symbol] >= position["tp3"]:
+                        exit_reason, requested_exit = "TP3", position["tp3"]
+                    elif position["side"] == "short" and snapshot.lows[symbol] <= position["tp3"]:
                         exit_reason, requested_exit = "TP3", position["tp3"]
 
                 # Timeout/stale-trade exits are intentionally disabled.
@@ -618,10 +728,11 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     )
                     filled_exit = float(exit_fill["filled_price"])
                     filled_exit_size = float(exit_fill["filled_size"])
-                    gross = _unrealized(position, filled_exit)
+                    remaining_gross = _unrealized(position, filled_exit)
+                    gross = float(position.get("realized_exit_gross", 0.0)) + remaining_gross
                     exit_fee_details = fee_model.fee_details(abs(filled_exit * filled_exit_size), exit_fill.get("liquidity"))
                     exit_fee = float(exit_fee_details["fee"])
-                    cash_delta = gross - exit_fee
+                    cash_delta = remaining_gross - exit_fee
                     trade_net = gross - position["fees"] - exit_fee
                     cash += cash_delta
                     realized_pnl += cash_delta
@@ -790,10 +901,11 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 )
                 filled_exit = float(final_exit_fill["filled_price"])
                 final_exit_size = float(final_exit_fill["filled_size"])
-                gross = _unrealized(position, filled_exit)
+                final_remaining_gross = _unrealized(position, filled_exit)
+                gross = float(position.get("realized_exit_gross", 0.0)) + final_remaining_gross
                 final_exit_fee_details = fee_model.fee_details(abs(filled_exit * final_exit_size), final_exit_fill.get("liquidity"))
                 exit_fee = float(final_exit_fee_details["fee"])
-                cash_delta = gross - exit_fee
+                cash_delta = final_remaining_gross - exit_fee
                 trade_net = gross - position["fees"] - exit_fee
                 cash += cash_delta
                 realized_pnl += cash_delta
@@ -830,6 +942,9 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             "execution_timeline": config["execution_timeline"],
             "order_lifecycle": phase18_lifecycle_contract(),
             "fill_model": fill_model_contract(config),
+            "partial_tp_fills": partial_tp_fills,
+            "partial_tp_realized_gross": partial_tp_realized_gross,
+            "partial_tp_fees": partial_tp_fees,
             "timeout_exits_enabled": False,
         }
         _log(run_id, "BACKTEST_COMPLETED", "Backtest completed.", {**summary, **diagnostics})
