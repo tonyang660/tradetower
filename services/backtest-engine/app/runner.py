@@ -25,7 +25,40 @@ def _json(value: Any) -> str:
     return json.dumps(value, default=str)
 
 
+
+def _normalize_backtest_timeline_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Force production-parity backtest clocking.
+
+    Strategy roles remain:
+      entry   = 5m
+      primary = 15m
+      context = 1h
+      htf     = 4h
+
+    The main backtest decision/cycle clock must be 5m, while the order
+    lifecycle uses logical 1m slots on top of 5m execution data.
+    """
+    normalized = dict(payload or {})
+    normalized["cycle_timeframe"] = "5m"
+    normalized["decision_timeframe"] = "5m"
+    normalized["execution_timeframe"] = "1m"
+    normalized["execution_data_timeframe"] = "5m"
+
+    requested_timeframes = normalized.get("timeframes") or ["5m", "15m", "1h", "4h"]
+    if isinstance(requested_timeframes, str):
+        requested_timeframes = [requested_timeframes]
+
+    required_timeframes = ["5m", "15m", "1h", "4h"]
+    ordered: list[str] = []
+    for timeframe in required_timeframes + [str(tf) for tf in requested_timeframes]:
+        if timeframe not in ordered:
+            ordered.append(timeframe)
+    normalized["timeframes"] = ordered
+    return normalized
+
+
 def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
+    payload = _normalize_backtest_timeline_payload(payload)
     symbols = payload.get("symbols") or ["BTCUSDT", "ETHUSDT"]
     if isinstance(symbols, str):
         symbols = [symbols]

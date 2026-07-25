@@ -4,6 +4,9 @@ export type BacktestRunConfig = {
   symbols: string[];
   timeframes: string[];
   cycle_timeframe: string;
+  decision_timeframe?: string;
+  execution_timeframe?: string;
+  execution_data_timeframe?: string;
   start_time: string;
   end_time: string;
   starting_capital: number;

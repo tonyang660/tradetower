@@ -38,7 +38,10 @@ const DEFAULT_CONFIG: BacktestRunConfig = {
   strategy_version: "0.2.0",
   symbols: ["BTCUSDT", "ETHUSDT"],
   timeframes: ["5m", "15m", "1h", "4h"],
-  cycle_timeframe: "15m",
+  cycle_timeframe: "5m",
+  decision_timeframe: "5m",
+  execution_timeframe: "1m",
+  execution_data_timeframe: "5m",
   start_time: "2024-01-01T00:00:00Z",
   end_time: "2024-03-01T00:00:00Z",
   starting_capital: 2000,
@@ -63,6 +66,23 @@ const DEFAULT_CONFIG: BacktestRunConfig = {
 };
 
 const TIMEFRAME_OPTIONS = ["5m", "15m", "1h", "4h", "1d"];
+
+const BACKTEST_TIMELINE_CONFIG = {
+  cycle_timeframe: "5m",
+  decision_timeframe: "5m",
+  execution_timeframe: "1m",
+  execution_data_timeframe: "5m",
+} as const;
+
+function normalizeBacktestTimelineConfig(config: BacktestRunConfig): BacktestRunConfig {
+  const requiredTimeframes = ["5m", "15m", "1h", "4h"];
+  const timeframes = Array.from(new Set([...requiredTimeframes, ...(config.timeframes ?? [])]));
+  return {
+    ...config,
+    ...BACKTEST_TIMELINE_CONFIG,
+    timeframes,
+  };
+}
 
 function asArray(value: unknown): any[] {
   return Array.isArray(value) ? value : [];
@@ -299,7 +319,7 @@ export default function BacktestPage() {
 
   const payload = useMemo<BacktestRunConfig>(() => {
     const symbols = symbolsText.split(",").map((value) => value.trim().toUpperCase()).filter(Boolean);
-    return { ...config, symbols };
+    return normalizeBacktestTimelineConfig({ ...config, symbols });
   }, [config, symbolsText]);
 
   const validation = useMemo(() => {
@@ -307,6 +327,10 @@ export default function BacktestPage() {
     if (!payload.strategy_name) issues.push("Strategy is required.");
     if (!payload.symbols.length) issues.push("At least one symbol is required.");
     if (!payload.timeframes.length) issues.push("At least one timeframe is required.");
+    if (payload.cycle_timeframe !== "5m") issues.push("Backtest cycle timeframe must be 5m for production parity.");
+    if (payload.decision_timeframe !== "5m") issues.push("Decision timeframe must be 5m for production parity.");
+    if (payload.execution_timeframe !== "1m") issues.push("Execution timeframe must be 1m for paper-order parity.");
+    if (payload.execution_data_timeframe !== "5m") issues.push("Execution data timeframe must be 5m.");
     if (!payload.start_time || !payload.end_time) issues.push("Start and end dates are required.");
     if (payload.starting_capital <= 0) issues.push("Starting capital must be positive.");
     if (payload.risk_per_trade_pct <= 0) issues.push("Risk per trade must be positive.");
@@ -435,6 +459,9 @@ export default function BacktestPage() {
 
               <div>
                 <div className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-white/40">Timeframes</div>
+                <div className="mb-2 rounded-2xl border border-cyan-300/15 bg-cyan-400/10 p-3 text-xs leading-5 text-cyan-100/80">
+                  Cycle: 5m · Decision: 5m · Execution: logical 1m · Primary strategy TF: 15m
+                </div>
                 <div className="flex flex-wrap gap-2">
                   {TIMEFRAME_OPTIONS.map((timeframe) => {
                     const active = config.timeframes.includes(timeframe);
