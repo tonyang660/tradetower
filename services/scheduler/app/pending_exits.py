@@ -94,14 +94,33 @@ def process_pending_exits_once(account_id: int | None = None):
         original_stop_price = float(state.get("original_stop_price", latest_price))
         side = str(state.get("side", "")).lower()
 
-        candidate_price = latest_price
+        buffer_bps = float(state.get("paper_stop_reprice_buffer_bps", 10.0))
+        buffer_bps = max(0.0, min(buffer_bps, 50.0))
+        buffer = buffer_bps / 10000.0
 
+        # Paper-only stop breach repricing:
+        # long  -> place exit limit below current price
+        # short -> place exit limit above current price
         if side == "long":
+            stop_is_breached = latest_price <= original_stop_price
+            candidate_price = (
+                latest_price * (1.0 - buffer)
+                if stop_is_breached
+                else latest_price
+            )
             bounded_candidate = min(original_stop_price, candidate_price)
             new_limit_price = min(previous_limit_price, bounded_candidate)
+
         elif side == "short":
+            stop_is_breached = latest_price >= original_stop_price
+            candidate_price = (
+                latest_price * (1.0 + buffer)
+                if stop_is_breached
+                else latest_price
+            )
             bounded_candidate = max(original_stop_price, candidate_price)
             new_limit_price = max(previous_limit_price, bounded_candidate)
+
         else:
             errors_count += 1
             results.append({

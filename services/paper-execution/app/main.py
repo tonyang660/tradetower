@@ -20,7 +20,6 @@ from paper_execution_contract import (
     build_entry_filled_result,
     build_entry_pending_result,
 )
-from paper_stop_reprice_guard import apply_paper_stop_reprice_to_payload
 from protective_order_policy import (
     PROTECTIVE_ORDER_POLICY_VERSION,
     build_protective_order_policy_contract,
