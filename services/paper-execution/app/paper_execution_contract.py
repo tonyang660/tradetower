@@ -65,6 +65,82 @@ def get_tp_close_percent(payload: dict[str, Any], key: str, default: float) -> f
     return float(default)
 
 
+
+def reprice_entry_levels_to_fill(payload: dict[str, Any], fill_price: float) -> dict[str, Any]:
+    """
+    Paper-only level normalization.
+
+    Risk engine levels are produced from the requested/planned entry price.
+    Paper execution may fill at a different price, especially after market fallback.
+    To preserve the originally planned R/R distance, rebuild SL and TP levels
+    around the actual fill price before sending the execution event to
+    trade-guardian.
+
+    Live execution should not use this helper directly. In live mode, exchange
+    fills/order events should be consumed as the source of truth.
+    """
+    side = normalize_side(payload.get("position_side"))
+    planned_entry = safe_float(payload.get("entry_price"))
+    actual_entry = safe_float(fill_price)
+
+    original_stop = safe_float(payload.get("stop_loss"))
+    original_tp1 = safe_float(payload.get("tp1_price"))
+    original_tp2 = safe_float(payload.get("tp2_price"))
+    original_tp3 = safe_float(payload.get("tp3_price"))
+
+    stop_distance = abs(planned_entry - original_stop)
+    tp1_distance = abs(original_tp1 - planned_entry)
+    tp2_distance = abs(original_tp2 - planned_entry)
+    tp3_distance = abs(original_tp3 - planned_entry)
+
+    if side == "long":
+        stop_loss = actual_entry - stop_distance
+        tp1_price = actual_entry + tp1_distance
+        tp2_price = actual_entry + tp2_distance
+        tp3_price = actual_entry + tp3_distance
+    elif side == "short":
+        stop_loss = actual_entry + stop_distance
+        tp1_price = actual_entry - tp1_distance
+        tp2_price = actual_entry - tp2_distance
+        tp3_price = actual_entry - tp3_distance
+    else:
+        stop_loss = original_stop
+        tp1_price = original_tp1
+        tp2_price = original_tp2
+        tp3_price = original_tp3
+
+    entry_delta = actual_entry - planned_entry
+    applied = abs(entry_delta) > 1e-12
+
+    return {
+        "version": "paper_entry_levels_repriced_to_actual_fill_v1",
+        "scope": "paper",
+        "applied": applied,
+        "side": side,
+        "planned_entry": planned_entry,
+        "actual_entry": actual_entry,
+        "entry_delta": entry_delta,
+        "original_levels": {
+            "stop_loss": original_stop,
+            "tp1_price": original_tp1,
+            "tp2_price": original_tp2,
+            "tp3_price": original_tp3,
+        },
+        "distances": {
+            "stop_loss": stop_distance,
+            "tp1_price": tp1_distance,
+            "tp2_price": tp2_distance,
+            "tp3_price": tp3_distance,
+        },
+        "repriced_levels": {
+            "stop_loss": stop_loss,
+            "tp1_price": tp1_price,
+            "tp2_price": tp2_price,
+            "tp3_price": tp3_price,
+        },
+    }
+
+
 def build_entry_execution_report_v2(
     *,
     payload: dict[str, Any],
@@ -87,6 +163,8 @@ def build_entry_execution_report_v2(
     account_id = int(payload["account_id"])
     symbol = str(payload["symbol"]).upper()
     side = normalize_side(payload["position_side"])
+    level_reprice = reprice_entry_levels_to_fill(payload, fill_price)
+    repriced_levels = level_reprice["repriced_levels"]
 
     return {
         "ok": True,
@@ -106,10 +184,10 @@ def build_entry_execution_report_v2(
         "filled_size": round(safe_float(filled_size), 8),
         "fee_paid": round(safe_float(fee_paid), 8),
         "slippage_bps": round(safe_float(slippage_bps), 8),
-        "stop_loss": safe_float(payload["stop_loss"]),
-        "tp1_price": safe_float(payload["tp1_price"]),
-        "tp2_price": safe_float(payload["tp2_price"]),
-        "tp3_price": safe_float(payload["tp3_price"]),
+        "stop_loss": round(safe_float(repriced_levels["stop_loss"]), 8),
+        "tp1_price": round(safe_float(repriced_levels["tp1_price"]), 8),
+        "tp2_price": round(safe_float(repriced_levels["tp2_price"]), 8),
+        "tp3_price": round(safe_float(repriced_levels["tp3_price"]), 8),
         "tp1_close_percent": get_tp_close_percent(payload, "tp1", 50),
         "tp2_close_percent": get_tp_close_percent(payload, "tp2", 30),
         "tp3_close_percent": get_tp_close_percent(payload, "tp3", 20),
@@ -121,6 +199,10 @@ def build_entry_execution_report_v2(
         "fill_source": fill_source,
         "fill_reason": fill_reason,
         "requested_entry_price": safe_float(payload.get("entry_price")),
+        "levels_repriced_to_fill": bool(level_reprice["applied"]),
+        "level_reprice": level_reprice,
+        "original_levels": level_reprice["original_levels"],
+        "repriced_levels": level_reprice["repriced_levels"],
         "requested_size": safe_float(payload.get("size")),
         "risk_approval_payload_version": payload.get("risk_approval_payload_version"),
         "risk_decision": payload.get("risk_decision"),
@@ -133,6 +215,7 @@ def build_entry_execution_report_v2(
             "strategy_confidence": payload.get("strategy_confidence"),
             "risk_context": payload.get("risk_context", {}),
             "entry_atr": safe_float(payload.get("entry_atr")),
+            "level_reprice": level_reprice,
         },
     }
 
