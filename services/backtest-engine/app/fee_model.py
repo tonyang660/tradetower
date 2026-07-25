@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
@@ -31,8 +30,33 @@ class FeeModel:
         taker_ratio = 1.0 - maker_ratio
         return (maker_ratio * self.maker_fee_bps) + (taker_ratio * self.taker_fee_bps)
 
+    def fee_bps_for_liquidity(self, liquidity: str | None = None) -> float:
+        if self.override_fee_bps is not None:
+            return self.override_fee_bps
+
+        value = str(liquidity or "").lower()
+        if value == "maker":
+            return self.maker_fee_bps
+        if value == "taker":
+            return self.taker_fee_bps
+
+        return self.effective_fee_bps
+
     def fee(self, notional: float) -> float:
         return abs(notional) * (self.effective_fee_bps / 10000.0)
+
+    def fee_for_liquidity(self, notional: float, liquidity: str | None = None) -> float:
+        return abs(notional) * (self.fee_bps_for_liquidity(liquidity) / 10000.0)
+
+    def fee_details(self, notional: float, liquidity: str | None = None) -> dict[str, Any]:
+        fee_bps = self.fee_bps_for_liquidity(liquidity)
+        fee = abs(notional) * (fee_bps / 10000.0)
+        return {
+            "liquidity": liquidity or "effective",
+            "fee_bps": fee_bps,
+            "fee": fee,
+            "notional": abs(notional),
+        }
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

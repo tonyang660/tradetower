@@ -12,6 +12,7 @@ from historical_feed import build_historical_feed, parse_time
 from market_snapshot import MarketSnapshotBuilder
 from execution_timeline import normalize_execution_timeline_config, ensure_timeframes_for_timeline, virtual_execution_slots
 from order_lifecycle import build_instant_fill_lifecycle, phase18_lifecycle_contract
+from execution_fill_model import simulate_market_entry_fill, simulate_market_exit_fill, fill_model_contract
 
 from fee_model import FeeModel
 from guardian_risk import GuardianPolicy, evaluate_entry_guard
@@ -62,6 +63,11 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "taker_fee_bps": float(payload.get("taker_fee_bps", 6.0)),
         "limit_order_fill_ratio": float(payload.get("limit_order_fill_ratio", 0.80)),
         "slippage_bps": float(payload.get("slippage_bps", DEFAULT_SLIPPAGE_BPS)),
+        "spread_bps": float(payload.get("spread_bps", 0.0)),
+        "entry_slippage_bps": float(payload.get("entry_slippage_bps", payload.get("slippage_bps", DEFAULT_SLIPPAGE_BPS))),
+        "exit_slippage_bps": float(payload.get("exit_slippage_bps", payload.get("slippage_bps", DEFAULT_SLIPPAGE_BPS))),
+        "market_fill_ratio": float(payload.get("market_fill_ratio", 1.0)),
+        "partial_fill_enabled": bool(payload.get("partial_fill_enabled", False)),
         "data_mode": payload.get("data_mode", "phase14b_sample_historical_feed"),
         "dataset_id": int(payload.get("dataset_id", 0) or 0),
         "execution_model": payload.get("execution_model", "phase18_virtual_1m_order_lifecycle"),
@@ -276,6 +282,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     _log(run_id, "BACKTEST_STARTED", "Backtest started.", config)
     _log(run_id, "EXECUTION_TIMELINE_INITIALIZED", "Execution timeline initialized.", config["execution_timeline"])
     _log(run_id, "ORDER_LIFECYCLE_INITIALIZED", "Order lifecycle model initialized.", phase18_lifecycle_contract())
+    _log(run_id, "FILL_MODEL_INITIALIZED", "Fill model initialized.", fill_model_contract(config))
 
     feed = build_historical_feed(config)
     preflight = feed.preflight()
@@ -355,10 +362,19 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 # Remaining positions close only at protective exits or final backtest settlement.
 
                 if exit_reason:
-                    slip = config["slippage_bps"] / 10000
-                    filled_exit = requested_exit * (1 - slip if position["side"] == "long" else 1 + slip)
+                    exit_fill = simulate_market_exit_fill(
+                        config=config,
+                        position_side=position["side"],
+                        requested_price=requested_exit,
+                        requested_size=position["qty"],
+                        timestamp=snapshot.timestamp,
+                        reason=exit_reason,
+                    )
+                    filled_exit = float(exit_fill["filled_price"])
+                    filled_exit_size = float(exit_fill["filled_size"])
                     gross = _unrealized(position, filled_exit)
-                    exit_fee = fee_model.fee(abs(filled_exit * position["qty"]))
+                    exit_fee_details = fee_model.fee_details(abs(filled_exit * filled_exit_size), exit_fill.get("liquidity"))
+                    exit_fee = float(exit_fee_details["fee"])
                     cash_delta = gross - exit_fee
                     trade_net = gross - position["fees"] - exit_fee
                     cash += cash_delta
@@ -371,12 +387,12 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                         requested_price=requested_exit,
                         requested_size=position["qty"],
                         filled_price=filled_exit,
-                        filled_size=position["qty"],
+                        filled_size=filled_exit_size,
                         timestamp=snapshot.timestamp,
                         reason=exit_reason,
-                        details={"position_id": position["position_id"], "cycle_index": cycle_index, "execution_slots": execution_slots},
+                        details={"position_id": position["position_id"], "cycle_index": cycle_index, "execution_slots": execution_slots, "fill_model": exit_fill, "fee_details": exit_fee_details},
                     )
-                    _record_order(run_id, symbol, exit_side, "market_exit", requested_exit, filled_exit, position["qty"], exit_fee, exit_reason, snapshot.timestamp, {"position_id": position["position_id"], "cycle_index": cycle_index, "order_lifecycle": exit_lifecycle})
+                    _record_order(run_id, symbol, exit_side, "market_exit", requested_exit, filled_exit, filled_exit_size, exit_fee, exit_reason, snapshot.timestamp, {"position_id": position["position_id"], "cycle_index": cycle_index, "order_lifecycle": exit_lifecycle, "fill_model": exit_fill, "fee_details": exit_fee_details})
                     _close_position(run_id, position, snapshot.timestamp, filled_exit, gross, exit_fee, trade_net, exit_reason)
                     _log(run_id, "POSITION_CLOSED", f"{symbol} closed via {exit_reason}.", {"cycle_index": cycle_index, "symbol": symbol, "net_pnl": trade_net})
                     del open_positions[symbol]
@@ -414,9 +430,17 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     continue
 
                 entry, side, qty = plan["entry"], plan["side"], plan["qty"]
-                slip = config["slippage_bps"] / 10000
-                filled_entry = entry * (1 + slip if side == "long" else 1 - slip)
-                planned_notional = abs(filled_entry * qty)
+                entry_fill = simulate_market_entry_fill(
+                    config=config,
+                    position_side=side,
+                    requested_price=entry,
+                    requested_size=qty,
+                    timestamp=snapshot.timestamp,
+                    reason="STRATEGY_ENTRY",
+                )
+                filled_entry = float(entry_fill["filled_price"])
+                filled_entry_size = float(entry_fill["filled_size"])
+                planned_notional = abs(filled_entry * filled_entry_size)
 
                 guard = evaluate_entry_guard(
                     policy=guardian_policy,
@@ -448,7 +472,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
 
                 risk_approved += 1
 
-                entry_fee = fee_model.fee(planned_notional)
+                entry_fee_details = fee_model.fee_details(planned_notional, entry_fill.get("liquidity"))
+                entry_fee = float(entry_fee_details["fee"])
 
                 cash -= entry_fee
                 realized_pnl -= entry_fee
@@ -456,7 +481,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 position = {
                     "symbol": symbol, "side": side, "entry_time": snapshot.timestamp,
                     "entry": filled_entry, "stop": plan["stop"], "tp1": plan["tp1"],
-                    "tp2": plan["tp2"], "tp3": plan["tp3"], "qty": qty,
+                    "tp2": plan["tp2"], "tp3": plan["tp3"], "qty": filled_entry_size,
                     "fees": entry_fee, "bars": 0, "regime": plan["regime"],
                     "score": plan["score"], "confidence": plan["confidence"],
                     "reason_tags": plan["reason_tags"], "debug": plan["debug"],
@@ -470,10 +495,10 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     requested_price=entry,
                     requested_size=qty,
                     filled_price=filled_entry,
-                    filled_size=qty,
+                    filled_size=filled_entry_size,
                     timestamp=snapshot.timestamp,
                     reason="STRATEGY_ENTRY",
-                    details={"cycle_index": cycle_index, "execution_slots": execution_slots},
+                    details={"cycle_index": cycle_index, "execution_slots": execution_slots, "fill_model": entry_fill, "fee_details": entry_fee_details},
                 )
 
                 _record_order(
@@ -483,7 +508,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     "market_entry",
                     entry,
                     filled_entry,
-                    qty,
+                    filled_entry_size,
                     entry_fee,
                     "STRATEGY_ENTRY",
                     snapshot.timestamp,
@@ -494,6 +519,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                         "guardian": guard.to_dict(),
                         "fee_model": fee_model.to_dict(),
                         "planned_notional": planned_notional,
+                        "fill_model": entry_fill,
+                        "fee_details": entry_fee_details,
                         "order_lifecycle": entry_lifecycle,
                     },
                 )
@@ -515,10 +542,19 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 if symbol not in last_snapshot.closes:
                     continue
                 requested_exit = last_snapshot.closes[symbol]
-                slip = config["slippage_bps"] / 10000
-                filled_exit = requested_exit * (1 - slip if position["side"] == "long" else 1 + slip)
+                final_exit_fill = simulate_market_exit_fill(
+                    config=config,
+                    position_side=position["side"],
+                    requested_price=requested_exit,
+                    requested_size=position["qty"],
+                    timestamp=last_snapshot.timestamp,
+                    reason="END_OF_BACKTEST",
+                )
+                filled_exit = float(final_exit_fill["filled_price"])
+                final_exit_size = float(final_exit_fill["filled_size"])
                 gross = _unrealized(position, filled_exit)
-                exit_fee = fee_model.fee(abs(filled_exit * position["qty"]))
+                final_exit_fee_details = fee_model.fee_details(abs(filled_exit * final_exit_size), final_exit_fill.get("liquidity"))
+                exit_fee = float(final_exit_fee_details["fee"])
                 cash_delta = gross - exit_fee
                 trade_net = gross - position["fees"] - exit_fee
                 cash += cash_delta
@@ -531,12 +567,12 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     requested_price=requested_exit,
                     requested_size=position["qty"],
                     filled_price=filled_exit,
-                    filled_size=position["qty"],
+                    filled_size=final_exit_size,
                     timestamp=last_snapshot.timestamp,
                     reason="END_OF_BACKTEST",
-                    details={"position_id": position["position_id"], "cycle_index": last_snapshot.cycle_index},
+                    details={"position_id": position["position_id"], "cycle_index": last_snapshot.cycle_index, "fill_model": final_exit_fill, "fee_details": final_exit_fee_details},
                 )
-                _record_order(run_id, symbol, final_exit_side, "market_exit", requested_exit, filled_exit, position["qty"], exit_fee, "END_OF_BACKTEST", last_snapshot.timestamp, {"position_id": position["position_id"], "cycle_index": last_snapshot.cycle_index, "order_lifecycle": final_lifecycle})
+                _record_order(run_id, symbol, final_exit_side, "market_exit", requested_exit, filled_exit, final_exit_size, exit_fee, "END_OF_BACKTEST", last_snapshot.timestamp, {"position_id": position["position_id"], "cycle_index": last_snapshot.cycle_index, "order_lifecycle": final_lifecycle, "fill_model": final_exit_fill, "fee_details": final_exit_fee_details})
                 _close_position(run_id, position, last_snapshot.timestamp, filled_exit, gross, exit_fee, trade_net, "END_OF_BACKTEST")
                 del open_positions[symbol]
 
@@ -555,6 +591,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             "strategy_validation": strategy_validation,
             "execution_timeline": config["execution_timeline"],
             "order_lifecycle": phase18_lifecycle_contract(),
+            "fill_model": fill_model_contract(config),
             "timeout_exits_enabled": False,
         }
         _log(run_id, "BACKTEST_COMPLETED", "Backtest completed.", {**summary, **diagnostics})
