@@ -729,16 +729,42 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 # Remaining positions close only at protective exits or final backtest settlement.
 
                 if exit_reason:
-                    exit_fill = simulate_market_exit_fill(
-                        config=config,
-                        position_side=position["side"],
-                        requested_price=requested_exit,
-                        requested_size=position["qty"],
-                        timestamp=snapshot.timestamp,
-                        reason=exit_reason,
-                    )
-                    filled_exit = float(exit_fill["filled_price"])
-                    filled_exit_size = float(exit_fill["filled_size"])
+                    is_tp3_limit_fill = exit_reason == "TP3" and config.get("partial_tp_enabled", True)
+
+                    if is_tp3_limit_fill:
+                        filled_exit = float(requested_exit)
+                        filled_exit_size = float(position["qty"])
+                        exit_fill = {
+                            "version": "phase18f_hf3_tp3_maker_limit_fill",
+                            "execution_type": "exit",
+                            "order_type": "limit_exit",
+                            "liquidity": "maker",
+                            "position_side": position["side"],
+                            "requested_price": float(requested_exit),
+                            "filled_price": filled_exit,
+                            "requested_size": float(position["qty"]),
+                            "filled_size": filled_exit_size,
+                            "unfilled_size": 0.0,
+                            "partial_fill": False,
+                            "fill_ratio": 1.0,
+                            "spread_bps": 0.0,
+                            "slippage_bps": 0.0,
+                            "total_adverse_bps": 0.0,
+                            "price_impact": 0.0,
+                            "reason": "TP3_LIMIT_EXIT_FILLED",
+                        }
+                    else:
+                        exit_fill = simulate_market_exit_fill(
+                            config=config,
+                            position_side=position["side"],
+                            requested_price=requested_exit,
+                            requested_size=position["qty"],
+                            timestamp=snapshot.timestamp,
+                            reason=exit_reason,
+                        )
+                        filled_exit = float(exit_fill["filled_price"])
+                        filled_exit_size = float(exit_fill["filled_size"])
+
                     remaining_gross = _unrealized(position, filled_exit)
                     gross = float(position.get("realized_exit_gross", 0.0)) + remaining_gross
                     exit_fee_details = fee_model.fee_details(abs(filled_exit * filled_exit_size), exit_fill.get("liquidity"))
@@ -748,9 +774,11 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     cash += cash_delta
                     realized_pnl += cash_delta
                     exit_side = "sell" if position["side"] == "long" else "buy"
+                    exit_order_type = "limit_exit" if is_tp3_limit_fill else "market_exit"
+                    exit_role = "tp3" if exit_reason == "TP3" else "stop_loss"
                     exit_lifecycle = build_instant_fill_lifecycle(
-                        role="stop_loss" if exit_reason == "STOP_LOSS" else "tp3",
-                        order_type="market_exit",
+                        role=exit_role,
+                        order_type=exit_order_type,
                         side=exit_side,
                         requested_price=requested_exit,
                         requested_size=position["qty"],
@@ -760,9 +788,51 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                         reason=exit_reason,
                         details={"position_id": position["position_id"], "cycle_index": cycle_index, "execution_slots": execution_slots, "fill_model": exit_fill, "fee_details": exit_fee_details},
                     )
-                    _record_order(run_id, symbol, exit_side, "market_exit", requested_exit, filled_exit, filled_exit_size, exit_fee, exit_reason, snapshot.timestamp, {"position_id": position["position_id"], "cycle_index": cycle_index, "order_lifecycle": exit_lifecycle, "fill_model": exit_fill, "fee_details": exit_fee_details})
+
+                    exit_order_details = {
+                        "position_id": position["position_id"],
+                        "cycle_index": cycle_index,
+                        "order_lifecycle": exit_lifecycle,
+                        "fill_model": exit_fill,
+                        "fee_details": exit_fee_details,
+                    }
+
+                    if is_tp3_limit_fill and (position.get("protective_order_ids") or {}).get("tp3"):
+                        _update_order_fill(
+                            int((position.get("protective_order_ids") or {})["tp3"]),
+                            filled_exit,
+                            filled_exit_size,
+                            exit_fee,
+                            snapshot.timestamp,
+                            {
+                                **exit_order_details,
+                                "partial_tp_event": {
+                                    "role": "tp3",
+                                    "side": position["side"],
+                                    "reason": "TP3",
+                                    "version": "phase18f_hf3_tp3_maker_limit_fill",
+                                    "target_price": requested_exit,
+                                },
+                                "remaining_position_size": 0.0,
+                            },
+                        )
+                    else:
+                        _record_order(
+                            run_id,
+                            symbol,
+                            exit_side,
+                            exit_order_type,
+                            requested_exit,
+                            filled_exit,
+                            filled_exit_size,
+                            exit_fee,
+                            exit_reason,
+                            snapshot.timestamp,
+                            exit_order_details,
+                        )
+
                     _close_position(run_id, position, snapshot.timestamp, filled_exit, gross, exit_fee, trade_net, exit_reason)
-                    _log(run_id, "POSITION_CLOSED", f"{symbol} closed via {exit_reason}.", {"cycle_index": cycle_index, "symbol": symbol, "net_pnl": trade_net})
+                    _log(run_id, "POSITION_CLOSED", f"{symbol} closed via {exit_reason}.", {"cycle_index": cycle_index, "symbol": symbol, "net_pnl": trade_net, "fill_liquidity": exit_fill.get("liquidity"), "order_type": exit_order_type})
                     del open_positions[symbol]
 
             # 2) Mark-to-market.
