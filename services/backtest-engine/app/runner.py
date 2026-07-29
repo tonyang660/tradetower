@@ -18,6 +18,7 @@ from protective_order_simulator import reprice_levels_to_actual_entry, build_pro
 from partial_tp_simulator import next_triggered_tp, partial_tp_size, realized_gross_for_exit, partial_tp_model_contract
 from stop_loss_simulator import evaluate_stop_loss_order, stop_loss_model_contract
 from secondary_stop_simulator import initialize_sl2_state, build_sl2_order_payload, mark_sl2_activated, sl2_model_contract
+from adaptive_stop_simulator import build_adaptive_stop_update, adaptive_stop_model_contract
 
 from fee_model import FeeModel
 from guardian_risk import GuardianPolicy, evaluate_entry_guard
@@ -121,6 +122,10 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "stop_limit_max_reprice_attempts": int(payload.get("stop_limit_max_reprice_attempts", 3)),
         "sl2_enabled": bool(payload.get("sl2_enabled", True)),
         "sl2_default_close_pct": float(payload.get("sl2_default_close_pct", 50.0)),
+        "adaptive_stop_enabled": bool(payload.get("adaptive_stop_enabled", True)),
+        "adaptive_stop_after_tp1_enabled": bool(payload.get("adaptive_stop_after_tp1_enabled", True)),
+        "adaptive_stop_after_tp2_enabled": bool(payload.get("adaptive_stop_after_tp2_enabled", True)),
+        "adaptive_stop_breakeven_buffer_bps": float(payload.get("adaptive_stop_breakeven_buffer_bps", 2.0)),
         "data_mode": payload.get("data_mode", "phase14b_sample_historical_feed"),
         "dataset_id": int(payload.get("dataset_id", 0) or 0),
         "execution_model": payload.get("execution_model", "phase18_virtual_1m_order_lifecycle"),
@@ -361,6 +366,22 @@ def _update_open_order_quantity(order_id: int, quantity: float, timestamp, detai
         )
 
 
+
+def _update_open_order_price_quantity(order_id: int, price: float, quantity: float, timestamp, details: dict[str, Any] | None = None) -> None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE backtest_orders
+            SET requested_price=%s,
+                quantity=%s,
+                notional=ABS(%s * %s),
+                details_json=COALESCE(details_json, '{}'::jsonb) || %s::jsonb
+            WHERE order_id=%s
+            """,
+            (price, quantity, price, quantity, _json(details or {}), order_id),
+        )
+
+
 def _insert_partial_trade(run_id: int, position: dict[str, Any], role: str, exit_time, exit_price: float, quantity: float, gross_pnl: float, fee: float, net_pnl: float, details: dict[str, Any] | None = None) -> None:
     initial_risk = abs(position["entry"] - position["stop"]) * float(position.get("original_qty", position["qty"]))
     r_multiple = net_pnl / initial_risk if initial_risk else None
@@ -433,6 +454,7 @@ def _record_secondary_stop_order(run_id: int, position: dict[str, Any], trigger_
             "position_side": position["side"],
             "close_pct": order["close_pct"],
             "sl2_model": sl2_model_contract(config),
+            "adaptive_stop_model": adaptive_stop_model_contract(config),
             "order_lifecycle": lifecycle,
             **(details or {}),
         },
@@ -552,6 +574,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     _log(run_id, "PARTIAL_TP_MODEL_INITIALIZED", "Partial TP model initialized.", partial_tp_model_contract(config))
     _log(run_id, "STOP_LOSS_MODEL_INITIALIZED", "Stop-loss model initialized.", stop_loss_model_contract(config))
     _log(run_id, "SL2_MODEL_INITIALIZED", "Secondary stop model initialized.", sl2_model_contract(config))
+    _log(run_id, "ADAPTIVE_STOP_MODEL_INITIALIZED", "Adaptive stop model initialized.", adaptive_stop_model_contract(config))
 
     feed = build_historical_feed(config)
     preflight = feed.preflight()
@@ -591,6 +614,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     sl2_orders_created = 0
     sl2_orders_filled = 0
     sl2_orders_cancelled = 0
+    adaptive_stop_updates = 0
+    adaptive_stop_skips = 0
 
     _emit_progress(progress_callback, status="running", run_id=run_id, cycle_count=0, cycles_processed=0, candles_processed=0, trades_generated=0, progress_pct=0.0, message="Backtest initialized")
 
@@ -692,7 +717,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
 
                 position = {
                     "symbol": symbol, "side": side, "entry_time": snapshot.timestamp,
-                    "entry": filled_entry, "stop": repriced_levels["stop"], "tp1": repriced_levels["tp1"],
+                    "entry": filled_entry, "stop": repriced_levels["stop"], "original_stop": repriced_levels["stop"], "tp1": repriced_levels["tp1"],
                     "tp2": repriced_levels["tp2"], "tp3": repriced_levels["tp3"], "qty": filled_entry_size,
                     "original_qty": filled_entry_size, "partial_tp_filled": [],
                     "realized_exit_gross": 0.0, "exit_fees": 0.0,
@@ -825,17 +850,45 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                                 )
 
                             stop_id = (position.get("protective_order_ids") or {}).get("stop_loss")
-                            if stop_id:
-                                _update_open_order_quantity(
-                                    int(stop_id),
-                                    position["qty"],
-                                    snapshot.timestamp,
-                                    {
-                                        "reason": "STOP_RESIZED_AFTER_PARTIAL_TP",
-                                        "filled_tp_role": role,
-                                        "remaining_position_size": position["qty"],
-                                    },
-                                )
+                            adaptive_stop_update = build_adaptive_stop_update(
+                                position=position,
+                                trigger_role=role,
+                                timestamp=snapshot.timestamp,
+                                config=config,
+                            )
+
+                            if adaptive_stop_update and adaptive_stop_update.get("action") == "adaptive_stop_updated":
+                                position["stop"] = float(adaptive_stop_update["new_stop"])
+                                adaptive_stop_updates += 1
+                                if stop_id:
+                                    _update_open_order_price_quantity(
+                                        int(stop_id),
+                                        position["stop"],
+                                        position["qty"],
+                                        snapshot.timestamp,
+                                        {
+                                            "reason": "ADAPTIVE_STOP_UPDATED_AFTER_PARTIAL_TP",
+                                            "filled_tp_role": role,
+                                            "remaining_position_size": position["qty"],
+                                            "adaptive_stop_update": adaptive_stop_update,
+                                        },
+                                    )
+                                _log(run_id, "ADAPTIVE_STOP_UPDATED", f"{symbol} stop tightened after {role.upper()}.", {"cycle_index": cycle_index, "symbol": symbol, "adaptive_stop_update": adaptive_stop_update})
+                            else:
+                                if adaptive_stop_update:
+                                    adaptive_stop_skips += 1
+                                if stop_id:
+                                    _update_open_order_quantity(
+                                        int(stop_id),
+                                        position["qty"],
+                                        snapshot.timestamp,
+                                        {
+                                            "reason": "STOP_RESIZED_AFTER_PARTIAL_TP",
+                                            "filled_tp_role": role,
+                                            "remaining_position_size": position["qty"],
+                                            "adaptive_stop_update": adaptive_stop_update,
+                                        },
+                                    )
 
                             _insert_partial_trade(
                                 run_id,
@@ -1233,6 +1286,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             "sl2_orders_created": sl2_orders_created,
             "sl2_orders_filled": sl2_orders_filled,
             "sl2_orders_cancelled": sl2_orders_cancelled,
+            "adaptive_stop_updates": adaptive_stop_updates,
+            "adaptive_stop_skips": adaptive_stop_skips,
             "timeout_exits_enabled": False,
         }
         _log(run_id, "BACKTEST_COMPLETED", "Backtest completed.", {**summary, **diagnostics})

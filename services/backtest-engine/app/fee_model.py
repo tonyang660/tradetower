@@ -8,7 +8,7 @@ from typing import Any
 class FeeModel:
     maker_fee_bps: float = 2.0
     taker_fee_bps: float = 6.0
-    limit_order_fill_ratio: float = 0.80
+    limit_order_fill_ratio: float = 1.00
     override_fee_bps: float | None = None
 
     @classmethod
