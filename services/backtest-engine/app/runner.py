@@ -16,7 +16,7 @@ from execution_fill_model import simulate_market_entry_fill, simulate_market_exi
 from entry_order_simulator import build_pending_limit_entry_order, evaluate_pending_entry_order, entry_order_model_contract
 from protective_order_simulator import reprice_levels_to_actual_entry, build_protective_orders_for_position, protective_order_model_contract
 from partial_tp_simulator import next_triggered_tp, partial_tp_size, realized_gross_for_exit, partial_tp_model_contract
-from stop_loss_simulator import simulate_stop_loss_exit, stop_loss_model_contract
+from stop_loss_simulator import evaluate_stop_loss_order, stop_loss_model_contract
 
 from fee_model import FeeModel
 from guardian_risk import GuardianPolicy, evaluate_entry_guard
@@ -98,13 +98,13 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "fee_bps_override": float(payload["fee_bps"]) if "fee_bps" in payload else None,
         "maker_fee_bps": float(payload.get("maker_fee_bps", 2.0)),
         "taker_fee_bps": float(payload.get("taker_fee_bps", 6.0)),
-        "limit_order_fill_ratio": float(payload.get("limit_order_fill_ratio", 0.80)),
+        "limit_order_fill_ratio": 1.0,
         "slippage_bps": float(payload.get("slippage_bps", DEFAULT_SLIPPAGE_BPS)),
         "spread_bps": float(payload.get("spread_bps", 0.0)),
         "entry_slippage_bps": float(payload.get("entry_slippage_bps", payload.get("slippage_bps", DEFAULT_SLIPPAGE_BPS))),
         "exit_slippage_bps": float(payload.get("exit_slippage_bps", payload.get("slippage_bps", DEFAULT_SLIPPAGE_BPS))),
         "market_fill_ratio": float(payload.get("market_fill_ratio", 1.0)),
-        "partial_fill_enabled": bool(payload.get("partial_fill_enabled", False)),
+        "partial_fill_enabled": False,
         "entry_order_preference": str(payload.get("entry_order_preference", "limit")),
         "entry_limit_max_wait_attempts": int(payload.get("entry_limit_max_wait_attempts", payload.get("entry_limit_max_wait_cycles", 15))),
         "entry_limit_max_wait_cycles": int(payload.get("entry_limit_max_wait_cycles", 15)),
@@ -117,6 +117,7 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "take_profit_order_type": str(payload.get("take_profit_order_type", "limit_exit")),
         "partial_tp_enabled": bool(payload.get("partial_tp_enabled", True)),
         "stop_reprice_buffer_bps": float(payload.get("stop_reprice_buffer_bps", 10.0)),
+        "stop_limit_max_reprice_attempts": int(payload.get("stop_limit_max_reprice_attempts", 3)),
         "data_mode": payload.get("data_mode", "phase14b_sample_historical_feed"),
         "dataset_id": int(payload.get("dataset_id", 0) or 0),
         "execution_model": payload.get("execution_model", "phase18_virtual_1m_order_lifecycle"),
@@ -523,6 +524,9 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     partial_tp_fees = 0.0
     stop_loss_exits = 0
     missed_stop_reprices = 0
+    stop_loss_limit_reprice_attempts = 0
+    stop_loss_market_fallbacks = 0
+    stop_loss_limit_maker_fills = 0
 
     _emit_progress(progress_callback, status="running", run_id=run_id, cycle_count=0, cycles_processed=0, candles_processed=0, trades_generated=0, progress_pct=0.0, message="Backtest initialized")
 
@@ -684,8 +688,38 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 else:
                     stop_hit = snapshot.highs[symbol] >= position["stop"]
 
+                stop_loss_event = None
                 if stop_hit:
-                    exit_reason, requested_exit = "STOP_LOSS", position["stop"]
+                    stop_loss_event = evaluate_stop_loss_order(
+                        position=position,
+                        original_stop_price=position["stop"],
+                        latest_price=snapshot.closes[symbol],
+                        requested_size=position["qty"],
+                        timestamp=snapshot.timestamp,
+                        config=config,
+                    )
+                    position["stop_loss_state"] = stop_loss_event.get("state", position.get("stop_loss_state", {}))
+
+                    if stop_loss_event["action"] == "repriced_stop_limit_attempt":
+                        stop_loss_limit_reprice_attempts += 1
+                        missed_stop_reprices += 1
+                        stop_id = (position.get("protective_order_ids") or {}).get("stop_loss")
+                        if stop_id:
+                            _update_open_order_quantity(
+                                int(stop_id),
+                                position["qty"],
+                                snapshot.timestamp,
+                                {
+                                    "stop_loss_event": stop_loss_event,
+                                    "reason": "STOP_LIMIT_REPRICE_ATTEMPT",
+                                    "remaining_position_size": position["qty"],
+                                    "requested_price": stop_loss_event.get("requested_price"),
+                                },
+                            )
+                        _log(run_id, "STOP_LIMIT_REPRICE_ATTEMPT", f"{symbol} stop breached; repricing protective stop-limit.", {"cycle_index": cycle_index, "symbol": symbol, "stop_loss_event": stop_loss_event})
+                        continue
+
+                    exit_reason, requested_exit = "STOP_LOSS", float(stop_loss_event["requested_price"])
                 elif config.get("partial_tp_enabled", True):
                     partial_tp_event = next_triggered_tp(
                         position,
@@ -794,19 +828,47 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                             "reason": "TP3_LIMIT_EXIT_FILLED",
                         }
                     elif is_stop_loss_fill:
-                        exit_fill = simulate_stop_loss_exit(
-                            config=config,
-                            position_side=position["side"],
-                            original_stop_price=requested_exit,
-                            latest_price=snapshot.closes[symbol],
-                            requested_size=position["qty"],
-                            timestamp=snapshot.timestamp,
-                        )
-                        filled_exit = float(exit_fill["filled_price"])
-                        filled_exit_size = float(exit_fill["filled_size"])
+                        if stop_loss_event is None:
+                            stop_loss_event = evaluate_stop_loss_order(
+                                position=position,
+                                original_stop_price=position["stop"],
+                                latest_price=snapshot.closes[symbol],
+                                requested_size=position["qty"],
+                                timestamp=snapshot.timestamp,
+                                config=config,
+                            )
+
+                        if stop_loss_event["action"] == "stop_limit_fill":
+                            filled_exit = float(stop_loss_event["filled_price"])
+                            filled_exit_size = float(stop_loss_event["filled_size"])
+                            exit_fill = {
+                                **stop_loss_event,
+                                "filled_price": filled_exit,
+                                "filled_size": filled_exit_size,
+                            }
+                            stop_loss_limit_maker_fills += 1
+                        elif stop_loss_event["action"] == "market_stop_fallback":
+                            market_fill = simulate_market_exit_fill(
+                                config=config,
+                                position_side=position["side"],
+                                requested_price=float(stop_loss_event["requested_price"]),
+                                requested_size=position["qty"],
+                                timestamp=snapshot.timestamp,
+                                reason="STOP_LOSS_MARKET_FALLBACK",
+                            )
+                            filled_exit = float(market_fill["filled_price"])
+                            filled_exit_size = float(market_fill["filled_size"])
+                            exit_fill = {
+                                **market_fill,
+                                "version": stop_loss_event.get("version"),
+                                "action": "market_stop_fallback",
+                                "stop_loss_event": stop_loss_event,
+                            }
+                            stop_loss_market_fallbacks += 1
+                        else:
+                            raise RuntimeError(f"unsupported_stop_loss_action: {stop_loss_event.get('action')}")
+
                         stop_loss_exits += 1
-                        if exit_fill.get("action") == "repriced_stop_fill":
-                            missed_stop_reprices += 1
                     else:
                         exit_fill = simulate_market_exit_fill(
                             config=config,
@@ -884,7 +946,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                             snapshot.timestamp,
                             {
                                 **exit_order_details,
-                                "stop_loss_event": exit_fill,
+                                "stop_loss_event": stop_loss_event or exit_fill,
                                 "remaining_position_size": 0.0,
                             },
                         )
@@ -1100,6 +1162,9 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             "partial_tp_fees": partial_tp_fees,
             "stop_loss_exits": stop_loss_exits,
             "missed_stop_reprices": missed_stop_reprices,
+            "stop_loss_limit_reprice_attempts": stop_loss_limit_reprice_attempts,
+            "stop_loss_market_fallbacks": stop_loss_market_fallbacks,
+            "stop_loss_limit_maker_fills": stop_loss_limit_maker_fills,
             "timeout_exits_enabled": False,
         }
         _log(run_id, "BACKTEST_COMPLETED", "Backtest completed.", {**summary, **diagnostics})

@@ -4,7 +4,7 @@ from dataclasses import dataclass, asdict
 from typing import Any
 
 
-PHASE18_ENTRY_ORDER_MODEL_VERSION = "phase18d_hf1_limit_entry_with_15_attempt_market_fallback"
+PHASE18_ENTRY_ORDER_MODEL_VERSION = "phase18g_hf1_limit_touch_full_fill_no_ratio"
 
 
 def _float(value: Any, default: float = 0.0) -> float:
@@ -61,6 +61,7 @@ def entry_order_model_contract(config: dict[str, Any] | None = None) -> dict[str
             "The default wait is 15 virtual 1m execution attempts.",
             "With 5m source candles and virtual 1m execution, 15 attempts equals 3 source candles.",
             "After 15 attempts, market fallback is enabled by default.",
+            "Synthetic limit_order_fill_ratio behavior is disabled; touched limits fill completely.",
         ],
     }
 
@@ -147,12 +148,12 @@ def evaluate_pending_entry_order(
     side = str(order["side"]).lower()
 
     if _limit_touched(side=side, limit_price=limit_price, candle_high=candle_high, candle_low=candle_low):
-        if cfg.partial_fill_enabled:
-            filled_size = max(0.0, min(requested_size, requested_size * cfg.limit_order_fill_ratio))
-        else:
-            filled_size = requested_size
-
-        status = "filled" if filled_size >= requested_size else "partially_filled"
+        # Phase 18G-HF1:
+        # Remove synthetic 80% fill-ratio behavior. With candle-level backtests,
+        # a touched resting limit order is treated as fully filled. More granular
+        # queue-depth/partial-fill modeling belongs to a future order-book phase.
+        filled_size = requested_size
+        status = "filled"
         return {
             "action": "filled",
             "status": status,
