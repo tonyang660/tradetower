@@ -49,7 +49,7 @@ const DEFAULT_CONFIG: BacktestRunConfig = {
   risk_per_trade_pct: 1,
   maker_fee_bps: 2,
   taker_fee_bps: 6,
-  limit_order_fill_ratio: 0.8,
+  limit_order_fill_ratio: 1.0,
   slippage_bps: 3,
   spread_bps: 0,
   execution_mode: "current_engine",

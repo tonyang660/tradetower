@@ -17,6 +17,7 @@ from entry_order_simulator import build_pending_limit_entry_order, evaluate_pend
 from protective_order_simulator import reprice_levels_to_actual_entry, build_protective_orders_for_position, protective_order_model_contract
 from partial_tp_simulator import next_triggered_tp, partial_tp_size, realized_gross_for_exit, partial_tp_model_contract
 from stop_loss_simulator import evaluate_stop_loss_order, stop_loss_model_contract
+from secondary_stop_simulator import initialize_sl2_state, build_sl2_order_payload, mark_sl2_activated, sl2_model_contract
 
 from fee_model import FeeModel
 from guardian_risk import GuardianPolicy, evaluate_entry_guard
@@ -118,6 +119,8 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "partial_tp_enabled": bool(payload.get("partial_tp_enabled", True)),
         "stop_reprice_buffer_bps": float(payload.get("stop_reprice_buffer_bps", 10.0)),
         "stop_limit_max_reprice_attempts": int(payload.get("stop_limit_max_reprice_attempts", 3)),
+        "sl2_enabled": bool(payload.get("sl2_enabled", True)),
+        "sl2_default_close_pct": float(payload.get("sl2_default_close_pct", 50.0)),
         "data_mode": payload.get("data_mode", "phase14b_sample_historical_feed"),
         "dataset_id": int(payload.get("dataset_id", 0) or 0),
         "execution_model": payload.get("execution_model", "phase18_virtual_1m_order_lifecycle"),
@@ -381,6 +384,63 @@ def _insert_partial_trade(run_id: int, position: dict[str, Any], role: str, exit
         )
 
 
+
+def _record_secondary_stop_order(run_id: int, position: dict[str, Any], trigger_reason: str, stop_price: float, close_pct: float, timestamp, config: dict[str, Any], details: dict[str, Any] | None = None) -> int | None:
+    if not config.get("sl2_enabled", True):
+        return None
+
+    order = build_sl2_order_payload(
+        run_id=run_id,
+        position=position,
+        trigger_reason=trigger_reason,
+        stop_price=stop_price,
+        close_pct=close_pct,
+        timestamp=timestamp,
+        config=config,
+    )
+    if float(order.get("requested_size") or 0.0) <= 0:
+        return None
+
+    lifecycle = {
+        "version": order["version"],
+        "role": "sl2",
+        "order_type": order["order_type"],
+        "side": order["side"],
+        "requested_price": order["requested_price"],
+        "requested_size": order["requested_size"],
+        "status": "open",
+        "events": [
+            {"status": "created", "timestamp": timestamp, "details": {"reason": trigger_reason, "position_id": position["position_id"]}},
+            {"status": "open", "timestamp": timestamp, "details": {"reason": "RESTING_SECONDARY_STOP", "position_id": position["position_id"]}},
+        ],
+    }
+
+    order_id = _record_order(
+        run_id,
+        order["symbol"],
+        order["side"],
+        order["order_type"],
+        order["requested_price"],
+        None,
+        order["requested_size"],
+        0.0,
+        order["reason"],
+        timestamp,
+        {
+            "position_id": position["position_id"],
+            "role": "sl2",
+            "trigger_reason": trigger_reason,
+            "position_side": position["side"],
+            "close_pct": order["close_pct"],
+            "sl2_model": sl2_model_contract(config),
+            "order_lifecycle": lifecycle,
+            **(details or {}),
+        },
+        status="open",
+    )
+    mark_sl2_activated(position, order_id=order_id, order_payload=order, timestamp=timestamp)
+    return order_id
+
 def _record_equity(run_id: int, timestamp, equity: float, cash: float, realized_pnl: float, unrealized_pnl: float, drawdown_pct: float) -> None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -491,6 +551,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     _log(run_id, "PROTECTIVE_ORDER_MODEL_INITIALIZED", "Protective order model initialized.", protective_order_model_contract(config))
     _log(run_id, "PARTIAL_TP_MODEL_INITIALIZED", "Partial TP model initialized.", partial_tp_model_contract(config))
     _log(run_id, "STOP_LOSS_MODEL_INITIALIZED", "Stop-loss model initialized.", stop_loss_model_contract(config))
+    _log(run_id, "SL2_MODEL_INITIALIZED", "Secondary stop model initialized.", sl2_model_contract(config))
 
     feed = build_historical_feed(config)
     preflight = feed.preflight()
@@ -527,6 +588,9 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     stop_loss_limit_reprice_attempts = 0
     stop_loss_market_fallbacks = 0
     stop_loss_limit_maker_fills = 0
+    sl2_orders_created = 0
+    sl2_orders_filled = 0
+    sl2_orders_cancelled = 0
 
     _emit_progress(progress_callback, status="running", run_id=run_id, cycle_count=0, cycles_processed=0, candles_processed=0, trades_generated=0, progress_pct=0.0, message="Backtest initialized")
 
@@ -638,6 +702,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     "level_reprice": level_reprice,
                 }
 
+                initialize_sl2_state(position)
                 _open_position(run_id, position)
                 protective_order_ids = _record_protective_orders_for_position(
                     run_id,
@@ -1165,6 +1230,9 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             "stop_loss_limit_reprice_attempts": stop_loss_limit_reprice_attempts,
             "stop_loss_market_fallbacks": stop_loss_market_fallbacks,
             "stop_loss_limit_maker_fills": stop_loss_limit_maker_fills,
+            "sl2_orders_created": sl2_orders_created,
+            "sl2_orders_filled": sl2_orders_filled,
+            "sl2_orders_cancelled": sl2_orders_cancelled,
             "timeout_exits_enabled": False,
         }
         _log(run_id, "BACKTEST_COMPLETED", "Backtest completed.", {**summary, **diagnostics})
