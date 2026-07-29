@@ -806,6 +806,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     regime_change_event = evaluate_regime_change_exit(
                         position=position,
                         current_regime=current_regime,
+                        latest_price=snapshot.closes[symbol],
                         timestamp=snapshot.timestamp,
                         config=config,
                     )
