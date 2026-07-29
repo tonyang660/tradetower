@@ -6,6 +6,7 @@ from typing import Any
 
 from config import DEFAULT_MAX_CYCLES, DEFAULT_RISK_PER_TRADE_PCT, DEFAULT_SLIPPAGE_BPS, DEFAULT_STARTING_CAPITAL
 from strategies.registry import build_strategy
+from strategies.base import StrategyContext
 from strategies.validation import validate_strategy_run_config
 from db import get_conn
 from historical_feed import build_historical_feed, parse_time
@@ -17,8 +18,9 @@ from entry_order_simulator import build_pending_limit_entry_order, evaluate_pend
 from protective_order_simulator import reprice_levels_to_actual_entry, build_protective_orders_for_position, protective_order_model_contract
 from partial_tp_simulator import next_triggered_tp, partial_tp_size, realized_gross_for_exit, partial_tp_model_contract
 from stop_loss_simulator import evaluate_stop_loss_order, stop_loss_model_contract
-from secondary_stop_simulator import initialize_sl2_state, build_sl2_order_payload, mark_sl2_activated, sl2_model_contract
+from secondary_stop_simulator import initialize_sl2_state, build_sl2_order_payload, mark_sl2_activated, sl2_touched, sl2_model_contract
 from adaptive_stop_simulator import build_adaptive_stop_update, adaptive_stop_model_contract
+from regime_change_exit_simulator import evaluate_regime_change_exit, regime_change_model_contract
 
 from fee_model import FeeModel
 from guardian_risk import GuardianPolicy, evaluate_entry_guard
@@ -123,6 +125,9 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "sl2_enabled": bool(payload.get("sl2_enabled", True)),
         "sl2_default_close_pct": float(payload.get("sl2_default_close_pct", 50.0)),
         "adaptive_stop_enabled": bool(payload.get("adaptive_stop_enabled", True)),
+        "regime_change_exit_enabled": bool(payload.get("regime_change_exit_enabled", True)),
+        "regime_change_sl2_close_pct": float(payload.get("regime_change_sl2_close_pct", 50.0)),
+        "regime_change_require_profit": bool(payload.get("regime_change_require_profit", True)),
         "adaptive_stop_after_tp1_enabled": bool(payload.get("adaptive_stop_after_tp1_enabled", True)),
         "adaptive_stop_after_tp2_enabled": bool(payload.get("adaptive_stop_after_tp2_enabled", True)),
         "adaptive_stop_breakeven_buffer_bps": float(payload.get("adaptive_stop_breakeven_buffer_bps", 2.0)),
@@ -455,6 +460,7 @@ def _record_secondary_stop_order(run_id: int, position: dict[str, Any], trigger_
             "close_pct": order["close_pct"],
             "sl2_model": sl2_model_contract(config),
             "adaptive_stop_model": adaptive_stop_model_contract(config),
+            "regime_change_model": regime_change_model_contract(config),
             "order_lifecycle": lifecycle,
             **(details or {}),
         },
@@ -575,6 +581,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     _log(run_id, "STOP_LOSS_MODEL_INITIALIZED", "Stop-loss model initialized.", stop_loss_model_contract(config))
     _log(run_id, "SL2_MODEL_INITIALIZED", "Secondary stop model initialized.", sl2_model_contract(config))
     _log(run_id, "ADAPTIVE_STOP_MODEL_INITIALIZED", "Adaptive stop model initialized.", adaptive_stop_model_contract(config))
+    _log(run_id, "REGIME_CHANGE_MODEL_INITIALIZED", "Regime-change exit model initialized.", regime_change_model_contract(config))
 
     feed = build_historical_feed(config)
     preflight = feed.preflight()
@@ -616,6 +623,9 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     sl2_orders_cancelled = 0
     adaptive_stop_updates = 0
     adaptive_stop_skips = 0
+    regime_change_checks = 0
+    regime_change_sl2_created = 0
+    regime_change_sl2_fills = 0
 
     _emit_progress(progress_callback, status="running", run_id=run_id, cycle_count=0, cycles_processed=0, candles_processed=0, trades_generated=0, progress_pct=0.0, message="Backtest initialized")
 
@@ -778,6 +788,117 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 else:
                     stop_hit = snapshot.highs[symbol] >= position["stop"]
 
+                # Phase 18J: regime-change SL2 protection.
+                # This runs before the normal stop/TP ladder. It only closes a
+                # secondary 50% SL2 leg if the SL2 price is actually touched.
+                if config.get("regime_change_exit_enabled", True):
+                    current_regime = None
+                    try:
+                        regime_decision = strategy.evaluate_symbol(
+                            snapshot,
+                            symbol,
+                            StrategyContext(run_config=config),
+                        )
+                        current_regime = regime_decision.regime
+                    except Exception:
+                        current_regime = None
+
+                    regime_change_event = evaluate_regime_change_exit(
+                        position=position,
+                        current_regime=current_regime,
+                        timestamp=snapshot.timestamp,
+                        config=config,
+                    )
+                    regime_change_checks += 1
+
+                    if regime_change_event.get("action") == "activate_regime_change_sl2":
+                        sl2_order_id = _record_secondary_stop_order(
+                            run_id,
+                            position,
+                            "REGIME_CHANGE_SL2",
+                            float(regime_change_event["sl2_price"]),
+                            float(regime_change_event["sl2_close_pct"]),
+                            snapshot.timestamp,
+                            config,
+                            {"regime_change_event": regime_change_event},
+                        )
+                        if sl2_order_id:
+                            position["regime_change_sl2_active"] = True
+                            position["regime_change_sl2_event"] = regime_change_event
+                            regime_change_sl2_created += 1
+                            sl2_orders_created += 1
+                            _log(run_id, "REGIME_CHANGE_SL2_CREATED", f"{symbol} regime change SL2 created.", {"cycle_index": cycle_index, "symbol": symbol, "regime_change_event": regime_change_event})
+
+                    active_sl2 = position.get("sl2") if position.get("regime_change_sl2_active") else None
+                    if active_sl2 and sl2_touched(
+                        side=position["side"],
+                        stop_price=float(active_sl2["requested_price"]),
+                        candle_high=snapshot.highs[symbol],
+                        candle_low=snapshot.lows[symbol],
+                    ):
+                        sl2_price = float(active_sl2["requested_price"])
+                        sl2_size = min(float(position["qty"]), float(active_sl2["requested_size"]))
+                        if sl2_size > 0:
+                            sl2_gross = realized_gross_for_exit(position, sl2_price, sl2_size)
+                            sl2_fee_details = fee_model.fee_details(abs(sl2_price * sl2_size), "maker")
+                            sl2_fee = float(sl2_fee_details["fee"])
+                            sl2_net = sl2_gross - sl2_fee
+                            cash += sl2_net
+                            realized_pnl += sl2_net
+                            position["qty"] = max(0.0, float(position["qty"]) - sl2_size)
+                            position["fees"] += sl2_fee
+                            position["exit_fees"] = float(position.get("exit_fees", 0.0)) + sl2_fee
+                            position["realized_exit_gross"] = float(position.get("realized_exit_gross", 0.0)) + sl2_gross
+                            position.setdefault("partial_tp_filled", []).append("regime_change_sl2")
+
+                            if position.get("sl2_order_id"):
+                                _update_order_fill(
+                                    int(position["sl2_order_id"]),
+                                    sl2_price,
+                                    sl2_size,
+                                    sl2_fee,
+                                    snapshot.timestamp,
+                                    {
+                                        "regime_change_event": position.get("regime_change_sl2_event"),
+                                        "fee_details": sl2_fee_details,
+                                        "remaining_position_size": position["qty"],
+                                    },
+                                )
+
+                            stop_id = (position.get("protective_order_ids") or {}).get("stop_loss")
+                            if stop_id:
+                                _update_open_order_quantity(
+                                    int(stop_id),
+                                    position["qty"],
+                                    snapshot.timestamp,
+                                    {
+                                        "reason": "STOP_RESIZED_AFTER_REGIME_CHANGE_SL2",
+                                        "remaining_position_size": position["qty"],
+                                        "regime_change_event": position.get("regime_change_sl2_event"),
+                                    },
+                                )
+
+                            _insert_partial_trade(
+                                run_id,
+                                position,
+                                "REGIME_CHANGE_SL2",
+                                snapshot.timestamp,
+                                sl2_price,
+                                sl2_size,
+                                sl2_gross,
+                                sl2_fee,
+                                sl2_net,
+                                {
+                                    "regime_change_event": position.get("regime_change_sl2_event"),
+                                    "fee_details": sl2_fee_details,
+                                },
+                            )
+                            regime_change_sl2_fills += 1
+                            sl2_orders_filled += 1
+                            position["regime_change_sl2_active"] = False
+                            _log(run_id, "REGIME_CHANGE_SL2_FILLED", f"{symbol} regime-change SL2 filled.", {"cycle_index": cycle_index, "symbol": symbol, "price": sl2_price, "size": sl2_size, "net_pnl": sl2_net, "remaining_size": position["qty"]})
+                            continue
+
                 stop_loss_event = None
                 if stop_hit:
                     stop_loss_event = evaluate_stop_loss_order(
@@ -850,6 +971,16 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                                 )
 
                             stop_id = (position.get("protective_order_ids") or {}).get("stop_loss")
+                            active_sl2_id = position.get("sl2_order_id") if position.get("regime_change_sl2_active") else None
+                            remaining_after_tp = float(position["qty"])
+
+                            if active_sl2_id:
+                                stop_cover_size = remaining_after_tp * 0.5
+                                sl2_cover_size = remaining_after_tp - stop_cover_size
+                            else:
+                                stop_cover_size = remaining_after_tp
+                                sl2_cover_size = 0.0
+
                             adaptive_stop_update = build_adaptive_stop_update(
                                 position=position,
                                 trigger_role=role,
@@ -864,31 +995,71 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                                     _update_open_order_price_quantity(
                                         int(stop_id),
                                         position["stop"],
-                                        position["qty"],
+                                        stop_cover_size,
                                         snapshot.timestamp,
                                         {
                                             "reason": "ADAPTIVE_STOP_UPDATED_AFTER_PARTIAL_TP",
                                             "filled_tp_role": role,
-                                            "remaining_position_size": position["qty"],
+                                            "remaining_position_size": remaining_after_tp,
+                                            "stop_cover_size": stop_cover_size,
+                                            "sl2_cover_size": sl2_cover_size,
+                                            "sl2_active": bool(active_sl2_id),
                                             "adaptive_stop_update": adaptive_stop_update,
+                                            f"adaptive_stop_update_{role}": adaptive_stop_update,
                                         },
                                     )
-                                _log(run_id, "ADAPTIVE_STOP_UPDATED", f"{symbol} stop tightened after {role.upper()}.", {"cycle_index": cycle_index, "symbol": symbol, "adaptive_stop_update": adaptive_stop_update})
+                                _log(
+                                    run_id,
+                                    "ADAPTIVE_STOP_UPDATED",
+                                    f"{symbol} stop tightened after {role.upper()}.",
+                                    {
+                                        "cycle_index": cycle_index,
+                                        "symbol": symbol,
+                                        "adaptive_stop_update": adaptive_stop_update,
+                                        "remaining_position_size": remaining_after_tp,
+                                        "stop_cover_size": stop_cover_size,
+                                        "sl2_cover_size": sl2_cover_size,
+                                        "sl2_active": bool(active_sl2_id),
+                                    },
+                                )
                             else:
                                 if adaptive_stop_update:
                                     adaptive_stop_skips += 1
                                 if stop_id:
                                     _update_open_order_quantity(
                                         int(stop_id),
-                                        position["qty"],
+                                        stop_cover_size,
                                         snapshot.timestamp,
                                         {
                                             "reason": "STOP_RESIZED_AFTER_PARTIAL_TP",
                                             "filled_tp_role": role,
-                                            "remaining_position_size": position["qty"],
+                                            "remaining_position_size": remaining_after_tp,
+                                            "stop_cover_size": stop_cover_size,
+                                            "sl2_cover_size": sl2_cover_size,
+                                            "sl2_active": bool(active_sl2_id),
                                             "adaptive_stop_update": adaptive_stop_update,
+                                            f"adaptive_stop_update_{role}": adaptive_stop_update,
                                         },
                                     )
+
+                            if active_sl2_id:
+                                if isinstance(position.get("sl2"), dict):
+                                    position["sl2"]["requested_size"] = sl2_cover_size
+                                _update_open_order_quantity(
+                                    int(active_sl2_id),
+                                    sl2_cover_size,
+                                    snapshot.timestamp,
+                                    {
+                                        "reason": "SL2_RESIZED_AFTER_PARTIAL_TP",
+                                        "filled_tp_role": role,
+                                        "remaining_position_size": remaining_after_tp,
+                                        "stop_cover_size": stop_cover_size,
+                                        "sl2_cover_size": sl2_cover_size,
+                                        "sl2_active": True,
+                                        "adaptive_stop_update": adaptive_stop_update,
+                                        f"adaptive_stop_update_{role}": adaptive_stop_update,
+                                    },
+                                )
 
                             _insert_partial_trade(
                                 run_id,
@@ -1288,6 +1459,9 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             "sl2_orders_cancelled": sl2_orders_cancelled,
             "adaptive_stop_updates": adaptive_stop_updates,
             "adaptive_stop_skips": adaptive_stop_skips,
+            "regime_change_checks": regime_change_checks,
+            "regime_change_sl2_created": regime_change_sl2_created,
+            "regime_change_sl2_fills": regime_change_sl2_fills,
             "timeout_exits_enabled": False,
         }
         _log(run_id, "BACKTEST_COMPLETED", "Backtest completed.", {**summary, **diagnostics})
