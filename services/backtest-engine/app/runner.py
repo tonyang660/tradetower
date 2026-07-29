@@ -16,6 +16,7 @@ from execution_fill_model import simulate_market_entry_fill, simulate_market_exi
 from entry_order_simulator import build_pending_limit_entry_order, evaluate_pending_entry_order, entry_order_model_contract
 from protective_order_simulator import reprice_levels_to_actual_entry, build_protective_orders_for_position, protective_order_model_contract
 from partial_tp_simulator import next_triggered_tp, partial_tp_size, realized_gross_for_exit, partial_tp_model_contract
+from stop_loss_simulator import simulate_stop_loss_exit, stop_loss_model_contract
 
 from fee_model import FeeModel
 from guardian_risk import GuardianPolicy, evaluate_entry_guard
@@ -115,6 +116,7 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "protective_stop_order_type": str(payload.get("protective_stop_order_type", "protective_limit")),
         "take_profit_order_type": str(payload.get("take_profit_order_type", "limit_exit")),
         "partial_tp_enabled": bool(payload.get("partial_tp_enabled", True)),
+        "stop_reprice_buffer_bps": float(payload.get("stop_reprice_buffer_bps", 10.0)),
         "data_mode": payload.get("data_mode", "phase14b_sample_historical_feed"),
         "dataset_id": int(payload.get("dataset_id", 0) or 0),
         "execution_model": payload.get("execution_model", "phase18_virtual_1m_order_lifecycle"),
@@ -315,6 +317,7 @@ def _record_protective_orders_for_position(run_id: int, position: dict[str, Any]
             "entry_price": order["entry_price"],
             "protective_order_model": protective_order_model_contract(config),
             "partial_tp_model": partial_tp_model_contract(config),
+            "stop_loss_model": stop_loss_model_contract(config),
             "order_lifecycle": lifecycle,
             **(details or {}),
         }
@@ -486,6 +489,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     _log(run_id, "ENTRY_ORDER_MODEL_INITIALIZED", "Entry order model initialized.", entry_order_model_contract(config))
     _log(run_id, "PROTECTIVE_ORDER_MODEL_INITIALIZED", "Protective order model initialized.", protective_order_model_contract(config))
     _log(run_id, "PARTIAL_TP_MODEL_INITIALIZED", "Partial TP model initialized.", partial_tp_model_contract(config))
+    _log(run_id, "STOP_LOSS_MODEL_INITIALIZED", "Stop-loss model initialized.", stop_loss_model_contract(config))
 
     feed = build_historical_feed(config)
     preflight = feed.preflight()
@@ -517,6 +521,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     partial_tp_fills = 0
     partial_tp_realized_gross = 0.0
     partial_tp_fees = 0.0
+    stop_loss_exits = 0
+    missed_stop_reprices = 0
 
     _emit_progress(progress_callback, status="running", run_id=run_id, cycle_count=0, cycles_processed=0, candles_processed=0, trades_generated=0, progress_pct=0.0, message="Backtest initialized")
 
@@ -763,6 +769,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
 
                 if exit_reason:
                     is_tp3_limit_fill = exit_reason == "TP3" and config.get("partial_tp_enabled", True)
+                    is_stop_loss_fill = exit_reason == "STOP_LOSS"
 
                     if is_tp3_limit_fill:
                         filled_exit = float(requested_exit)
@@ -786,6 +793,20 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                             "price_impact": 0.0,
                             "reason": "TP3_LIMIT_EXIT_FILLED",
                         }
+                    elif is_stop_loss_fill:
+                        exit_fill = simulate_stop_loss_exit(
+                            config=config,
+                            position_side=position["side"],
+                            original_stop_price=requested_exit,
+                            latest_price=snapshot.closes[symbol],
+                            requested_size=position["qty"],
+                            timestamp=snapshot.timestamp,
+                        )
+                        filled_exit = float(exit_fill["filled_price"])
+                        filled_exit_size = float(exit_fill["filled_size"])
+                        stop_loss_exits += 1
+                        if exit_fill.get("action") == "repriced_stop_fill":
+                            missed_stop_reprices += 1
                     else:
                         exit_fill = simulate_market_exit_fill(
                             config=config,
@@ -807,7 +828,12 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     cash += cash_delta
                     realized_pnl += cash_delta
                     exit_side = "sell" if position["side"] == "long" else "buy"
-                    exit_order_type = "limit_exit" if is_tp3_limit_fill else "market_exit"
+                    if is_tp3_limit_fill:
+                        exit_order_type = "limit_exit"
+                    elif is_stop_loss_fill:
+                        exit_order_type = "stop_limit_exit"
+                    else:
+                        exit_order_type = "market_exit"
                     exit_role = "tp3" if exit_reason == "TP3" else "stop_loss"
                     exit_lifecycle = build_instant_fill_lifecycle(
                         role=exit_role,
@@ -849,6 +875,19 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                                 "remaining_position_size": 0.0,
                             },
                         )
+                    elif is_stop_loss_fill and (position.get("protective_order_ids") or {}).get("stop_loss"):
+                        _update_order_fill(
+                            int((position.get("protective_order_ids") or {})["stop_loss"]),
+                            filled_exit,
+                            filled_exit_size,
+                            exit_fee,
+                            snapshot.timestamp,
+                            {
+                                **exit_order_details,
+                                "stop_loss_event": exit_fill,
+                                "remaining_position_size": 0.0,
+                            },
+                        )
                     else:
                         _record_order(
                             run_id,
@@ -865,7 +904,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                         )
 
                     _close_position(run_id, position, snapshot.timestamp, filled_exit, gross, exit_fee, trade_net, exit_reason)
-                    _log(run_id, "POSITION_CLOSED", f"{symbol} closed via {exit_reason}.", {"cycle_index": cycle_index, "symbol": symbol, "net_pnl": trade_net, "fill_liquidity": exit_fill.get("liquidity"), "order_type": exit_order_type})
+                    _log(run_id, "POSITION_CLOSED", f"{symbol} closed via {exit_reason}.", {"cycle_index": cycle_index, "symbol": symbol, "net_pnl": trade_net, "fill_liquidity": exit_fill.get("liquidity"), "order_type": exit_order_type, "stop_action": exit_fill.get("action")})
                     del open_positions[symbol]
 
             # 2) Mark-to-market.
@@ -1059,6 +1098,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             "partial_tp_fills": partial_tp_fills,
             "partial_tp_realized_gross": partial_tp_realized_gross,
             "partial_tp_fees": partial_tp_fees,
+            "stop_loss_exits": stop_loss_exits,
+            "missed_stop_reprices": missed_stop_reprices,
             "timeout_exits_enabled": False,
         }
         _log(run_id, "BACKTEST_COMPLETED", "Backtest completed.", {**summary, **diagnostics})
