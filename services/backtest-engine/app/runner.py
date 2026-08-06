@@ -798,6 +798,13 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 requested_exit = snapshot.closes[symbol]
                 exit_reason = None
 
+                defensive_sl2_active = bool(position.get("sl2_order_id") and position.get("sl2"))
+                defensive_sl2_consumed = bool(
+                    position.get("defensive_sl2_consumed", False)
+                    or position.get("regime_change_sl2_consumed", False)
+                    or position.get("volatility_spike_sl2_consumed", False)
+                )
+
                 stop_hit = False
                 if position["side"] == "long":
                     stop_hit = snapshot.lows[symbol] <= position["stop"]
@@ -807,7 +814,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 # Phase 18J: regime-change SL2 protection.
                 # This runs before the normal stop/TP ladder. It only closes a
                 # secondary 50% SL2 leg if the SL2 price is actually touched.
-                if config.get("regime_change_exit_enabled", True) and not position.get("regime_change_sl2_consumed", False):
+                if config.get("regime_change_exit_enabled", True) and not defensive_sl2_active and not defensive_sl2_consumed:
                     regime_sl2_created_this_cycle = False
                     current_regime = None
                     try:
@@ -843,6 +850,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                         if sl2_order_id:
                             position["regime_change_sl2_active"] = True
                             position["regime_change_sl2_event"] = regime_change_event
+                            defensive_sl2_active = True
+                            position["defensive_sl2_trigger"] = "regime_change"
                             regime_change_sl2_created += 1
                             sl2_orders_created += 1
                             regime_sl2_created_this_cycle = True
@@ -938,12 +947,14 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                             sl2_orders_filled += 1
                             position["regime_change_sl2_active"] = False
                             position["regime_change_sl2_consumed"] = True
+                            position["defensive_sl2_consumed"] = True
+                            position["defensive_sl2_trigger"] = "regime_change"
                             position["sl2"] = None
                             _log(run_id, "REGIME_CHANGE_SL2_FILLED", f"{symbol} regime-change SL2 filled.", {"cycle_index": cycle_index, "symbol": symbol, "price": sl2_price, "size": sl2_size, "net_pnl": sl2_net, "remaining_size": position["qty"], "regime_change_sl2_consumed": True})
                             continue
 
                 # Phase 18K: volatility-spike SL2 protection.
-                if config.get("volatility_spike_exit_enabled", True) and not position.get("volatility_spike_sl2_consumed", False):
+                if config.get("volatility_spike_exit_enabled", True) and not defensive_sl2_active and not defensive_sl2_consumed:
                     volatility_sl2_created_this_cycle = False
                     tf_rows = ((getattr(snapshot, "timeframe_history", {}) or {}).get(symbol, {}) or {}).get(config.get("cycle_timeframe", "5m"), [])
                     current_atr = atr_from_rows(tf_rows, int(config.get("volatility_spike_atr_period", 14)))
@@ -970,6 +981,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                         if sl2_order_id:
                             position["volatility_spike_sl2_active"] = True
                             position["volatility_spike_sl2_event"] = volatility_spike_event
+                            defensive_sl2_active = True
+                            position["defensive_sl2_trigger"] = "volatility_spike"
                             volatility_spike_sl2_created += 1
                             sl2_orders_created += 1
                             volatility_sl2_created_this_cycle = True
@@ -1061,6 +1074,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                             sl2_orders_filled += 1
                             position["volatility_spike_sl2_active"] = False
                             position["volatility_spike_sl2_consumed"] = True
+                            position["defensive_sl2_consumed"] = True
+                            position["defensive_sl2_trigger"] = "volatility_spike"
                             position["sl2"] = None
                             _log(run_id, "VOLATILITY_SPIKE_SL2_FILLED", f"{symbol} volatility-spike SL2 filled.", {"cycle_index": cycle_index, "symbol": symbol, "price": sl2_price, "size": sl2_size, "net_pnl": sl2_net, "remaining_size": position["qty"], "volatility_spike_sl2_consumed": True})
                             continue
