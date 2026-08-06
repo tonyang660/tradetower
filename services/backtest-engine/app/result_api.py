@@ -130,3 +130,9 @@ def fetch_result_bundle(run_id: int) -> dict[str, Any] | None:
         "equity_curve": fetch_equity_curve(run_id, limit=1000, offset=0),
         "logs": fetch_logs(run_id, limit=200, offset=0),
     }
+
+
+
+def fetch_position_events(run_id: int, limit: int = 1000, offset: int = 0) -> dict[str, Any]:
+    from position_lifecycle_ledger import fetch_position_events as _fetch_position_events
+    return _fetch_position_events(run_id, limit=limit, offset=offset)

@@ -22,6 +22,7 @@ from secondary_stop_simulator import initialize_sl2_state, build_sl2_order_paylo
 from adaptive_stop_simulator import build_adaptive_stop_update, adaptive_stop_model_contract
 from regime_change_exit_simulator import evaluate_regime_change_exit, regime_change_model_contract
 from volatility_spike_exit_simulator import atr_from_rows, evaluate_volatility_spike_exit, volatility_spike_model_contract
+from position_lifecycle_ledger import ensure_position_lifecycle_table, lifecycle_ledger_contract, record_position_event
 
 from fee_model import FeeModel
 from guardian_risk import GuardianPolicy, evaluate_entry_guard
@@ -593,7 +594,9 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     _log(run_id, "SL2_MODEL_INITIALIZED", "Secondary stop model initialized.", sl2_model_contract(config))
     _log(run_id, "ADAPTIVE_STOP_MODEL_INITIALIZED", "Adaptive stop model initialized.", adaptive_stop_model_contract(config))
     _log(run_id, "REGIME_CHANGE_MODEL_INITIALIZED", "Regime-change exit model initialized.", regime_change_model_contract(config))
+    ensure_position_lifecycle_table()
     _log(run_id, "VOLATILITY_SPIKE_MODEL_INITIALIZED", "Volatility-spike exit model initialized.", volatility_spike_model_contract(config))
+    _log(run_id, "POSITION_LIFECYCLE_LEDGER_INITIALIZED", "Position lifecycle ledger initialized.", lifecycle_ledger_contract())
 
     feed = build_historical_feed(config)
     preflight = feed.preflight()
@@ -755,6 +758,18 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
 
                 initialize_sl2_state(position)
                 _open_position(run_id, position)
+                record_position_event(
+                    run_id=run_id,
+                    position=position,
+                    event_type="POSITION_OPENED",
+                    event_time=snapshot.timestamp,
+                    price=filled_entry,
+                    quantity=filled_entry_size,
+                    fee=entry_fee,
+                    remaining_size=position["qty"],
+                    reason="ENTRY_FILLED",
+                    details={"entry_order_evaluation": entry_eval, "fee_details": entry_fee_details, "level_reprice": level_reprice},
+                )
                 protective_order_ids = _record_protective_orders_for_position(
                     run_id,
                     position,
@@ -768,6 +783,15 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 )
                 position["protective_order_ids"] = protective_order_ids
                 protective_orders_created += len(protective_order_ids)
+                record_position_event(
+                    run_id=run_id,
+                    position=position,
+                    event_type="PROTECTIVE_ORDERS_CREATED",
+                    event_time=snapshot.timestamp,
+                    remaining_size=position["qty"],
+                    reason="PROTECTIVE_ORDERS_CREATED",
+                    details={"protective_order_ids": protective_order_ids},
+                )
                 open_positions[symbol] = position
                 entry_orders_filled += 1
 
@@ -877,6 +901,18 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                                     },
                                 )
 
+                            record_position_event(
+                                run_id=run_id,
+                                position=position,
+                                event_type="REGIME_CHANGE_SL2_CREATED",
+                                event_time=snapshot.timestamp,
+                                price=float(regime_change_event["sl2_price"]),
+                                quantity=sl2_requested_size,
+                                remaining_size=position["qty"],
+                                order_id=int(sl2_order_id),
+                                reason="REGIME_CHANGE_SL2",
+                                details={"regime_change_event": regime_change_event, "stop_cover_size": primary_stop_cover_size, "sl2_cover_size": sl2_requested_size},
+                            )
                             _log(run_id, "REGIME_CHANGE_SL2_CREATED", f"{symbol} regime change SL2 created.", {"cycle_index": cycle_index, "symbol": symbol, "regime_change_event": regime_change_event, "stop_cover_size": primary_stop_cover_size, "sl2_cover_size": sl2_requested_size})
 
                     active_sl2 = position.get("sl2") if position.get("regime_change_sl2_active") else None
@@ -943,6 +979,21 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                                     "fee_details": sl2_fee_details,
                                 },
                             )
+                            record_position_event(
+                                run_id=run_id,
+                                position=position,
+                                event_type="REGIME_CHANGE_SL2_FILLED",
+                                event_time=snapshot.timestamp,
+                                price=sl2_price,
+                                quantity=sl2_size,
+                                gross_pnl=sl2_gross,
+                                fee=sl2_fee,
+                                net_pnl=sl2_net,
+                                remaining_size=position["qty"],
+                                order_id=int(position["sl2_order_id"]) if position.get("sl2_order_id") else None,
+                                reason="REGIME_CHANGE_SL2",
+                                details={"regime_change_event": position.get("regime_change_sl2_event"), "fee_details": sl2_fee_details},
+                            )
                             regime_change_sl2_fills += 1
                             sl2_orders_filled += 1
                             position["regime_change_sl2_active"] = False
@@ -1004,6 +1055,18 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                                         "volatility_spike_event": volatility_spike_event,
                                     },
                                 )
+                            record_position_event(
+                                run_id=run_id,
+                                position=position,
+                                event_type="VOLATILITY_SPIKE_SL2_CREATED",
+                                event_time=snapshot.timestamp,
+                                price=float(volatility_spike_event["sl2_price"]),
+                                quantity=sl2_requested_size,
+                                remaining_size=position["qty"],
+                                order_id=int(sl2_order_id),
+                                reason="VOLATILITY_SPIKE_SL2",
+                                details={"volatility_spike_event": volatility_spike_event, "stop_cover_size": primary_stop_cover_size, "sl2_cover_size": sl2_requested_size},
+                            )
                             _log(run_id, "VOLATILITY_SPIKE_SL2_CREATED", f"{symbol} volatility spike SL2 created.", {"cycle_index": cycle_index, "symbol": symbol, "volatility_spike_event": volatility_spike_event, "stop_cover_size": primary_stop_cover_size, "sl2_cover_size": sl2_requested_size})
 
                     active_vol_sl2 = position.get("sl2") if position.get("volatility_spike_sl2_active") else None
@@ -1069,6 +1132,21 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                                     "volatility_spike_event": position.get("volatility_spike_sl2_event"),
                                     "fee_details": sl2_fee_details,
                                 },
+                            )
+                            record_position_event(
+                                run_id=run_id,
+                                position=position,
+                                event_type="VOLATILITY_SPIKE_SL2_FILLED",
+                                event_time=snapshot.timestamp,
+                                price=sl2_price,
+                                quantity=sl2_size,
+                                gross_pnl=sl2_gross,
+                                fee=sl2_fee,
+                                net_pnl=sl2_net,
+                                remaining_size=position["qty"],
+                                order_id=int(position["sl2_order_id"]) if position.get("sl2_order_id") else None,
+                                reason="VOLATILITY_SPIKE_SL2",
+                                details={"volatility_spike_event": position.get("volatility_spike_sl2_event"), "fee_details": sl2_fee_details},
                             )
                             volatility_spike_sl2_fills += 1
                             sl2_orders_filled += 1
@@ -1254,6 +1332,21 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                                 tp_net,
                                 {"partial_tp_event": partial_tp_event, "fee_details": tp_fee_details},
                             )
+                            record_position_event(
+                                run_id=run_id,
+                                position=position,
+                                event_type=f"{role.upper()}_FILLED",
+                                event_time=snapshot.timestamp,
+                                price=tp_price,
+                                quantity=tp_size,
+                                gross_pnl=tp_gross,
+                                fee=tp_fee,
+                                net_pnl=tp_net,
+                                remaining_size=position["qty"],
+                                order_id=int(order_id) if order_id else None,
+                                reason=role.upper(),
+                                details={"partial_tp_event": partial_tp_event, "fee_details": tp_fee_details},
+                            )
                             partial_tp_fills += 1
                             partial_tp_realized_gross += tp_gross
                             partial_tp_fees += tp_fee
@@ -1436,6 +1529,20 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                         )
 
                     _close_position(run_id, position, snapshot.timestamp, filled_exit, gross, exit_fee, trade_net, exit_reason)
+                    record_position_event(
+                        run_id=run_id,
+                        position=position,
+                        event_type="POSITION_CLOSED",
+                        event_time=snapshot.timestamp,
+                        price=filled_exit,
+                        quantity=filled_exit_size,
+                        gross_pnl=remaining_gross,
+                        fee=exit_fee,
+                        net_pnl=trade_net,
+                        remaining_size=0.0,
+                        reason=exit_reason,
+                        details={"exit_reason": exit_reason, "fill_model": exit_fill, "fee_details": exit_fee_details},
+                    )
                     _log(run_id, "POSITION_CLOSED", f"{symbol} closed via {exit_reason}.", {"cycle_index": cycle_index, "symbol": symbol, "net_pnl": trade_net, "fill_liquidity": exit_fill.get("liquidity"), "order_type": exit_order_type, "stop_action": exit_fill.get("action")})
                     del open_positions[symbol]
 
@@ -1609,6 +1716,20 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 )
                 _record_order(run_id, symbol, final_exit_side, "market_exit", requested_exit, filled_exit, final_exit_size, exit_fee, "END_OF_BACKTEST", last_snapshot.timestamp, {"position_id": position["position_id"], "cycle_index": last_snapshot.cycle_index, "order_lifecycle": final_lifecycle, "fill_model": final_exit_fill, "fee_details": final_exit_fee_details})
                 _close_position(run_id, position, last_snapshot.timestamp, filled_exit, gross, exit_fee, trade_net, "END_OF_BACKTEST")
+                record_position_event(
+                    run_id=run_id,
+                    position=position,
+                    event_type="END_OF_BACKTEST_CLOSED",
+                    event_time=last_snapshot.timestamp,
+                    price=filled_exit,
+                    quantity=final_exit_size,
+                    gross_pnl=final_remaining_gross,
+                    fee=exit_fee,
+                    net_pnl=trade_net,
+                    remaining_size=0.0,
+                    reason="END_OF_BACKTEST",
+                    details={"fill_model": final_exit_fill, "fee_details": final_exit_fee_details},
+                )
                 del open_positions[symbol]
 
         # Phase 18K-HF3:

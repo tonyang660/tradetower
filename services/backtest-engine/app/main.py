@@ -24,6 +24,7 @@ from result_api import (
     fetch_metrics,
     fetch_orders,
     fetch_positions,
+    fetch_position_events,
     fetch_result_bundle,
     fetch_run_summary,
     fetch_trades,
@@ -268,6 +269,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if parsed.path == "/backtests/run/positions":
             self._paged_result(query, fetch_positions, "positions", default_limit=200)
+            return
+
+        if parsed.path == "/backtests/run/position-events":
+            self._paged_result(query, fetch_position_events, "position_events", default_limit=1000)
             return
 
         if parsed.path == "/backtests/run/equity-curve":
