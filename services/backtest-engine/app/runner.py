@@ -791,7 +791,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 # Phase 18J: regime-change SL2 protection.
                 # This runs before the normal stop/TP ladder. It only closes a
                 # secondary 50% SL2 leg if the SL2 price is actually touched.
-                if config.get("regime_change_exit_enabled", True):
+                if config.get("regime_change_exit_enabled", True) and not position.get("regime_change_sl2_consumed", False):
+                    regime_sl2_created_this_cycle = False
                     current_regime = None
                     try:
                         regime_decision = strategy.evaluate_symbol(
@@ -828,10 +829,33 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                             position["regime_change_sl2_event"] = regime_change_event
                             regime_change_sl2_created += 1
                             sl2_orders_created += 1
-                            _log(run_id, "REGIME_CHANGE_SL2_CREATED", f"{symbol} regime change SL2 created.", {"cycle_index": cycle_index, "symbol": symbol, "regime_change_event": regime_change_event})
+                            regime_sl2_created_this_cycle = True
+
+                            # A newly-created SL2 covers 50% by default, so the
+                            # primary SL must be reduced immediately to avoid
+                            # double-covering the whole position.
+                            sl2_requested_size = float((position.get("sl2") or {}).get("requested_size") or 0.0)
+                            primary_stop_cover_size = max(0.0, float(position["qty"]) - sl2_requested_size)
+                            stop_id = (position.get("protective_order_ids") or {}).get("stop_loss")
+                            if stop_id:
+                                _update_open_order_quantity(
+                                    int(stop_id),
+                                    primary_stop_cover_size,
+                                    snapshot.timestamp,
+                                    {
+                                        "reason": "STOP_RESIZED_AFTER_REGIME_CHANGE_SL2_CREATED",
+                                        "remaining_position_size": position["qty"],
+                                        "stop_cover_size": primary_stop_cover_size,
+                                        "sl2_cover_size": sl2_requested_size,
+                                        "sl2_active": True,
+                                        "regime_change_event": regime_change_event,
+                                    },
+                                )
+
+                            _log(run_id, "REGIME_CHANGE_SL2_CREATED", f"{symbol} regime change SL2 created.", {"cycle_index": cycle_index, "symbol": symbol, "regime_change_event": regime_change_event, "stop_cover_size": primary_stop_cover_size, "sl2_cover_size": sl2_requested_size})
 
                     active_sl2 = position.get("sl2") if position.get("regime_change_sl2_active") else None
-                    if active_sl2 and sl2_touched(
+                    if active_sl2 and not regime_sl2_created_this_cycle and sl2_touched(
                         side=position["side"],
                         stop_price=float(active_sl2["requested_price"]),
                         candle_high=snapshot.highs[symbol],
@@ -897,7 +921,9 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                             regime_change_sl2_fills += 1
                             sl2_orders_filled += 1
                             position["regime_change_sl2_active"] = False
-                            _log(run_id, "REGIME_CHANGE_SL2_FILLED", f"{symbol} regime-change SL2 filled.", {"cycle_index": cycle_index, "symbol": symbol, "price": sl2_price, "size": sl2_size, "net_pnl": sl2_net, "remaining_size": position["qty"]})
+                            position["regime_change_sl2_consumed"] = True
+                            position["sl2"] = None
+                            _log(run_id, "REGIME_CHANGE_SL2_FILLED", f"{symbol} regime-change SL2 filled.", {"cycle_index": cycle_index, "symbol": symbol, "price": sl2_price, "size": sl2_size, "net_pnl": sl2_net, "remaining_size": position["qty"], "regime_change_sl2_consumed": True})
                             continue
 
                 stop_loss_event = None
