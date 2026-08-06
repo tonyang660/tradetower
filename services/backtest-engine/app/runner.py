@@ -1611,6 +1611,38 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 _close_position(run_id, position, last_snapshot.timestamp, filled_exit, gross, exit_fee, trade_net, "END_OF_BACKTEST")
                 del open_positions[symbol]
 
+        # Phase 18K-HF3:
+        # The normal equity curve is recorded inside the cycle loop. End-of-backtest
+        # forced settlements happen after that loop, so without this sync point the
+        # chart can end below/above the final finalized equity.
+        if last_snapshot is not None:
+            final_equity_before_finalize = float(cash)
+            peak_equity = max(peak_equity, final_equity_before_finalize)
+            final_drawdown_pct = ((peak_equity - final_equity_before_finalize) / peak_equity * 100.0) if peak_equity else 0.0
+            max_drawdown_pct = max(max_drawdown_pct, final_drawdown_pct)
+            _record_equity(
+                run_id,
+                last_snapshot.timestamp,
+                final_equity_before_finalize,
+                cash,
+                realized_pnl,
+                0.0,
+                final_drawdown_pct,
+            )
+            _log(
+                run_id,
+                "FINAL_EQUITY_SYNC",
+                "Final post-settlement equity point recorded.",
+                {
+                    "timestamp": last_snapshot.timestamp.isoformat(),
+                    "final_equity_before_finalize": final_equity_before_finalize,
+                    "cash": cash,
+                    "realized_pnl": realized_pnl,
+                    "unrealized_pnl": 0.0,
+                    "drawdown_pct": final_drawdown_pct,
+                },
+            )
+
         summary = _finalize_run(run_id, cash, config["starting_capital"], max_drawdown_pct)
         diagnostics = {
             "cycle_count": cycle_count,
