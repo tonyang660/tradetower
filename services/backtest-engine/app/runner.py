@@ -21,6 +21,7 @@ from stop_loss_simulator import evaluate_stop_loss_order, stop_loss_model_contra
 from secondary_stop_simulator import initialize_sl2_state, build_sl2_order_payload, mark_sl2_activated, sl2_touched, sl2_model_contract
 from adaptive_stop_simulator import build_adaptive_stop_update, adaptive_stop_model_contract
 from regime_change_exit_simulator import evaluate_regime_change_exit, regime_change_model_contract
+from volatility_spike_exit_simulator import atr_from_rows, evaluate_volatility_spike_exit, volatility_spike_model_contract
 
 from fee_model import FeeModel
 from guardian_risk import GuardianPolicy, evaluate_entry_guard
@@ -130,6 +131,12 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "regime_change_require_profit": bool(payload.get("regime_change_require_profit", True)),
         "regime_change_min_profit_r": float(payload.get("regime_change_min_profit_r", 0.4)),
         "regime_change_breakeven_buffer_pct": float(payload.get("regime_change_breakeven_buffer_pct", 0.0015)),
+        "volatility_spike_exit_enabled": bool(payload.get("volatility_spike_exit_enabled", True)),
+        "volatility_spike_min_profit_r": float(payload.get("volatility_spike_min_profit_r", 0.4)),
+        "volatility_spike_multiplier": float(payload.get("volatility_spike_multiplier", 1.6)),
+        "volatility_spike_breakeven_buffer_pct": float(payload.get("volatility_spike_breakeven_buffer_pct", 0.0015)),
+        "volatility_spike_sl2_close_pct": float(payload.get("volatility_spike_sl2_close_pct", 50.0)),
+        "volatility_spike_atr_period": int(payload.get("volatility_spike_atr_period", 14)),
         "adaptive_stop_after_tp1_enabled": bool(payload.get("adaptive_stop_after_tp1_enabled", True)),
         "adaptive_stop_after_tp2_enabled": bool(payload.get("adaptive_stop_after_tp2_enabled", True)),
         "adaptive_stop_breakeven_buffer_bps": float(payload.get("adaptive_stop_breakeven_buffer_bps", 2.0)),
@@ -464,6 +471,7 @@ def _record_secondary_stop_order(run_id: int, position: dict[str, Any], trigger_
             "sl2_model": sl2_model_contract(config),
             "adaptive_stop_model": adaptive_stop_model_contract(config),
             "regime_change_model": regime_change_model_contract(config),
+            "volatility_spike_model": volatility_spike_model_contract(config),
             "order_lifecycle": lifecycle,
             **(details or {}),
         },
@@ -585,6 +593,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     _log(run_id, "SL2_MODEL_INITIALIZED", "Secondary stop model initialized.", sl2_model_contract(config))
     _log(run_id, "ADAPTIVE_STOP_MODEL_INITIALIZED", "Adaptive stop model initialized.", adaptive_stop_model_contract(config))
     _log(run_id, "REGIME_CHANGE_MODEL_INITIALIZED", "Regime-change exit model initialized.", regime_change_model_contract(config))
+    _log(run_id, "VOLATILITY_SPIKE_MODEL_INITIALIZED", "Volatility-spike exit model initialized.", volatility_spike_model_contract(config))
 
     feed = build_historical_feed(config)
     preflight = feed.preflight()
@@ -629,6 +638,9 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     regime_change_checks = 0
     regime_change_sl2_created = 0
     regime_change_sl2_fills = 0
+    volatility_spike_checks = 0
+    volatility_spike_sl2_created = 0
+    volatility_spike_sl2_fills = 0
 
     _emit_progress(progress_callback, status="running", run_id=run_id, cycle_count=0, cycles_processed=0, candles_processed=0, trades_generated=0, progress_pct=0.0, message="Backtest initialized")
 
@@ -738,6 +750,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     "score": plan["score"], "confidence": plan["confidence"],
                     "reason_tags": plan["reason_tags"], "debug": plan["debug"],
                     "level_reprice": level_reprice,
+                    "entry_atr": atr_from_rows(((getattr(snapshot, "timeframe_history", {}) or {}).get(symbol, {}) or {}).get(config.get("cycle_timeframe", "5m"), []), int(config.get("volatility_spike_atr_period", 14))),
                 }
 
                 initialize_sl2_state(position)
@@ -927,6 +940,129 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                             position["regime_change_sl2_consumed"] = True
                             position["sl2"] = None
                             _log(run_id, "REGIME_CHANGE_SL2_FILLED", f"{symbol} regime-change SL2 filled.", {"cycle_index": cycle_index, "symbol": symbol, "price": sl2_price, "size": sl2_size, "net_pnl": sl2_net, "remaining_size": position["qty"], "regime_change_sl2_consumed": True})
+                            continue
+
+                # Phase 18K: volatility-spike SL2 protection.
+                if config.get("volatility_spike_exit_enabled", True) and not position.get("volatility_spike_sl2_consumed", False):
+                    volatility_sl2_created_this_cycle = False
+                    tf_rows = ((getattr(snapshot, "timeframe_history", {}) or {}).get(symbol, {}) or {}).get(config.get("cycle_timeframe", "5m"), [])
+                    current_atr = atr_from_rows(tf_rows, int(config.get("volatility_spike_atr_period", 14)))
+                    volatility_spike_event = evaluate_volatility_spike_exit(
+                        position=position,
+                        latest_price=snapshot.closes[symbol],
+                        current_atr=current_atr,
+                        timestamp=snapshot.timestamp,
+                        config=config,
+                    )
+                    volatility_spike_checks += 1
+
+                    if volatility_spike_event.get("action") == "activate_volatility_spike_sl2":
+                        sl2_order_id = _record_secondary_stop_order(
+                            run_id,
+                            position,
+                            "VOLATILITY_SPIKE_SL2",
+                            float(volatility_spike_event["sl2_price"]),
+                            float(volatility_spike_event["sl2_close_pct"]),
+                            snapshot.timestamp,
+                            config,
+                            {"volatility_spike_event": volatility_spike_event},
+                        )
+                        if sl2_order_id:
+                            position["volatility_spike_sl2_active"] = True
+                            position["volatility_spike_sl2_event"] = volatility_spike_event
+                            volatility_spike_sl2_created += 1
+                            sl2_orders_created += 1
+                            volatility_sl2_created_this_cycle = True
+
+                            sl2_requested_size = float((position.get("sl2") or {}).get("requested_size") or 0.0)
+                            primary_stop_cover_size = max(0.0, float(position["qty"]) - sl2_requested_size)
+                            stop_id = (position.get("protective_order_ids") or {}).get("stop_loss")
+                            if stop_id:
+                                _update_open_order_quantity(
+                                    int(stop_id),
+                                    primary_stop_cover_size,
+                                    snapshot.timestamp,
+                                    {
+                                        "reason": "STOP_RESIZED_AFTER_VOLATILITY_SPIKE_SL2_CREATED",
+                                        "remaining_position_size": position["qty"],
+                                        "stop_cover_size": primary_stop_cover_size,
+                                        "sl2_cover_size": sl2_requested_size,
+                                        "sl2_active": True,
+                                        "volatility_spike_event": volatility_spike_event,
+                                    },
+                                )
+                            _log(run_id, "VOLATILITY_SPIKE_SL2_CREATED", f"{symbol} volatility spike SL2 created.", {"cycle_index": cycle_index, "symbol": symbol, "volatility_spike_event": volatility_spike_event, "stop_cover_size": primary_stop_cover_size, "sl2_cover_size": sl2_requested_size})
+
+                    active_vol_sl2 = position.get("sl2") if position.get("volatility_spike_sl2_active") else None
+                    if active_vol_sl2 and not volatility_sl2_created_this_cycle and sl2_touched(
+                        side=position["side"],
+                        stop_price=float(active_vol_sl2["requested_price"]),
+                        candle_high=snapshot.highs[symbol],
+                        candle_low=snapshot.lows[symbol],
+                    ):
+                        sl2_price = float(active_vol_sl2["requested_price"])
+                        sl2_size = min(float(position["qty"]), float(active_vol_sl2["requested_size"]))
+                        if sl2_size > 0:
+                            sl2_gross = realized_gross_for_exit(position, sl2_price, sl2_size)
+                            sl2_fee_details = fee_model.fee_details(abs(sl2_price * sl2_size), "maker")
+                            sl2_fee = float(sl2_fee_details["fee"])
+                            sl2_net = sl2_gross - sl2_fee
+                            cash += sl2_net
+                            realized_pnl += sl2_net
+                            position["qty"] = max(0.0, float(position["qty"]) - sl2_size)
+                            position["fees"] += sl2_fee
+                            position["exit_fees"] = float(position.get("exit_fees", 0.0)) + sl2_fee
+                            position["realized_exit_gross"] = float(position.get("realized_exit_gross", 0.0)) + sl2_gross
+                            position.setdefault("partial_tp_filled", []).append("volatility_spike_sl2")
+
+                            if position.get("sl2_order_id"):
+                                _update_order_fill(
+                                    int(position["sl2_order_id"]),
+                                    sl2_price,
+                                    sl2_size,
+                                    sl2_fee,
+                                    snapshot.timestamp,
+                                    {
+                                        "volatility_spike_event": position.get("volatility_spike_sl2_event"),
+                                        "fee_details": sl2_fee_details,
+                                        "remaining_position_size": position["qty"],
+                                    },
+                                )
+
+                            stop_id = (position.get("protective_order_ids") or {}).get("stop_loss")
+                            if stop_id:
+                                _update_open_order_quantity(
+                                    int(stop_id),
+                                    position["qty"],
+                                    snapshot.timestamp,
+                                    {
+                                        "reason": "STOP_RESIZED_AFTER_VOLATILITY_SPIKE_SL2",
+                                        "remaining_position_size": position["qty"],
+                                        "volatility_spike_event": position.get("volatility_spike_sl2_event"),
+                                    },
+                                )
+
+                            _insert_partial_trade(
+                                run_id,
+                                position,
+                                "VOLATILITY_SPIKE_SL2",
+                                snapshot.timestamp,
+                                sl2_price,
+                                sl2_size,
+                                sl2_gross,
+                                sl2_fee,
+                                sl2_net,
+                                {
+                                    "volatility_spike_event": position.get("volatility_spike_sl2_event"),
+                                    "fee_details": sl2_fee_details,
+                                },
+                            )
+                            volatility_spike_sl2_fills += 1
+                            sl2_orders_filled += 1
+                            position["volatility_spike_sl2_active"] = False
+                            position["volatility_spike_sl2_consumed"] = True
+                            position["sl2"] = None
+                            _log(run_id, "VOLATILITY_SPIKE_SL2_FILLED", f"{symbol} volatility-spike SL2 filled.", {"cycle_index": cycle_index, "symbol": symbol, "price": sl2_price, "size": sl2_size, "net_pnl": sl2_net, "remaining_size": position["qty"], "volatility_spike_sl2_consumed": True})
                             continue
 
                 stop_loss_event = None
@@ -1492,6 +1628,9 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             "regime_change_checks": regime_change_checks,
             "regime_change_sl2_created": regime_change_sl2_created,
             "regime_change_sl2_fills": regime_change_sl2_fills,
+            "volatility_spike_checks": volatility_spike_checks,
+            "volatility_spike_sl2_created": volatility_spike_sl2_created,
+            "volatility_spike_sl2_fills": volatility_spike_sl2_fills,
             "timeout_exits_enabled": False,
         }
         _log(run_id, "BACKTEST_COMPLETED", "Backtest completed.", {**summary, **diagnostics})
