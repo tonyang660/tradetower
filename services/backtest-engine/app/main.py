@@ -228,7 +228,11 @@ class Handler(BaseHTTPRequestHandler):
             run_id = self._run_id_or_error(query)
             if run_id is None:
                 return
-            result = fetch_backtest_chart_data(run_id)
+            try:
+                result = fetch_backtest_chart_data(run_id)
+            except Exception as exc:
+                self._send_json({"ok": False, "error": str(exc), "run_id": run_id}, status=500)
+                return
             self._send_json(result, status=200 if result.get("ok") else 404)
             return
 

@@ -257,7 +257,8 @@ def _open_position(run_id: int, position: dict[str, Any]) -> None:
 def _close_position(run_id: int, position: dict[str, Any], exit_time, exit_price: float, gross_pnl: float, exit_fee: float, net_pnl: float, exit_reason: str) -> None:
     total_fees = position["fees"] + exit_fee
     original_qty = float(position.get("original_qty", position["qty"]))
-    initial_risk = abs(position["entry"] - position["stop"]) * original_qty
+    risk_stop = float(position.get("original_stop", position.get("initial_stop", position["stop"])))
+    initial_risk = abs(position["entry"] - risk_stop) * original_qty
     r_multiple = net_pnl / initial_risk if initial_risk else None
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(

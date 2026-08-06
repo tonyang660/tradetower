@@ -220,8 +220,14 @@ def _fee_pressure(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = {name: {"key": name, "trades": 0, "net_pnl": 0.0, "gross_pnl": 0.0, "fees": 0.0, "win_rate": 0.0, "wins": 0} for name, _, _ in buckets}
     for trade in trades:
         gross_abs = abs(_gross(trade))
-        ratio = _fees(trade) / gross_abs if gross_abs else float("inf")
-        key = next(name for name, low, high in buckets if ratio >= low and ratio < high)
+        # Phase 18J-HF4:
+        # REGIME_CHANGE_SL2 can be a breakeven-gross leg. Avoid StopIteration
+        # when gross_abs is zero; classify pure fee-drag legs as extreme.
+        if gross_abs <= 0:
+            key = "extreme"
+        else:
+            ratio = _fees(trade) / gross_abs
+            key = next((name for name, low, high in buckets if ratio >= low and ratio < high), "extreme")
         row = rows[key]
         net = _net(trade)
         row["trades"] += 1
