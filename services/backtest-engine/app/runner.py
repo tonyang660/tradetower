@@ -128,6 +128,8 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "regime_change_exit_enabled": bool(payload.get("regime_change_exit_enabled", True)),
         "regime_change_sl2_close_pct": float(payload.get("regime_change_sl2_close_pct", 50.0)),
         "regime_change_require_profit": bool(payload.get("regime_change_require_profit", True)),
+        "regime_change_min_profit_r": float(payload.get("regime_change_min_profit_r", 0.4)),
+        "regime_change_breakeven_buffer_pct": float(payload.get("regime_change_breakeven_buffer_pct", 0.0015)),
         "adaptive_stop_after_tp1_enabled": bool(payload.get("adaptive_stop_after_tp1_enabled", True)),
         "adaptive_stop_after_tp2_enabled": bool(payload.get("adaptive_stop_after_tp2_enabled", True)),
         "adaptive_stop_breakeven_buffer_bps": float(payload.get("adaptive_stop_breakeven_buffer_bps", 2.0)),
