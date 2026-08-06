@@ -228,8 +228,9 @@ class Handler(BaseHTTPRequestHandler):
             run_id = self._run_id_or_error(query)
             if run_id is None:
                 return
+            max_points = _query_int(query, "max_points", 2000)
             try:
-                result = fetch_backtest_chart_data(run_id)
+                result = fetch_backtest_chart_data(run_id, max_points=max_points)
             except Exception as exc:
                 self._send_json({"ok": False, "error": str(exc), "run_id": run_id}, status=500)
                 return

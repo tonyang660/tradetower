@@ -264,23 +264,104 @@ def _trade_distribution(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
-def fetch_backtest_chart_data(run_id: int) -> dict[str, Any]:
+
+def _downsample_equity_points(
+    equity_points: list[dict[str, Any]],
+    max_points: int | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Average-bucket downsample for chart rendering.
+
+    Keeps full raw data for run analytics, but limits chart payload size.
+    Preserves the first and last point, then averages equity/cash/PnL fields
+    inside evenly sized buckets.
+    """
+    total = len(equity_points)
+    limit = int(max_points or 2000)
+    limit = max(100, min(limit, 20000))
+
+    if total <= limit:
+        return equity_points, {
+            "enabled": False,
+            "method": "none",
+            "raw_points": total,
+            "returned_points": total,
+            "max_points": limit,
+        }
+
+    if limit <= 2:
+        return [equity_points[0], equity_points[-1]], {
+            "enabled": True,
+            "method": "average_bucket_preserve_edges",
+            "raw_points": total,
+            "returned_points": 2,
+            "max_points": limit,
+        }
+
+    bucket_count = limit - 2
+    middle = equity_points[1:-1]
+    bucket_size = len(middle) / float(bucket_count)
+
+    sampled = [equity_points[0]]
+    for bucket_index in range(bucket_count):
+        start = int(bucket_index * bucket_size)
+        end = int((bucket_index + 1) * bucket_size)
+        if bucket_index == bucket_count - 1:
+            end = len(middle)
+
+        bucket = middle[start:end]
+        if not bucket:
+            continue
+
+        midpoint = bucket[len(bucket) // 2]
+        row = dict(midpoint)
+
+        numeric_keys = [
+            "equity",
+            "cash",
+            "open_position_value",
+            "realized_pnl",
+            "unrealized_pnl",
+            "drawdown_pct",
+        ]
+        for key in numeric_keys:
+            values = [_to_float(item.get(key), None) for item in bucket if item.get(key) is not None]
+            values = [value for value in values if value is not None]
+            if values:
+                row[key] = sum(values) / len(values)
+
+        row["downsampled_bucket_size"] = len(bucket)
+        sampled.append(row)
+
+    sampled.append(equity_points[-1])
+
+    return sampled, {
+        "enabled": True,
+        "method": "average_bucket_preserve_edges",
+        "raw_points": total,
+        "returned_points": len(sampled),
+        "max_points": limit,
+    }
+
+
+def fetch_backtest_chart_data(run_id: int, max_points: int | None = None) -> dict[str, Any]:
     run = _fetch_run(run_id)
     if not run:
         return {"ok": False, "error": "run_not_found", "run_id": run_id}
 
     trades = _fetch_all("backtest_trades", run_id, "trade_id")
-    equity_points = _fetch_all("backtest_equity_curve", run_id, "timestamp")
+    raw_equity_points = _fetch_all("backtest_equity_curve", run_id, "timestamp")
+    equity_points, downsampling = _downsample_equity_points(raw_equity_points, max_points=max_points)
 
     curve = _equity_curve(equity_points)
 
     return {
         "ok": True,
         "run_id": run_id,
+        "downsampling": downsampling,
         "charts": {
             "equity_curve": curve,
             "drawdown_curve": [{"index": row["index"], "timestamp": row["timestamp"], "drawdown_pct": row["drawdown_pct"]} for row in curve],
-            "monthly_returns": _monthly_returns(equity_points),
+            "monthly_returns": _monthly_returns(raw_equity_points),
             "pnl_by_symbol": _group_trades(trades, ["symbol", "asset", "market"]),
             "pnl_by_regime": _group_trades(trades, ["regime", "market_regime", "regime_name", "strategy_route"]),
             "score_bucket_performance": _group_trades(trades, ["score_bucket", "candidate_tier", "signal_bucket"]),
@@ -290,7 +371,7 @@ def fetch_backtest_chart_data(run_id: int) -> dict[str, Any]:
         },
         "availability": {
             "equity_curve": bool(curve),
-            "monthly_returns": bool(_monthly_returns(equity_points)),
+            "monthly_returns": bool(_monthly_returns(raw_equity_points)),
             "pnl_by_symbol": bool(trades),
             "pnl_by_regime": bool(trades),
             "score_bucket_performance": bool(trades),
