@@ -1,4 +1,4 @@
-import { Cpu, Database, GitBranch, ShieldCheck, Tags } from "lucide-react";
+import { Cpu, Database, GitBranch, Tags } from "lucide-react";
 
 function asStringArray(value: unknown, fallback: string[] = []): string[] {
   if (!Array.isArray(value)) return fallback;
