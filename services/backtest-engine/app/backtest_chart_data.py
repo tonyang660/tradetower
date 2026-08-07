@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from db import get_conn
@@ -103,6 +103,78 @@ def _equity_value(point: dict[str, Any]) -> float:
 def _timestamp(point: dict[str, Any]) -> str:
     value = _first(point, ["timestamp", "created_at"], None)
     return str(value) if value is not None else ""
+
+
+def _next_timestamp(value: Any) -> str:
+    parsed = _parse_dt(value)
+    if parsed is not None:
+        return (parsed + timedelta(microseconds=1)).isoformat()
+    return f"{value or 'final'}+1us"
+
+
+def _reconcile_final_equity(
+    run: dict[str, Any],
+    raw_points: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Expose the persisted curve and run summary relationship honestly.
+
+    Older and current runs can finish with a run-level final equity that is not
+    the last stored curve value. The chart response keeps the raw value in
+    metadata and appends a display-only final point with a unique timestamp.
+    No database row or historical run is mutated.
+    """
+    points = [dict(point) for point in raw_points]
+    raw_values = [_equity_value(point) for point in raw_points]
+    raw_last = raw_values[-1] if raw_values else None
+    final_equity = _to_float(_first(run, ["final_equity"], None), None)
+    starting_equity = _to_float(
+        _first(run, ["starting_capital", "initial_capital", "starting_equity"], None),
+        None,
+    )
+    final_delta = (
+        final_equity - raw_last
+        if final_equity is not None and raw_last is not None
+        else None
+    )
+    appended = False
+
+    if final_equity is not None and (raw_last is None or abs(final_equity - raw_last) > 1e-9):
+        previous = dict(points[-1]) if points else {}
+        previous_timestamp = _first(previous, ["timestamp", "created_at"], None)
+        previous.update({
+            "timestamp": _next_timestamp(previous_timestamp),
+            "equity": final_equity,
+            "cash": final_equity,
+            "unrealized_pnl": 0.0,
+            "is_final_reconciliation": True,
+        })
+        if starting_equity is not None:
+            previous["realized_pnl"] = final_equity - starting_equity
+        points.append(previous)
+        appended = True
+
+    chart_values = [_equity_value(point) for point in points]
+    status = "reconciled" if appended else "matched"
+    if final_equity is None:
+        status = "final_equity_unavailable"
+    elif raw_last is None:
+        status = "curve_unavailable"
+
+    return points, {
+        "starting_equity": starting_equity,
+        "latest_equity_curve_value": raw_last,
+        "raw_last_equity_curve_value": raw_last,
+        "final_equity": final_equity,
+        "final_equity_delta": final_delta,
+        "raw_curve_min": min(raw_values) if raw_values else None,
+        "raw_curve_max": max(raw_values) if raw_values else None,
+        "equity_curve_min": min(chart_values) if chart_values else None,
+        "equity_curve_max": max(chart_values) if chart_values else None,
+        "raw_points": len(raw_points),
+        "display_points": len(points),
+        "final_point_appended": appended,
+        "reconciliation_status": status,
+    }
 
 
 def _group_trades(trades: list[dict[str, Any]], keys: list[str]) -> list[dict[str, Any]]:
@@ -350,8 +422,9 @@ def fetch_backtest_chart_data(run_id: int, max_points: int | None = None) -> dic
         return {"ok": False, "error": "run_not_found", "run_id": run_id}
 
     trades = _fetch_all("backtest_trades", run_id, "trade_id")
-    raw_equity_points = _fetch_all("backtest_equity_curve", run_id, "timestamp")
-    equity_points, downsampling = _downsample_equity_points(raw_equity_points, max_points=max_points)
+    raw_equity_points = _fetch_all("backtest_equity_curve", run_id, "timestamp, ctid")
+    display_equity_points, equity_metadata = _reconcile_final_equity(run, raw_equity_points)
+    equity_points, downsampling = _downsample_equity_points(display_equity_points, max_points=max_points)
 
     curve = _equity_curve(equity_points)
 
@@ -359,10 +432,11 @@ def fetch_backtest_chart_data(run_id: int, max_points: int | None = None) -> dic
         "ok": True,
         "run_id": run_id,
         "downsampling": downsampling,
+        "equity_metadata": equity_metadata,
         "charts": {
             "equity_curve": curve,
             "drawdown_curve": [{"index": row["index"], "timestamp": row["timestamp"], "drawdown_pct": row["drawdown_pct"]} for row in curve],
-            "monthly_returns": _monthly_returns(raw_equity_points),
+            "monthly_returns": _monthly_returns(display_equity_points),
             "pnl_by_symbol": _group_trades(trades, ["symbol", "asset", "market"]),
             "pnl_by_regime": _group_trades(trades, ["regime", "market_regime", "regime_name", "strategy_route"]),
             "score_bucket_performance": _group_trades(trades_with_score_buckets(trades), ["score_bucket"]),
@@ -372,7 +446,7 @@ def fetch_backtest_chart_data(run_id: int, max_points: int | None = None) -> dic
         },
         "availability": {
             "equity_curve": bool(curve),
-            "monthly_returns": bool(_monthly_returns(raw_equity_points)),
+            "monthly_returns": bool(_monthly_returns(display_equity_points)),
             "pnl_by_symbol": bool(trades),
             "pnl_by_regime": bool(trades),
             "score_bucket_performance": bool(trades),

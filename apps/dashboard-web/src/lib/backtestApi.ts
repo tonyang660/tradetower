@@ -100,6 +100,18 @@ export function fetchBacktestTrades(runId: number, limit = 250, offset = 0) {
   return getJson<BacktestPagedRowsResponse>(`/backtest/trades?run_id=${runId}&limit=${limit}&offset=${offset}`);
 }
 
+export function fetchBacktestExitLegs(runId: number, limit = 250, offset = 0) {
+  return getJson<BacktestPagedRowsResponse>(`/backtest/exit-legs?run_id=${runId}&limit=${limit}&offset=${offset}`);
+}
+
+export function fetchBacktestPositions(runId: number, limit = 250, offset = 0) {
+  return getJson<BacktestPagedRowsResponse>(`/backtest/positions?run_id=${runId}&limit=${limit}&offset=${offset}`);
+}
+
+export function fetchBacktestPositionEvents(runId: number, limit = 1000, offset = 0) {
+  return getJson<BacktestPagedRowsResponse>(`/backtest/position-events?run_id=${runId}&limit=${limit}&offset=${offset}`);
+}
+
 export function fetchBacktestLogs(runId: number, limit = 250, offset = 0) {
   return getJson<BacktestPagedRowsResponse>(`/backtest/logs?run_id=${runId}&limit=${limit}&offset=${offset}`);
 }

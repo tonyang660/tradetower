@@ -186,6 +186,14 @@ export type BacktestExecutionMetrics = {
   availability: Record<string, boolean>;
 };
 
+export type BacktestRiskAdjustedReturns = {
+  daily_return_samples: number;
+  annualization_days: number;
+  minimum_recommended_samples: number;
+  reliable: boolean;
+  note: string;
+};
+
 
 export type BacktestAnalyticsResponse = {
   ok: boolean;
@@ -194,6 +202,7 @@ export type BacktestAnalyticsResponse = {
   metrics?: BacktestAnalyticsMetric[];
   summary?: any;
   execution?: BacktestExecutionMetrics;
+  risk_adjusted_returns?: BacktestRiskAdjustedReturns;
   breakdowns?: {
     symbols?: BacktestAnalyticsBreakdownRow[];
     regimes?: BacktestAnalyticsBreakdownRow[];
@@ -208,6 +217,28 @@ export type BacktestAnalyticsResponse = {
 export type BacktestChartDataResponse = {
   ok: boolean;
   run_id: number;
+  downsampling?: {
+    enabled: boolean;
+    method: string;
+    raw_points: number;
+    returned_points: number;
+    max_points: number;
+  };
+  equity_metadata?: {
+    starting_equity: number | null;
+    latest_equity_curve_value: number | null;
+    raw_last_equity_curve_value: number | null;
+    final_equity: number | null;
+    final_equity_delta: number | null;
+    raw_curve_min: number | null;
+    raw_curve_max: number | null;
+    equity_curve_min: number | null;
+    equity_curve_max: number | null;
+    raw_points: number;
+    display_points: number;
+    final_point_appended: boolean;
+    reconciliation_status: string;
+  };
   charts?: {
     equity_curve?: any[];
     drawdown_curve?: any[];
@@ -227,7 +258,10 @@ export type BacktestChartDataResponse = {
 export type BacktestPagedRowsResponse = {
   ok: boolean;
   run_id?: number;
+  exit_legs?: any[];
   trades?: any[];
+  positions?: any[];
+  position_events?: any[];
   logs?: any[];
   rows?: any[];
   total?: number;
@@ -243,6 +277,9 @@ export type BacktestResultBundleResponse = {
   run_id?: number;
   run?: any;
   metrics?: any;
+  positions?: any;
+  exit_legs?: any;
+  position_events?: any;
   trades?: any;
   equity_curve?: any;
   logs?: any;

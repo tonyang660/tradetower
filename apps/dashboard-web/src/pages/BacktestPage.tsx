@@ -576,7 +576,10 @@ export default function BacktestPage() {
 
                 <div className="grid gap-3 md:grid-cols-2">
                   <MetricTile label="Cycles" value={String(activeJob?.cycles_processed ?? result?.diagnostics?.cycle_count ?? "—")} />
-                  <MetricTile label="Trades" value={String(activeJob?.trades_generated ?? result?.summary?.total_trades ?? "—")} />
+                  <MetricTile
+                    label={running ? "Approved entries" : "Exit legs"}
+                    value={String(running ? (activeJob?.trades_generated ?? "—") : (result?.summary?.total_trades ?? "—"))}
+                  />
                   <MetricTile label="Candles" value={String(activeJob?.candles_processed ?? "—")} />
                   <MetricTile label="Simulated date" value={textValue(activeJob?.current_simulated_date ?? result?.preflight?.end_time ?? result?.diagnostics?.preflight?.end_time)} />
                 </div>
@@ -615,7 +618,7 @@ export default function BacktestPage() {
                 <MetricTile label="Gross PnL" value={money(summary.gross_pnl)} tone={(summary.gross_pnl ?? 0) >= 0 ? "good" : "bad"} />
                 <MetricTile label="Net PnL" value={money(summary.net_pnl)} tone={(summary.net_pnl ?? 0) >= 0 ? "good" : "bad"} />
                 <MetricTile label="Max DD" value={pct(summary.max_drawdown_pct)} tone="bad" />
-                <MetricTile label="Trades" value={String(summary.total_trades ?? "—")} />
+                <MetricTile label="Exit legs" value={String(summary.total_trades ?? "—")} />
                 <MetricTile label="Win rate" value={summary.win_rate === null || summary.win_rate === undefined ? "—" : pct(summary.win_rate * 100)} />
                 <MetricTile label="Profit factor" value={numberFmt(summary.profit_factor)} />
               </div>
@@ -650,7 +653,7 @@ export default function BacktestPage() {
                     <th className="px-4 py-3">Status</th>
                     <th className="px-4 py-3">Strategy</th>
                     <th className="px-4 py-3">Return</th>
-                    <th className="px-4 py-3">Trades</th>
+                    <th className="px-4 py-3">Exit legs</th>
                     <th className="px-4 py-3">Open</th>
                   </tr>
                 </thead>

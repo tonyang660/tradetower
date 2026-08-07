@@ -50,7 +50,8 @@ function MetricCard({ metric }: { metric: any }) {
     <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
       <div className="text-xs uppercase tracking-[0.18em] text-white/35">{metric.name}</div>
       <div className={`mt-2 truncate text-xl font-semibold ${tone(metric.value)}`}>{formatMetric(metric)}</div>
-      {!metric.available ? <div className="mt-1 text-xs text-white/30">Needs more stored data or Phase 18 lifecycle fields.</div> : null}
+      {metric.description ? <div className="mt-1 text-xs leading-4 text-white/35">{metric.description}</div> : null}
+      {!metric.available && !metric.description ? <div className="mt-1 text-xs text-white/30">Needs more stored data or Phase 18 lifecycle fields.</div> : null}
     </div>
   );
 }
@@ -63,7 +64,7 @@ function BreakdownTable({ title, rows }: { title: string; rows: any[] }) {
         <thead className="bg-black/20 text-left text-xs uppercase tracking-[0.16em] text-white/35">
           <tr>
             <th className="px-4 py-3">Group</th>
-            <th className="px-4 py-3">Trades</th>
+            <th className="px-4 py-3">Exit legs</th>
             <th className="px-4 py-3">Net PnL</th>
             <th className="px-4 py-3">Gross PnL</th>
             <th className="px-4 py-3">Fees</th>
@@ -201,7 +202,7 @@ export default function BacktestExpandedMetricsPanel({ runId }: { runId: number 
             <Gauge size={18} className="text-emerald-200" />
             Expanded Metrics
           </div>
-          <div className="mt-1 text-sm text-white/45">Phase 17F aggregates run-level, trade-level, symbol, regime, and fee-pressure analytics.</div>
+          <div className="mt-1 text-sm text-white/45">Run-level, exit-leg, position, symbol, regime, and fee-pressure analytics.</div>
         </div>
         <button
           type="button"
@@ -244,8 +245,14 @@ export default function BacktestExpandedMetricsPanel({ runId }: { runId: number 
           <div className="grid gap-2 text-sm text-amber-100/70 md:grid-cols-2">
             <div>Average R: {data?.availability?.average_r ? "available" : "not stored yet"}</div>
             <div>Hold time: {data?.availability?.hold_time ? "available" : "approximate or missing until Phase 18"}</div>
-            <div>Sharpe / Sortino: {data?.availability?.sharpe_sortino ? "available" : "needs enough equity history"}</div>
-            <div>Regime / score buckets: depends on trade debug fields being persisted.</div>
+            <div>
+              Sharpe / Sortino: {!data?.availability?.sharpe_sortino
+                ? "needs at least 2 daily returns"
+                : data?.risk_adjusted_returns?.reliable
+                  ? `reliable sample (${data.risk_adjusted_returns.daily_return_samples} daily returns)`
+                  : `low confidence (${data?.risk_adjusted_returns?.daily_return_samples ?? 0} daily returns)`}
+            </div>
+            <div>Regime: persisted per exit leg. Score buckets: derived from persisted strategy score.</div>
           </div>
         </div>
       </div>

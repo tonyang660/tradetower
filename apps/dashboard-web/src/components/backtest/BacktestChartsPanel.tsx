@@ -10,6 +10,12 @@ function money(value: unknown) {
   return `$${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function signedMoney(value: unknown) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "—";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${money(value)}`;
+}
+
 function pct(value: unknown) {
   if (typeof value !== "number" || Number.isNaN(value)) return "—";
   return `${value.toFixed(2)}%`;
@@ -112,6 +118,7 @@ export default function BacktestChartsPanel({ runId }: { runId: number | null | 
   }, [runId]);
 
   const charts = data?.charts;
+  const equityMetadata = data?.equity_metadata;
 
   const equityRows = charts?.equity_curve ?? [];
   const drawdownRows = charts?.drawdown_curve ?? [];
@@ -142,7 +149,7 @@ export default function BacktestChartsPanel({ runId }: { runId: number | null | 
             <BarChart3 size={18} className="text-cyan-200" />
             Charts
           </div>
-          <div className="mt-1 text-sm text-white/45">Equity, drawdown, returns, symbol/regime performance, and trade distribution.</div>
+          <div className="mt-1 text-sm text-white/45">Equity, drawdown, returns, symbol/regime performance, and exit-leg distribution.</div>
         </div>
         <button
           type="button"
@@ -158,8 +165,30 @@ export default function BacktestChartsPanel({ runId }: { runId: number | null | 
       {error ? <div className="mb-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 p-4 text-sm text-rose-100">{error}</div> : null}
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <ChartCard title="Equity curve" subtitle={`${equityRows.length} points`} icon={<Activity size={15} className="text-cyan-200" />}>
+        <ChartCard
+          title="Equity curve"
+          subtitle={`${equityRows.length} display points${equityMetadata?.final_point_appended ? " · final summary reconciled" : ""}`}
+          icon={<Activity size={15} className="text-cyan-200" />}
+        >
           <Sparkline rows={equityRows} valueKey="equity" />
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            {[
+              ["Starting", money(equityMetadata?.starting_equity)],
+              ["Raw curve last", money(equityMetadata?.raw_last_equity_curve_value)],
+              ["Final equity", money(equityMetadata?.final_equity)],
+              ["Reconciliation", signedMoney(equityMetadata?.final_equity_delta)],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-xl border border-white/10 bg-black/18 p-3">
+                <div className="text-[10px] uppercase tracking-[0.14em] text-white/35">{label}</div>
+                <div className="mt-1 text-sm font-semibold text-white">{value}</div>
+              </div>
+            ))}
+          </div>
+          {equityMetadata?.final_point_appended ? (
+            <div className="mt-3 rounded-xl border border-amber-300/15 bg-amber-500/8 px-3 py-2 text-xs text-amber-100/70">
+              The stored curve ended {signedMoney(equityMetadata.final_equity_delta)} from the run summary. A display-only final point makes the chart end at final equity; stored history was not changed.
+            </div>
+          ) : null}
         </ChartCard>
 
         <ChartCard title="Drawdown curve" subtitle="Percent from running peak" icon={<TrendingDown size={15} className="text-rose-200" />}>
@@ -178,11 +207,11 @@ export default function BacktestChartsPanel({ runId }: { runId: number | null | 
           <BarChart rows={charts?.pnl_by_regime ?? []} valueKey="net_pnl" />
         </ChartCard>
 
-        <ChartCard title="Score bucket performance" subtitle="Depends on persisted candidate/score bucket fields" icon={<BarChart3 size={15} className="text-cyan-200" />}>
+        <ChartCard title="Score bucket performance" subtitle="Exit-leg net PnL by persisted strategy score" icon={<BarChart3 size={15} className="text-cyan-200" />}>
           <BarChart rows={charts?.score_bucket_performance ?? []} valueKey="net_pnl" />
         </ChartCard>
 
-        <ChartCard title="Holding time performance" subtitle="Net PnL by duration bucket" icon={<BarChart3 size={15} className="text-violet-200" />}>
+        <ChartCard title="Holding time performance" subtitle="Exit-leg net PnL by duration bucket" icon={<BarChart3 size={15} className="text-violet-200" />}>
           <BarChart rows={charts?.holding_time_performance ?? []} valueKey="net_pnl" />
         </ChartCard>
 
@@ -190,8 +219,8 @@ export default function BacktestChartsPanel({ runId }: { runId: number | null | 
           <BarChart rows={charts?.fee_pressure ?? []} valueKey="net_pnl" />
         </ChartCard>
 
-        <ChartCard title="Trade distribution" subtitle="Counts and PnL by outcome bucket" icon={<BarChart3 size={15} className="text-white/70" />}>
-          <BarChart rows={charts?.trade_distribution ?? []} valueKey="trades" valueFormatter={(value) => `${value} trades`} />
+        <ChartCard title="Exit-leg distribution" subtitle="Counts and PnL by exit-leg outcome bucket" icon={<BarChart3 size={15} className="text-white/70" />}>
+          <BarChart rows={charts?.trade_distribution ?? []} valueKey="trades" valueFormatter={(value) => `${value} legs`} />
         </ChartCard>
       </div>
     </section>

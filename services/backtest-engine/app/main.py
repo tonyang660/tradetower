@@ -20,6 +20,7 @@ from datasets.registry import (
 )
 from result_api import (
     fetch_equity_curve,
+    fetch_exit_legs,
     fetch_logs,
     fetch_metrics,
     fetch_orders,
@@ -171,9 +172,11 @@ class Handler(BaseHTTPRequestHandler):
                 "role": "event_driven_backtest_engine_with_result_api",
                 "result_endpoints": [
                     "/backtests/run/summary",
+                    "/backtests/run/exit-legs",
                     "/backtests/run/trades",
                     "/backtests/run/orders",
                     "/backtests/run/positions",
+                    "/backtests/run/position-events",
                     "/backtests/run/equity-curve",
                     "/backtests/run/metrics",
                     "/backtests/run/logs",
@@ -261,6 +264,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if parsed.path == "/backtests/run/trades":
             self._paged_result(query, fetch_trades, "trades", default_limit=200)
+            return
+
+        if parsed.path == "/backtests/run/exit-legs":
+            self._paged_result(query, fetch_exit_legs, "exit_legs", default_limit=200)
             return
 
         if parsed.path == "/backtests/run/orders":

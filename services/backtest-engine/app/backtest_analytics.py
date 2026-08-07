@@ -36,8 +36,21 @@ def _parse_dt(value: Any) -> datetime | None:
         return None
 
 
-def _metric(name: str, value: Any, *, available: bool = True, unit: str | None = None) -> dict[str, Any]:
-    return {"name": name, "value": value, "available": bool(available), "unit": unit}
+def _metric(
+    name: str,
+    value: Any,
+    *,
+    available: bool = True,
+    unit: str | None = None,
+    description: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "value": value,
+        "available": bool(available),
+        "unit": unit,
+        "description": description,
+    }
 
 
 def _fetch_run(run_id: int) -> dict[str, Any] | None:
@@ -190,7 +203,17 @@ def fetch_backtest_analytics(run_id: int) -> dict[str, Any]:
     average_hold_seconds = sum(hold_values) / len(hold_values) if hold_values else None
     exposure_time_seconds = sum(hold_values) if hold_values else None
     fees_gross_ratio = total_fees / abs(gross_pnl) if gross_pnl else None
+    daily_returns = _daily_returns(equity)
     sharpe, sortino = _sharpe_sortino(equity)
+    daily_return_samples = len(daily_returns)
+    minimum_recommended_samples = 30
+    risk_metrics_reliable = daily_return_samples >= minimum_recommended_samples
+    risk_metric_description = (
+        f"Annualized from {daily_return_samples} daily returns; "
+        f"low confidence until at least {minimum_recommended_samples}."
+        if not risk_metrics_reliable
+        else f"Annualized from {daily_return_samples} daily returns."
+    )
     execution = build_execution_metrics(
         trades=trades,
         orders=orders,
@@ -213,8 +236,8 @@ def fetch_backtest_analytics(run_id: int) -> dict[str, Any]:
         _metric("Net PnL", net_pnl, unit="currency"),
         _metric("Total fees", total_fees, unit="currency"),
         _metric("Max drawdown", _to_float(_first(run, ["max_drawdown_pct"], None), None), unit="percent", available=_first(run, ["max_drawdown_pct"], None) is not None),
-        _metric("Sharpe ratio", sharpe, available=sharpe is not None),
-        _metric("Sortino ratio", sortino, available=sortino is not None),
+        _metric("Sharpe ratio", sharpe, available=sharpe is not None, description=risk_metric_description),
+        _metric("Sortino ratio", sortino, available=sortino is not None, description=risk_metric_description),
         _metric("Profit factor", profit_factor, available=profit_factor is not None),
         _metric("Win rate", win_rate, unit="ratio", available=win_rate is not None),
         _metric("Expectancy", expectancy, unit="currency_per_trade", available=expectancy is not None),
@@ -254,6 +277,13 @@ def fetch_backtest_analytics(run_id: int) -> dict[str, Any]:
             "worst_regime": worst_regime,
         },
         "execution": execution,
+        "risk_adjusted_returns": {
+            "daily_return_samples": daily_return_samples,
+            "annualization_days": 365,
+            "minimum_recommended_samples": minimum_recommended_samples,
+            "reliable": risk_metrics_reliable,
+            "note": risk_metric_description,
+        },
         "breakdowns": {
             "symbols": symbols,
             "regimes": regimes,
@@ -263,7 +293,8 @@ def fetch_backtest_analytics(run_id: int) -> dict[str, Any]:
         "availability": {
             "average_r": bool(r_values),
             "hold_time": bool(hold_values),
-            "sharpe_sortino": len(_daily_returns(equity)) >= 2,
+            "sharpe_sortino": daily_return_samples >= 2,
+            "sharpe_sortino_reliable": risk_metrics_reliable,
             "regime_breakdown": bool(regimes),
             "score_bucket_breakdown": bool(scores),
             "execution_metrics": True,

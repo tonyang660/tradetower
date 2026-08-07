@@ -94,8 +94,13 @@ def fetch_rows(
     }
 
 
-def fetch_trades(run_id: int, limit: int = 200, offset: int = 0) -> dict[str, Any]:
+def fetch_exit_legs(run_id: int, limit: int = 200, offset: int = 0) -> dict[str, Any]:
     return fetch_rows(run_id=run_id, table="backtest_trades", order_by="trade_id", limit=limit, offset=offset)
+
+
+def fetch_trades(run_id: int, limit: int = 200, offset: int = 0) -> dict[str, Any]:
+    """Compatibility alias: backtest_trades rows represent position exit legs."""
+    return fetch_exit_legs(run_id, limit=limit, offset=offset)
 
 
 def fetch_orders(run_id: int, limit: int = 200, offset: int = 0) -> dict[str, Any]:
@@ -123,10 +128,17 @@ def fetch_result_bundle(run_id: int) -> dict[str, Any] | None:
     if not summary:
         return None
 
+    exit_legs = fetch_exit_legs(run_id, limit=200, offset=0)
+    positions = fetch_positions(run_id, limit=200, offset=0)
+    position_events = fetch_position_events(run_id, limit=1000, offset=0)
+
     return {
         "run": summary,
         "metrics": fetch_metrics(run_id, limit=500, offset=0),
-        "trades": fetch_trades(run_id, limit=200, offset=0),
+        "positions": positions,
+        "exit_legs": exit_legs,
+        "position_events": position_events,
+        "trades": exit_legs,
         "equity_curve": fetch_equity_curve(run_id, limit=1000, offset=0),
         "logs": fetch_logs(run_id, limit=200, offset=0),
     }
