@@ -87,10 +87,11 @@ def true_range_rows(rows: list[Any]) -> list[float]:
 
 
 def atr_from_rows(rows: list[Any], period: int = DEFAULT_ATR_PERIOD) -> float | None:
-    trs = true_range_rows(rows)
+    bounded_period = max(1, int(period))
+    trs = true_range_rows(rows[-(bounded_period + 1):])
     if not trs:
         return None
-    sample = trs[-max(1, int(period)):]
+    sample = trs[-bounded_period:]
     return sum(sample) / len(sample)
 
 

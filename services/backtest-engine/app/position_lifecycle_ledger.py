@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any
 
 from db import get_conn
 
 PHASE18_POSITION_LIFECYCLE_LEDGER_VERSION = "phase18m_position_lifecycle_ledger_v1"
+_POSITION_LIFECYCLE_TABLE_READY = False
+_POSITION_LIFECYCLE_TABLE_LOCK = threading.Lock()
 
 
 def _json(value: Any) -> str:
@@ -33,41 +36,50 @@ def _position_lifecycle_table_exists(cur) -> bool:
 
 
 def ensure_position_lifecycle_table() -> None:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            '''
-            CREATE TABLE IF NOT EXISTS backtest_position_events (
-                event_id BIGSERIAL PRIMARY KEY,
-                run_id BIGINT NOT NULL,
-                position_id BIGINT,
-                symbol TEXT NOT NULL,
-                side TEXT,
-                event_type TEXT NOT NULL,
-                event_time TIMESTAMPTZ NOT NULL,
-                price NUMERIC,
-                quantity NUMERIC,
-                gross_pnl NUMERIC,
-                fee NUMERIC,
-                net_pnl NUMERIC,
-                remaining_size NUMERIC,
-                order_id BIGINT,
-                related_order_id BIGINT,
-                reason TEXT,
-                sequence_index BIGINT,
-                details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    global _POSITION_LIFECYCLE_TABLE_READY
+    if _POSITION_LIFECYCLE_TABLE_READY:
+        return
+
+    with _POSITION_LIFECYCLE_TABLE_LOCK:
+        if _POSITION_LIFECYCLE_TABLE_READY:
+            return
+
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                '''
+                CREATE TABLE IF NOT EXISTS backtest_position_events (
+                    event_id BIGSERIAL PRIMARY KEY,
+                    run_id BIGINT NOT NULL,
+                    position_id BIGINT,
+                    symbol TEXT NOT NULL,
+                    side TEXT,
+                    event_type TEXT NOT NULL,
+                    event_time TIMESTAMPTZ NOT NULL,
+                    price NUMERIC,
+                    quantity NUMERIC,
+                    gross_pnl NUMERIC,
+                    fee NUMERIC,
+                    net_pnl NUMERIC,
+                    remaining_size NUMERIC,
+                    order_id BIGINT,
+                    related_order_id BIGINT,
+                    reason TEXT,
+                    sequence_index BIGINT,
+                    details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                '''
             )
-            '''
-        )
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_backtest_position_events_run_position "
-            "ON backtest_position_events(run_id, position_id, event_time, event_id)"
-        )
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_backtest_position_events_run_type "
-            "ON backtest_position_events(run_id, event_type)"
-        )
-        conn.commit()
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_backtest_position_events_run_position "
+                "ON backtest_position_events(run_id, position_id, event_time, event_id)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_backtest_position_events_run_type "
+                "ON backtest_position_events(run_id, event_type)"
+            )
+            conn.commit()
+        _POSITION_LIFECYCLE_TABLE_READY = True
 
 
 def lifecycle_ledger_contract() -> dict[str, Any]:

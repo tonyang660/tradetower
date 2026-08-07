@@ -2,14 +2,24 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-FEATURE_FACTORY_VERSION = 'phase16f_backtest_feature_factory_v2'
+FEATURE_FACTORY_VERSION = 'backtest_feature_factory_v2_bounded_history_v1'
 MARKET_SNAPSHOT_SCHEMA_VERSION = 'market_snapshot_v2'
 ROLES = ('5m', '15m', '1h', '4h')
+FEATURE_LOOKBACK_ROWS = 250
 
 
 def _asdict(c):
     if isinstance(c, dict):
         return c
+    if all(hasattr(c, key) for key in ('open', 'high', 'low', 'close')):
+        return {
+            'timestamp': getattr(c, 'timestamp', None),
+            'open': getattr(c, 'open'),
+            'high': getattr(c, 'high'),
+            'low': getattr(c, 'low'),
+            'close': getattr(c, 'close'),
+            'volume': getattr(c, 'volume', 0.0),
+        }
     if hasattr(c, 'to_dict'):
         return c.to_dict()
     return dict(getattr(c, '__dict__', {}))
@@ -62,42 +72,21 @@ def _rsi(vals, p=14):
     return 100.0 if al == 0 else 100 - (100 / (1 + ag / al))
 
 
-def _atr(rows, p=14):
+def _true_ranges(rows):
     if len(rows) < 2:
-        return 0.0
-    trs = []
+        return []
+    values = []
     for i in range(1, len(rows)):
         h = _col(rows[i], 'high', 'h')
         l = _col(rows[i], 'low', 'l')
         pc = _col(rows[i - 1], 'close', 'c')
-        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
-    d = trs[-p:]
-    return sum(d) / len(d) if d else 0.0
-
-
-def _trend(closes):
-    if len(closes) < 50:
-        return 'neutral'
-    e21 = _ema(closes, 21)
-    e50 = _ema(closes, 50)
-    c = closes[-1]
-    if c > e21 > e50:
-        return 'bullish'
-    if c < e21 < e50:
-        return 'bearish'
-    return 'neutral'
-
-
-def _macd(closes):
-    if len(closes) < 35:
-        return (0, 0, 0)
-    m = _ema(closes, 12) - _ema(closes, 26)
-    sig = m * 0.8
-    return m, sig, m - sig
+        values.append(max(h - l, abs(h - pc), abs(l - pc)))
+    return values
 
 
 def _block(rows, tf):
-    rows = [_asdict(r) for r in rows]
+    source_row_count = len(rows)
+    rows = [_asdict(r) for r in rows[-FEATURE_LOOKBACK_ROWS:]]
     if not rows:
         return {
             'indicators': {},
@@ -116,13 +105,34 @@ def _block(rows, tf):
     lows = [_col(r, 'low', 'l') for r in rows]
 
     c = closes[-1]
-    atr = _atr(rows)
-    atr_vals = [_atr(rows[:i]) for i in range(max(15, len(rows) - 20), len(rows) + 1)]
+    true_ranges = _true_ranges(rows)
+    atr_sample = true_ranges[-14:]
+    atr = sum(atr_sample) / len(atr_sample) if atr_sample else 0.0
+    atr_vals = []
+    for row_count in range(max(15, len(rows) - 20), len(rows) + 1):
+        tr_count = max(0, row_count - 1)
+        sample = true_ranges[max(0, tr_count - 14):tr_count]
+        if sample:
+            atr_vals.append(sum(sample) / len(sample))
     atr_sma = sum(atr_vals) / len(atr_vals) if atr_vals else atr
     atr_ratio = atr / atr_sma if atr_sma else 1.0
 
-    macd, signal, hist = _macd(closes)
-    tr = _trend(closes)
+    ema_12 = _ema(closes, 12)
+    ema_21 = _ema(closes, 21)
+    ema_26 = _ema(closes, 26)
+    ema_50 = _ema(closes, 50)
+    ema_200 = _ema(closes, 200)
+    macd = ema_12 - ema_26 if len(closes) >= 35 else 0.0
+    signal = macd * 0.8
+    hist = macd - signal
+    if len(closes) < 50:
+        tr = 'neutral'
+    elif c > ema_21 > ema_50:
+        tr = 'bullish'
+    elif c < ema_21 < ema_50:
+        tr = 'bearish'
+    else:
+        tr = 'neutral'
 
     regime = (
         'Uptrend' if tr == 'bullish' and atr_ratio <= 2
@@ -142,10 +152,10 @@ def _block(rows, tf):
     return {
         'indicators': {
             'close': c,
-            'ema_fast': _ema(closes, 21),
-            'ema_21': _ema(closes, 21),
-            'ema_50': _ema(closes, 50),
-            'ema_200': _ema(closes, 200),
+            'ema_fast': ema_21,
+            'ema_21': ema_21,
+            'ema_50': ema_50,
+            'ema_200': ema_200,
             'rsi_14': _rsi(closes),
             'atr_14': atr,
             'atr': atr,
@@ -201,6 +211,8 @@ def _block(rows, tf):
         'data_quality': {
             'healthy': True,
             'rows': len(rows),
+            'source_rows': source_row_count,
+            'lookback_limit': FEATURE_LOOKBACK_ROWS,
             'last_timestamp': _ts(ts).isoformat(),
         },
         'history': {'close': closes[-250:]},

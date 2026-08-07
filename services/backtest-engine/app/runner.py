@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -534,8 +535,8 @@ def _record_secondary_stop_order(run_id: int, position: dict[str, Any], trigger_
     mark_sl2_activated(position, order_id=order_id, order_payload=order, timestamp=timestamp)
     return order_id
 
-def _record_equity(run_id: int, timestamp, equity: float, cash: float, realized_pnl: float, unrealized_pnl: float, drawdown_pct: float) -> None:
-    with get_conn() as conn, conn.cursor() as cur:
+def _record_equity(run_id: int, timestamp, equity: float, cash: float, realized_pnl: float, unrealized_pnl: float, drawdown_pct: float, conn=None) -> None:
+    def write(cur) -> None:
         cur.execute(
             """
             INSERT INTO backtest_equity_curve(
@@ -546,6 +547,14 @@ def _record_equity(run_id: int, timestamp, equity: float, cash: float, realized_
             """,
             (run_id, timestamp, equity, cash, realized_pnl, unrealized_pnl, drawdown_pct),
         )
+
+    if conn is not None:
+        with conn.cursor() as cur:
+            write(cur)
+        return
+
+    with get_conn() as owned_conn, owned_conn.cursor() as cur:
+        write(cur)
 
 
 def _finalize_run(run_id: int, final_equity: float, starting_capital: float, max_drawdown_pct: float) -> dict[str, Any]:
@@ -709,13 +718,31 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
 
     snapshot_builder = MarketSnapshotBuilder(config["symbols"], warmup_required_bars=config["warmup_required_bars"])
     strategy = build_strategy(config["strategy_name"], config)
+    strategy_context = StrategyContext(run_config=config)
     cycle_count = 0
     decision_count = 0
     skipped_warmup = 0
     last_snapshot = None
+    performance_totals = {
+        "feed_seconds": 0.0,
+        "snapshot_seconds": 0.0,
+        "execution_seconds": 0.0,
+        "equity_persistence_seconds": 0.0,
+        "strategy_evaluation_seconds": 0.0,
+        "atr_seconds": 0.0,
+        "decision_seconds": 0.0,
+        "cycle_seconds": 0.0,
+    }
+    performance_batch_cycles = 0
+    performance_batch_seconds = 0.0
+    previous_cycle_completed_at = time.perf_counter()
+    equity_conn = None
 
     try:
+        equity_conn = get_conn()
         for cycle_index, candles in enumerate(feed.iter_cycles()):
+            cycle_started_at = time.perf_counter()
+            performance_totals["feed_seconds"] += cycle_started_at - previous_cycle_completed_at
             if cancel_event is not None and cancel_event.is_set():
                 with get_conn() as conn, conn.cursor() as cur:
                     cur.execute("UPDATE backtest_runs SET status='cancelled', completed_at=NOW(), error=%s WHERE run_id=%s", ("backtest_cancel_requested", run_id))
@@ -727,13 +754,44 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 continue
 
             cycle_count += 1
+            snapshot_started_at = time.perf_counter()
             snapshot = snapshot_builder.build(cycle_index, candles)
+            performance_totals["snapshot_seconds"] += time.perf_counter() - snapshot_started_at
             last_snapshot = snapshot
+
+            cycle_strategy_decisions: dict[str, Any] = {}
+            cycle_atr_values: dict[str, float | None] = {}
+
+            def strategy_decision_for(symbol: str):
+                if symbol not in cycle_strategy_decisions:
+                    strategy_started_at = time.perf_counter()
+                    cycle_strategy_decisions[symbol] = strategy.evaluate_symbol(
+                        snapshot,
+                        symbol,
+                        strategy_context,
+                    )
+                    performance_totals["strategy_evaluation_seconds"] += time.perf_counter() - strategy_started_at
+                return cycle_strategy_decisions[symbol]
+
+            def atr_for_symbol(symbol: str) -> float | None:
+                if symbol not in cycle_atr_values:
+                    atr_started_at = time.perf_counter()
+                    timeframe_rows = (
+                        ((getattr(snapshot, "timeframe_history", {}) or {}).get(symbol, {}) or {})
+                        .get(config.get("cycle_timeframe", "5m"), [])
+                    )
+                    cycle_atr_values[symbol] = atr_from_rows(
+                        timeframe_rows,
+                        int(config.get("volatility_spike_atr_period", 14)),
+                    )
+                    performance_totals["atr_seconds"] += time.perf_counter() - atr_started_at
+                return cycle_atr_values[symbol]
 
             if cycle_count == 1 or cycle_count % max(1, config["cycle_decision_log_interval"]) == 0:
                 expected = max(1, int(getattr(preflight, "expected_cycles", config["max_cycles"]) or config["max_cycles"]))
                 _emit_progress(progress_callback, status="running", run_id=run_id, cycle_index=cycle_index, cycle_count=cycle_count, cycles_processed=cycle_count, candles_processed=cycle_count * len(candles), trades_generated=risk_approved, current_simulated_date=snapshot.timestamp.isoformat(), progress_pct=min(99.0, cycle_count / expected * 100.0), message="Backtest cycle progress")
 
+            execution_started_at = time.perf_counter()
             execution_slots = virtual_execution_slots(snapshot.timestamp, config["execution_timeline"])
             execution_steps_processed = cycle_count * int(config.get("virtual_execution_steps_per_decision", 1) or 1)
 
@@ -813,7 +871,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     "score": plan["score"], "confidence": plan["confidence"],
                     "reason_tags": plan["reason_tags"], "debug": plan["debug"],
                     "level_reprice": level_reprice,
-                    "entry_atr": atr_from_rows(((getattr(snapshot, "timeframe_history", {}) or {}).get(symbol, {}) or {}).get(config.get("cycle_timeframe", "5m"), []), int(config.get("volatility_spike_atr_period", 14))),
+                    "entry_atr": atr_for_symbol(symbol),
                 }
 
                 initialize_sl2_state(position)
@@ -902,11 +960,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     regime_sl2_created_this_cycle = False
                     current_regime = None
                     try:
-                        regime_decision = strategy.evaluate_symbol(
-                            snapshot,
-                            symbol,
-                            StrategyContext(run_config=config),
-                        )
+                        regime_decision = strategy_decision_for(symbol)
                         current_regime = regime_decision.regime
                     except Exception:
                         current_regime = None
@@ -1067,8 +1121,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 # Phase 18K: volatility-spike SL2 protection.
                 if config.get("volatility_spike_exit_enabled", True) and not defensive_sl2_active and not defensive_sl2_consumed:
                     volatility_sl2_created_this_cycle = False
-                    tf_rows = ((getattr(snapshot, "timeframe_history", {}) or {}).get(symbol, {}) or {}).get(config.get("cycle_timeframe", "5m"), [])
-                    current_atr = atr_from_rows(tf_rows, int(config.get("volatility_spike_atr_period", 14)))
+                    current_atr = atr_for_symbol(symbol)
                     volatility_spike_event = evaluate_volatility_spike_exit(
                         position=position,
                         latest_price=snapshot.closes[symbol],
@@ -1628,15 +1681,28 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             peak_equity = max(peak_equity, equity)
             drawdown_pct = ((peak_equity - equity) / peak_equity * 100.0) if peak_equity else 0.0
             max_drawdown_pct = max(max_drawdown_pct, drawdown_pct)
-            _record_equity(run_id, snapshot.timestamp, equity, cash, realized_pnl, unrealized, drawdown_pct)
+            equity_persistence_started_at = time.perf_counter()
+            _record_equity(
+                run_id,
+                snapshot.timestamp,
+                equity,
+                cash,
+                realized_pnl,
+                unrealized,
+                drawdown_pct,
+                conn=equity_conn,
+            )
+            performance_totals["equity_persistence_seconds"] += time.perf_counter() - equity_persistence_started_at
+            performance_totals["execution_seconds"] += time.perf_counter() - execution_started_at
 
             # 3) Evaluate decisions from point-in-time snapshot.
+            decision_started_at = time.perf_counter()
             cycle_decisions = []
             for symbol in config["symbols"]:
                 if symbol not in snapshot.closes:
                     continue
 
-                decision = strategy.evaluate_symbol(snapshot, symbol)
+                decision = strategy_decision_for(symbol)
                 decision_count += 1
                 if decision.reason == "WARMUP_NOT_READY":
                     skipped_warmup += 1
@@ -1739,12 +1805,38 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 entry_orders_submitted += 1
                 _log(run_id, "ENTRY_ORDER_SUBMITTED", f"{symbol} {side} limit entry submitted.", {"cycle_index": cycle_index, "entry": entry, "quantity": qty, "score": plan["score"], "lookahead_guard": snapshot.lookahead_guard})
 
+            decision_seconds = time.perf_counter() - decision_started_at
+            performance_totals["decision_seconds"] += decision_seconds
+            cycle_seconds = time.perf_counter() - cycle_started_at
+            performance_totals["cycle_seconds"] += cycle_seconds
+            performance_batch_cycles += 1
+            performance_batch_seconds += cycle_seconds
+
             if cycle_index < 3 or cycle_index % max(1, config["cycle_decision_log_interval"]) == 0:
                 _log(run_id, "CYCLE_DECISIONS", "Cycle decisions recorded.", {
                     "cycle_index": cycle_index, "timestamp": snapshot.timestamp.isoformat(),
                     "equity": equity, "open_positions": list(open_positions.keys()),
                     "snapshot": snapshot.to_log_dict(), "decisions": cycle_decisions,
+                    "performance": {
+                        "latest_cycle_ms": round(cycle_seconds * 1000.0, 3),
+                        "batch_average_cycle_ms": round(
+                            performance_batch_seconds / max(1, performance_batch_cycles) * 1000.0,
+                            3,
+                        ),
+                        "cumulative_average_cycle_ms": round(
+                            performance_totals["cycle_seconds"] / max(1, cycle_count) * 1000.0,
+                            3,
+                        ),
+                        "history_rows": {
+                            symbol: {timeframe: len(rows) for timeframe, rows in timeframe_rows.items()}
+                            for symbol, timeframe_rows in snapshot.timeframe_history.items()
+                        },
+                    },
                 })
+                performance_batch_cycles = 0
+                performance_batch_seconds = 0.0
+
+            previous_cycle_completed_at = time.perf_counter()
 
         # 4) Expire remaining pending entry orders, then close remaining positions at final snapshot close.
         if last_snapshot is not None:
@@ -1841,6 +1933,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 realized_pnl,
                 0.0,
                 final_drawdown_pct,
+                conn=equity_conn,
             )
             _log(
                 run_id,
@@ -1891,6 +1984,21 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             "volatility_spike_checks": volatility_spike_checks,
             "volatility_spike_sl2_created": volatility_spike_sl2_created,
             "volatility_spike_sl2_fills": volatility_spike_sl2_fills,
+            "performance": {
+                "version": "backtest_linear_time_diagnostics_v1",
+                "history_limit": snapshot_builder.history_limit,
+                "strategy_evaluations_cached_per_symbol_cycle": True,
+                "atr_cached_per_symbol_cycle": True,
+                "equity_connection_reused": True,
+                "total_seconds": {
+                    key: round(value, 6)
+                    for key, value in performance_totals.items()
+                },
+                "average_cycle_ms": round(
+                    performance_totals["cycle_seconds"] / max(1, cycle_count) * 1000.0,
+                    3,
+                ),
+            },
             "timeout_exits_enabled": False,
         }
         _log(run_id, "BACKTEST_COMPLETED", "Backtest completed.", {**summary, **diagnostics})
@@ -1901,6 +2009,10 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             cur.execute("UPDATE backtest_runs SET status='failed', completed_at=NOW(), error=%s WHERE run_id=%s", (str(exc), run_id))
         _log(run_id, "BACKTEST_FAILED", str(exc), config, "ERROR")
         return {"ok": False, "run_id": run_id, "error": str(exc), "config": config, "preflight": preflight.to_dict()}
+
+    finally:
+        if equity_conn is not None:
+            equity_conn.close()
 
 
 def list_runs(limit: int = 20) -> list[dict[str, Any]]:

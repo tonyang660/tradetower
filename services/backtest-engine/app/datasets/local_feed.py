@@ -38,6 +38,7 @@ class LocalHistoricalDatasetFeed:
         self.max_cycles = int(config.get("max_cycles") or 0)
         self._candles: dict[str, dict[str, list[LocalCandle]]] = {}
         self._cycle_timestamps: list[datetime] = []
+        self._cursor_indices: dict[str, dict[str, int]] = {}
 
     def preflight(self) -> LocalFeedPreflight:
         validation = validate_local_dataset_request(
@@ -70,6 +71,7 @@ class LocalHistoricalDatasetFeed:
             return
         for symbol in self.symbols:
             self._candles[symbol] = {}
+            self._cursor_indices[symbol] = {}
             for timeframe in self.timeframes:
                 self._candles[symbol][timeframe] = load_candles(
                     dataset_id=self.dataset_id,
@@ -78,6 +80,7 @@ class LocalHistoricalDatasetFeed:
                     start_time=self.start_time,
                     end_time=self.end_time,
                 )
+                self._cursor_indices[symbol][timeframe] = -1
         cycle_rows = []
         for symbol in self.symbols:
             rows = self._candles.get(symbol, {}).get(self.cycle_timeframe, [])
@@ -88,24 +91,33 @@ class LocalHistoricalDatasetFeed:
         if self.max_cycles > 0:
             self._cycle_timestamps = self._cycle_timestamps[:self.max_cycles]
 
-    @staticmethod
-    def _latest_at_or_before(rows: list[LocalCandle], ts: datetime) -> LocalCandle | None:
-        chosen = None
-        for row in rows:
-            if row.timestamp <= ts:
-                chosen = row
-            else:
-                break
-        return chosen
+    def _latest_at_or_before_cursor(self, symbol: str, timeframe: str, ts: datetime) -> LocalCandle | None:
+        rows = self._candles[symbol][timeframe]
+        index = self._cursor_indices[symbol][timeframe]
+
+        # Iteration is normally monotonic. Reset only if this feed instance is
+        # explicitly rewound and iterated again.
+        if index >= 0 and rows[index].timestamp > ts:
+            index = -1
+
+        while index + 1 < len(rows) and rows[index + 1].timestamp <= ts:
+            index += 1
+
+        self._cursor_indices[symbol][timeframe] = index
+        return rows[index] if index >= 0 else None
 
     def iter_cycles(self) -> Iterator[list[Any]]:
         self._load()
+        for symbol in self.symbols:
+            for timeframe in self.timeframes:
+                self._cursor_indices[symbol][timeframe] = -1
+
         for ts in self._cycle_timestamps:
             cycle = []
             ordered_timeframes = [self.cycle_timeframe] + [tf for tf in self.timeframes if tf != self.cycle_timeframe]
             for symbol in self.symbols:
                 for timeframe in ordered_timeframes:
-                    row = self._latest_at_or_before(self._candles[symbol][timeframe], ts)
+                    row = self._latest_at_or_before_cursor(symbol, timeframe, ts)
                     if row is not None:
                         cycle.append(row)
             yield cycle
