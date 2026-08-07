@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from strategies.registry import canonical_strategy_name, get_strategy_detail
+from strategies.registry import canonical_strategy_name, get_strategy_detail, get_strategy_metadata
 
 
 def _as_list(value: Any) -> list[str]:
@@ -68,6 +68,7 @@ def validate_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         strategy_name = canonical_strategy_name(raw_strategy_name)
         detail = get_strategy_detail(strategy_name)
+        runtime_metadata = get_strategy_metadata(strategy_name)
     except Exception as exc:
         return {
             "valid": False,
@@ -77,6 +78,31 @@ def validate_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "warnings": [],
             "strategy": None,
         }
+
+    runtime_version = str(runtime_metadata.version or "").strip() or None
+    requested_version = str(payload.get("strategy_version") or "").strip() or None
+    version_manifest = detail.get("version", {}) or {}
+    manifest_version = (
+        str(version_manifest.get("version") or "").strip() or None
+        if isinstance(version_manifest, dict)
+        else str(version_manifest or "").strip() or None
+    )
+    version_consistency = {
+        "valid": manifest_version is None or manifest_version == runtime_version,
+        "runtime_version": runtime_version,
+        "manifest_version": manifest_version,
+    }
+    if not version_consistency["valid"]:
+        errors.append(
+            "strategy_metadata_version_mismatch:runtime="
+            + str(version_consistency.get("runtime_version"))
+            + ",manifest="
+            + str(version_consistency.get("manifest_version"))
+        )
+    if requested_version and runtime_version and requested_version != runtime_version:
+        errors.append(
+            f"strategy_version_mismatch:requested={requested_version},runtime={runtime_version}"
+        )
 
     requested_timeframes = _as_list(payload.get("timeframes"))
     cycle_timeframe = payload.get("cycle_timeframe")
@@ -141,6 +167,9 @@ def validate_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "required_timeframes": metadata_required,
         "active_phase_timeframes": active_phase_timeframes,
         "strict_timeframes": strict_timeframes,
+        "requested_strategy_version": requested_version,
+        "runtime_strategy_version": runtime_version,
+        "version_consistency": version_consistency,
         "parameter_schema_keys": sorted(parameter_schema.keys()),
         "strategy": detail,
     }

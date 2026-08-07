@@ -41,6 +41,7 @@ function pageFromBundle(
   offset: number,
 ): BacktestPagedRowsResponse {
   const section = (payload as any)?.[key];
+  const sectionPresent = section !== null && section !== undefined;
   const allRows = Array.isArray(section)
     ? section
     : Array.isArray(section?.rows)
@@ -59,6 +60,8 @@ function pageFromBundle(
     limit,
     offset,
     has_more: offset + rows.length < total,
+    available: typeof section?.available === "boolean" ? section.available : sectionPresent,
+    reason: typeof section?.reason === "string" ? section.reason : sectionPresent ? null : `${key}_unavailable`,
   };
 }
 

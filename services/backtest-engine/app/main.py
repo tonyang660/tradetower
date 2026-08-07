@@ -83,7 +83,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc), "run_id": run_id}, status=500)
             return
 
-        self._send_json({
+        payload = {
             "ok": True,
             "run_id": run_id,
             key: result["rows"],
@@ -92,7 +92,11 @@ class Handler(BaseHTTPRequestHandler):
             "limit": result["limit"],
             "offset": result["offset"],
             "has_more": result["has_more"],
-        })
+        }
+        for optional_key in ("available", "reason", "ledger_version"):
+            if optional_key in result:
+                payload[optional_key] = result[optional_key]
+        self._send_json(payload)
 
     def do_GET(self):
         parsed = urlparse(self.path)

@@ -55,7 +55,7 @@ def fetch_rows(
         "backtest_positions": "position_id",
         "backtest_equity_curve": "timestamp",
         "backtest_metrics": "metric_name",
-        "backtest_logs": "timestamp, log_id",
+        "backtest_logs": "timestamp, ctid",
     }
 
     if table not in allowed:
@@ -120,7 +120,7 @@ def fetch_metrics(run_id: int, limit: int = 500, offset: int = 0) -> dict[str, A
 
 
 def fetch_logs(run_id: int, limit: int = 500, offset: int = 0) -> dict[str, Any]:
-    return fetch_rows(run_id=run_id, table="backtest_logs", order_by="timestamp, log_id", limit=limit, offset=offset)
+    return fetch_rows(run_id=run_id, table="backtest_logs", order_by="timestamp, ctid", limit=limit, offset=offset)
 
 
 def fetch_result_bundle(run_id: int) -> dict[str, Any] | None:

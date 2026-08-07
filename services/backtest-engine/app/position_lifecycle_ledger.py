@@ -12,6 +12,26 @@ def _json(value: Any) -> str:
     return json.dumps(value or {}, default=str)
 
 
+def _empty_position_event_page(limit: int, offset: int, reason: str) -> dict[str, Any]:
+    return {
+        "rows": [],
+        "total": 0,
+        "count": 0,
+        "limit": limit,
+        "offset": offset,
+        "has_more": False,
+        "available": False,
+        "reason": reason,
+        "ledger_version": PHASE18_POSITION_LIFECYCLE_LEDGER_VERSION,
+    }
+
+
+def _position_lifecycle_table_exists(cur) -> bool:
+    cur.execute("SELECT to_regclass('public.backtest_position_events')")
+    row = cur.fetchone()
+    return bool(row and row[0])
+
+
 def ensure_position_lifecycle_table() -> None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -153,12 +173,17 @@ def record_position_event(
 
 
 def fetch_position_events(run_id: int, limit: int = 1000, offset: int = 0) -> dict[str, Any]:
-    ensure_position_lifecycle_table()
-
     limit = max(1, min(int(limit), 5000))
     offset = max(0, int(offset))
 
     with get_conn() as conn, conn.cursor() as cur:
+        if not _position_lifecycle_table_exists(cur):
+            return _empty_position_event_page(
+                limit,
+                offset,
+                "position_lifecycle_table_missing",
+            )
+
         cur.execute("SELECT COUNT(*) FROM backtest_position_events WHERE run_id=%s", (run_id,))
         total = int(cur.fetchone()[0] or 0)
         cur.execute(
@@ -180,4 +205,7 @@ def fetch_position_events(run_id: int, limit: int = 1000, offset: int = 0) -> di
         "limit": limit,
         "offset": offset,
         "has_more": offset + len(rows) < total,
+        "available": True,
+        "reason": None,
+        "ledger_version": PHASE18_POSITION_LIFECYCLE_LEDGER_VERSION,
     }

@@ -270,6 +270,9 @@ export type BacktestPagedRowsResponse = {
   limit?: number;
   offset?: number;
   has_more?: boolean;
+  available?: boolean;
+  reason?: string | null;
+  ledger_version?: string;
   error?: string;
 };
 

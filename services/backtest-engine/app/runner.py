@@ -1927,5 +1927,5 @@ def run_detail(run_id: int) -> dict[str, Any] | None:
             "positions": rows("SELECT row_to_json(p) FROM backtest_positions p WHERE run_id=%s ORDER BY position_id"),
             "equity_curve": rows("SELECT row_to_json(e) FROM backtest_equity_curve e WHERE run_id=%s ORDER BY timestamp"),
             "metrics": rows("SELECT row_to_json(m) FROM backtest_metrics m WHERE run_id=%s ORDER BY metric_name"),
-            "logs": rows("SELECT row_to_json(l) FROM backtest_logs l WHERE run_id=%s ORDER BY timestamp, log_id"),
+            "logs": rows("SELECT row_to_json(l) FROM backtest_logs l WHERE run_id=%s ORDER BY timestamp, ctid"),
         }

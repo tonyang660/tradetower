@@ -56,6 +56,7 @@ export default function BacktestRunInspector({ runId }: { runId: number | null |
   const [positions, setPositions] = useState<any[]>([]);
   const [exitLegs, setExitLegs] = useState<any[]>([]);
   const [positionEvents, setPositionEvents] = useState<any[]>([]);
+  const [positionEventsAvailable, setPositionEventsAvailable] = useState<boolean | null>(null);
   const [logs, setLogs] = useState<any[]>([]);
   const [bundle, setBundle] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);
@@ -77,6 +78,7 @@ export default function BacktestRunInspector({ runId }: { runId: number | null |
       } else if (tab === "position_events") {
         const payload = await fetchBacktestPositionEvents(runId, 1000);
         setPositionEvents(payload.position_events ?? payload.rows ?? []);
+        setPositionEventsAvailable(payload.available !== false);
       } else if (tab === "logs") {
         const payload = await fetchBacktestLogs(runId, 250);
         setLogs(payload.logs ?? payload.rows ?? []);
@@ -274,7 +276,7 @@ export default function BacktestRunInspector({ runId }: { runId: number | null |
                   </tr>
                 );
               }) : (
-                <tr><td className="px-4 py-6 text-center text-white/35" colSpan={9}>{loading ? "Loading lifecycle events..." : "No lifecycle events found."}</td></tr>
+                <tr><td className="px-4 py-6 text-center text-white/35" colSpan={9}>{loading ? "Loading lifecycle events..." : positionEventsAvailable === false ? "Lifecycle events are unavailable for this older run." : "No lifecycle events found."}</td></tr>
               )}
             </tbody>
           </table>
