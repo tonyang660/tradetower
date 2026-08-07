@@ -6,6 +6,7 @@ from math import sqrt
 from typing import Any
 
 from db import get_conn
+from execution_metrics import build_execution_metrics, trades_with_score_buckets
 
 
 def _to_float(value: Any, default: float | None = 0.0) -> float | None:
@@ -160,6 +161,9 @@ def fetch_backtest_analytics(run_id: int) -> dict[str, Any]:
         return {"ok": False, "error": "run_not_found", "run_id": run_id}
 
     trades = _fetch_all("backtest_trades", run_id, "trade_id")
+    orders = _fetch_all("backtest_orders", run_id, "order_id")
+    positions = _fetch_all("backtest_positions", run_id, "position_id")
+    logs = _fetch_all("backtest_logs", run_id, "timestamp")
     equity = _fetch_all("backtest_equity_curve", run_id, "timestamp")
 
     gross_pnl = _to_float(_first(run, ["gross_pnl"], None), None)
@@ -187,11 +191,17 @@ def fetch_backtest_analytics(run_id: int) -> dict[str, Any]:
     exposure_time_seconds = sum(hold_values) if hold_values else None
     fees_gross_ratio = total_fees / abs(gross_pnl) if gross_pnl else None
     sharpe, sortino = _sharpe_sortino(equity)
+    execution = build_execution_metrics(
+        trades=trades,
+        orders=orders,
+        positions=positions,
+        logs=logs,
+    )
 
     symbols = _group(trades, ["symbol", "asset", "market"])
     regimes = _group(trades, ["regime", "market_regime", "regime_name", "strategy_route"])
     exits = _group(trades, ["exit_reason", "reason", "close_reason"])
-    scores = _group(trades, ["score_bucket", "candidate_tier", "signal_bucket"])
+    scores = _group(trades_with_score_buckets(trades), ["score_bucket"])
 
     best_symbol = symbols[0] if symbols else None
     worst_symbol = symbols[-1] if symbols else None
@@ -237,11 +247,13 @@ def fetch_backtest_analytics(run_id: int) -> dict[str, Any]:
             "fees_gross_ratio": fees_gross_ratio,
             "average_hold_seconds": average_hold_seconds,
             "exposure_time_seconds": exposure_time_seconds,
+            **execution["outcomes"],
             "best_symbol": best_symbol,
             "worst_symbol": worst_symbol,
             "best_regime": best_regime,
             "worst_regime": worst_regime,
         },
+        "execution": execution,
         "breakdowns": {
             "symbols": symbols,
             "regimes": regimes,
@@ -254,5 +266,6 @@ def fetch_backtest_analytics(run_id: int) -> dict[str, Any]:
             "sharpe_sortino": len(_daily_returns(equity)) >= 2,
             "regime_breakdown": bool(regimes),
             "score_bucket_breakdown": bool(scores),
+            "execution_metrics": True,
         },
     }

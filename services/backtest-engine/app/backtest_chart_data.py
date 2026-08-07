@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from db import get_conn
+from execution_metrics import trades_with_score_buckets
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -364,7 +365,7 @@ def fetch_backtest_chart_data(run_id: int, max_points: int | None = None) -> dic
             "monthly_returns": _monthly_returns(raw_equity_points),
             "pnl_by_symbol": _group_trades(trades, ["symbol", "asset", "market"]),
             "pnl_by_regime": _group_trades(trades, ["regime", "market_regime", "regime_name", "strategy_route"]),
-            "score_bucket_performance": _group_trades(trades, ["score_bucket", "candidate_tier", "signal_bucket"]),
+            "score_bucket_performance": _group_trades(trades_with_score_buckets(trades), ["score_bucket"]),
             "holding_time_performance": _holding_time_buckets(trades),
             "fee_pressure": _fee_pressure(trades),
             "trade_distribution": _trade_distribution(trades),

@@ -89,6 +89,72 @@ function BreakdownTable({ title, rows }: { title: string; rows: any[] }) {
   );
 }
 
+
+function ExecutionSummary({ data }: { data: BacktestAnalyticsResponse["execution"] }) {
+  if (!data) return null;
+
+  const cards = [
+    ["Maker fees", money(data.liquidity.maker_fee_total)],
+    ["Taker fees", money(data.liquidity.taker_fee_total)],
+    ["Maker fills", String(data.liquidity.maker_fill_count)],
+    ["Taker fills", String(data.liquidity.taker_fill_count)],
+    ["Positions", String(data.outcomes.position_count)],
+    ["Exit legs", String(data.outcomes.exit_leg_count)],
+  ];
+
+  return (
+    <div className="space-y-4 rounded-2xl border border-cyan-300/15 bg-cyan-500/5 p-4">
+      <div>
+        <div className="text-sm font-semibold text-cyan-100">Execution metrics</div>
+        <div className="mt-1 text-xs text-cyan-100/45">Derived from persisted orders, positions, exit legs, and execution logs.</div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+        {cards.map(([label, value]) => (
+          <div key={label} className="rounded-xl border border-white/10 bg-black/18 p-3">
+            <div className="text-xs uppercase tracking-[0.14em] text-white/35">{label}</div>
+            <div className="mt-2 text-lg font-semibold text-white">{value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-xl border border-white/10 bg-black/18 p-3 text-white/60">
+          <div className="font-semibold text-white">Entry orders</div>
+          <div className="mt-2">Submitted: {data.entry_orders.submitted}</div>
+          <div>Filled: {data.entry_orders.filled}</div>
+          <div>Expired: {data.entry_orders.expired}</div>
+          <div>Market fallbacks: {data.entry_orders.market_fallbacks}</div>
+          <div>Average wait: {data.entry_orders.average_wait_attempts === null ? "Not available" : `${data.entry_orders.average_wait_attempts.toFixed(1)} attempts`}</div>
+        </div>
+
+        <div className="rounded-xl border border-white/10 bg-black/18 p-3 text-white/60">
+          <div className="font-semibold text-white">Stop execution</div>
+          <div className="mt-2">Limit reprices: {data.stop_loss.limit_reprice_attempts}</div>
+          <div>Maker fills: {data.stop_loss.limit_maker_fills}</div>
+          <div>Market fallbacks: {data.stop_loss.market_fallbacks}</div>
+        </div>
+
+        <div className="rounded-xl border border-white/10 bg-black/18 p-3 text-white/60">
+          <div className="font-semibold text-white">Secondary stops</div>
+          <div className="mt-2">Created: {data.sl2.created}</div>
+          <div>Filled: {data.sl2.filled}</div>
+          {data.sl2.by_trigger.map((row) => (
+            <div key={row.trigger}>{row.trigger}: {row.filled}/{row.created} filled</div>
+          ))}
+        </div>
+
+        <div className="rounded-xl border border-white/10 bg-black/18 p-3 text-white/60">
+          <div className="font-semibold text-white">Outcome comparison</div>
+          <div className="mt-2">Position win rate: {pct(data.outcomes.position_win_rate)}</div>
+          <div>Exit-leg win rate: {pct(data.outcomes.exit_leg_win_rate)}</div>
+          <div className="mt-2 text-xs text-white/35">Position outcomes use closed-position realized PnL. Existing headline metrics remain unchanged for compatibility.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function BacktestExpandedMetricsPanel({ runId }: { runId: number | null | undefined }) {
   const [data, setData] = useState<BacktestAnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -159,6 +225,9 @@ export default function BacktestExpandedMetricsPanel({ runId }: { runId: number 
             </div>
           ) : null}
         </div>
+
+
+        <ExecutionSummary data={data?.execution} />
 
         <div className="grid gap-4 xl:grid-cols-2">
           <BreakdownTable title="PnL by symbol" rows={data?.breakdowns?.symbols ?? []} />

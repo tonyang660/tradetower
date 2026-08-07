@@ -147,12 +147,53 @@ export type BacktestAnalyticsBreakdownRow = {
   win_rate: number;
 };
 
+export type BacktestExecutionMetrics = {
+  version: string;
+  liquidity: {
+    maker_fill_count: number;
+    maker_fee_total: number;
+    taker_fill_count: number;
+    taker_fee_total: number;
+    unknown_fill_count: number;
+    unknown_fee_total: number;
+  };
+  entry_orders: {
+    submitted: number;
+    filled: number;
+    expired: number;
+    market_fallbacks: number;
+    average_wait_attempts: number | null;
+    wait_attempt_samples: number;
+  };
+  stop_loss: {
+    limit_reprice_attempts: number;
+    limit_maker_fills: number;
+    market_fallbacks: number;
+  };
+  sl2: {
+    created: number;
+    filled: number;
+    by_trigger: Array<{ trigger: string; created: number; filled: number }>;
+  };
+  outcomes: {
+    exit_leg_count: number;
+    exit_leg_wins: number;
+    exit_leg_win_rate: number | null;
+    position_count: number;
+    position_wins: number;
+    position_win_rate: number | null;
+  };
+  availability: Record<string, boolean>;
+};
+
+
 export type BacktestAnalyticsResponse = {
   ok: boolean;
   run_id: number;
   run?: any;
   metrics?: BacktestAnalyticsMetric[];
   summary?: any;
+  execution?: BacktestExecutionMetrics;
   breakdowns?: {
     symbols?: BacktestAnalyticsBreakdownRow[];
     regimes?: BacktestAnalyticsBreakdownRow[];
