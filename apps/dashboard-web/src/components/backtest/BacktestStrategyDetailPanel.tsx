@@ -62,7 +62,6 @@ export default function BacktestStrategyDetailPanel({
   const requiredIndicators = asStringArray(strategy?.required_indicators ?? config?.required_indicators, []);
   const tags = asStringArray(strategy?.tags ?? config?.tags, ["backtest"]);
   const parityComponents = asStringArray(config?.production_parity_components, []);
-  const lifecyclePending = config?.lifecycle_features_not_implemented_yet ?? {};
   const candidateIncluded = Boolean(config?.candidate_filter?.included);
   const backendValid = backendValidation?.validation?.valid ?? backendValidation?.valid ?? null;
   const missingRequired = requiredTimeframes.filter((tf) => !selectedTimeframes.includes(tf));
@@ -144,21 +143,6 @@ export default function BacktestStrategyDetailPanel({
               <Pill key={item}>{item}</Pill>
             ))}
           </div>
-        </div>
-
-        <div className="rounded-2xl border border-amber-300/15 bg-amber-500/8 p-4">
-          <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-amber-100">
-            <ShieldCheck size={15} />
-            Honest scope boundary
-          </div>
-          <div className="text-sm leading-6 text-amber-100/70">
-            Phase 17 displays configuration and results. Phase 18 owns realistic order/position lifecycle simulation.
-          </div>
-          {Object.keys(lifecyclePending).length ? (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {Object.keys(lifecyclePending).map((key) => <Pill key={key} tone="warn">{key}</Pill>)}
-            </div>
-          ) : null}
         </div>
       </div>
     </section>

@@ -132,13 +132,6 @@
     "v1_trade_levels",
     "v1_decision_policy"
   ],
-  "lifecycle_features_not_implemented_yet": {
-    "adaptive_stop_loss": "Phase 18 realistic execution simulator",
-    "tp1_reprice_stop_to_half_risk": "Phase 18 position manager",
-    "tp2_reprice_stop_to_breakeven": "Phase 18 position manager",
-    "regime_change_sl2": "Phase 18/20 maintenance simulation",
-    "volatility_spike_sl2": "Phase 18 execution + Phase 20 forward comparison"
-  },
   "compatibility_aliases": [
     "phase14a_baseline",
     "baseline"
