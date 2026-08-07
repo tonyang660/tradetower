@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from config import DEFAULT_MAX_CYCLES, DEFAULT_RISK_PER_TRADE_PCT, DEFAULT_SLIPPAGE_BPS, DEFAULT_STARTING_CAPITAL
@@ -264,12 +264,46 @@ def _open_position(run_id: int, position: dict[str, Any]) -> None:
         position["position_id"] = int(cur.fetchone()[0])
 
 
-def _close_position(run_id: int, position: dict[str, Any], exit_time, exit_price: float, gross_pnl: float, exit_fee: float, net_pnl: float, exit_reason: str) -> None:
+def _allocate_entry_fee(position: dict[str, Any], quantity: float, *, final_leg: bool = False) -> float:
+    """Allocate the once-paid entry fee across persisted exit-leg rows."""
+    entry_fee_total = max(
+        0.0,
+        float(position.get("fees", 0.0)) - float(position.get("exit_fees", 0.0)),
+    )
+    already_allocated = max(0.0, float(position.get("allocated_entry_fees", 0.0)))
+    remaining = max(0.0, entry_fee_total - already_allocated)
+
+    if final_leg:
+        allocation = remaining
+    else:
+        original_qty = max(0.0, float(position.get("original_qty", position.get("qty", 0.0))))
+        proportional = entry_fee_total * (max(0.0, float(quantity)) / original_qty) if original_qty else 0.0
+        allocation = min(remaining, proportional)
+
+    position["allocated_entry_fees"] = already_allocated + allocation
+    return allocation
+
+
+def _close_position(
+    run_id: int,
+    position: dict[str, Any],
+    exit_time,
+    exit_price: float,
+    exit_quantity: float,
+    leg_gross_pnl: float,
+    exit_fee: float,
+    position_gross_pnl: float,
+    position_net_pnl: float,
+    exit_reason: str,
+) -> None:
+    entry_fee_allocation = _allocate_entry_fee(position, exit_quantity, final_leg=True)
+    leg_fees = entry_fee_allocation + exit_fee
+    leg_net_pnl = leg_gross_pnl - leg_fees
     total_fees = position["fees"] + exit_fee
     original_qty = float(position.get("original_qty", position["qty"]))
     risk_stop = float(position.get("original_stop", position.get("initial_stop", position["stop"])))
     initial_risk = abs(position["entry"] - risk_stop) * original_qty
-    r_multiple = net_pnl / initial_risk if initial_risk else None
+    r_multiple = leg_net_pnl / initial_risk if initial_risk else None
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -278,7 +312,7 @@ def _close_position(run_id: int, position: dict[str, Any], exit_time, exit_price
                 unrealized_pnl=0, fees=%s, exit_reason=%s
             WHERE position_id=%s
             """,
-            (exit_time, exit_price, net_pnl, total_fees, exit_reason, position["position_id"]),
+            (exit_time, exit_price, position_net_pnl, total_fees, exit_reason, position["position_id"]),
         )
         cur.execute(
             """
@@ -292,9 +326,17 @@ def _close_position(run_id: int, position: dict[str, Any], exit_time, exit_price
             (
                 run_id, position["position_id"], position["symbol"], position["side"],
                 position["entry_time"], exit_time, position["entry"], exit_price,
-                original_qty, gross_pnl, total_fees, net_pnl, r_multiple, exit_reason,
+                exit_quantity, leg_gross_pnl, leg_fees, leg_net_pnl, r_multiple, exit_reason,
                 position["regime"], position["score"], position["confidence"],
-                position["reason_tags"], _json(position["debug"]),
+                position["reason_tags"], _json({
+                    **(position.get("debug") or {}),
+                    "exit_leg_accounting": {
+                        "entry_fee_allocation": entry_fee_allocation,
+                        "exit_fee": exit_fee,
+                        "position_gross_pnl": position_gross_pnl,
+                        "position_net_pnl": position_net_pnl,
+                    },
+                }),
             ),
         )
 
@@ -399,8 +441,11 @@ def _update_open_order_price_quantity(order_id: int, price: float, quantity: flo
 
 
 def _insert_partial_trade(run_id: int, position: dict[str, Any], role: str, exit_time, exit_price: float, quantity: float, gross_pnl: float, fee: float, net_pnl: float, details: dict[str, Any] | None = None) -> None:
+    entry_fee_allocation = _allocate_entry_fee(position, quantity)
+    leg_fees = fee + entry_fee_allocation
+    leg_net_pnl = gross_pnl - leg_fees
     initial_risk = abs(position["entry"] - position["stop"]) * float(position.get("original_qty", position["qty"]))
-    r_multiple = net_pnl / initial_risk if initial_risk else None
+    r_multiple = leg_net_pnl / initial_risk if initial_risk else None
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -414,9 +459,17 @@ def _insert_partial_trade(run_id: int, position: dict[str, Any], role: str, exit
             (
                 run_id, position["position_id"], position["symbol"], position["side"],
                 position["entry_time"], exit_time, position["entry"], exit_price,
-                quantity, gross_pnl, fee, net_pnl, r_multiple, role,
+                quantity, gross_pnl, leg_fees, leg_net_pnl, r_multiple, role,
                 position["regime"], position["score"], position["confidence"],
-                position["reason_tags"], _json({**(position.get("debug") or {}), "partial_tp": details or {}}),
+                position["reason_tags"], _json({
+                    **(position.get("debug") or {}),
+                    "partial_tp": details or {},
+                    "exit_leg_accounting": {
+                        "cash_net_pnl": net_pnl,
+                        "entry_fee_allocation": entry_fee_allocation,
+                        "exit_fee": fee,
+                    },
+                }),
             ),
         )
 
@@ -513,14 +566,21 @@ def _finalize_run(run_id: int, final_equity: float, starting_capital: float, max
         )
         total_trades, gross_pnl, net_pnl, wins, gross_wins, gross_losses = cur.fetchone()
 
-        # Phase 18F-HF2:
-        # Partial TP rows are stored as realized trade rows before the remaining
-        # position is closed. Some in-memory equity paths can miss those partial
-        # realized exits. At finalization all positions have been settled, so the
-        # trade ledger is the source of truth for final equity.
+        # Phase 18O-HF2:
+        # Simulation cash and the exit-leg ledger are independent accounting
+        # paths. They must agree; never replace the recorded cash result with a
+        # divergent ledger total because that can hide duplicate exit-leg PnL.
+        simulation_final_equity = float(final_equity or 0.0)
         ledger_final_equity = float(starting_capital) + float(net_pnl or 0.0)
-        equity_reconciliation_delta = ledger_final_equity - float(final_equity or 0.0)
-        final_equity = ledger_final_equity
+        equity_reconciliation_delta = ledger_final_equity - simulation_final_equity
+        if abs(equity_reconciliation_delta) > 0.01:
+            raise RuntimeError(
+                "equity_ledger_mismatch: "
+                f"cash={simulation_final_equity:.8f}, "
+                f"ledger={ledger_final_equity:.8f}, "
+                f"delta={equity_reconciliation_delta:.8f}"
+            )
+        final_equity = simulation_final_equity
 
         win_rate = wins / total_trades if total_trades else None
         profit_factor = gross_wins / gross_losses if gross_losses else None
@@ -748,7 +808,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     "entry": filled_entry, "stop": repriced_levels["stop"], "original_stop": repriced_levels["stop"], "tp1": repriced_levels["tp1"],
                     "tp2": repriced_levels["tp2"], "tp3": repriced_levels["tp3"], "qty": filled_entry_size,
                     "original_qty": filled_entry_size, "partial_tp_filled": [],
-                    "realized_exit_gross": 0.0, "exit_fees": 0.0,
+                    "realized_exit_gross": 0.0, "exit_fees": 0.0, "allocated_entry_fees": 0.0,
                     "fees": entry_fee, "bars": 0, "regime": plan["regime"],
                     "score": plan["score"], "confidence": plan["confidence"],
                     "reason_tags": plan["reason_tags"], "debug": plan["debug"],
@@ -1528,7 +1588,18 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                             exit_order_details,
                         )
 
-                    _close_position(run_id, position, snapshot.timestamp, filled_exit, gross, exit_fee, trade_net, exit_reason)
+                    _close_position(
+                        run_id,
+                        position,
+                        snapshot.timestamp,
+                        filled_exit,
+                        filled_exit_size,
+                        remaining_gross,
+                        exit_fee,
+                        gross,
+                        trade_net,
+                        exit_reason,
+                    )
                     record_position_event(
                         run_id=run_id,
                         position=position,
@@ -1538,10 +1609,15 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                         quantity=filled_exit_size,
                         gross_pnl=remaining_gross,
                         fee=exit_fee,
-                        net_pnl=trade_net,
+                        net_pnl=cash_delta,
                         remaining_size=0.0,
                         reason=exit_reason,
-                        details={"exit_reason": exit_reason, "fill_model": exit_fill, "fee_details": exit_fee_details},
+                        details={
+                            "exit_reason": exit_reason,
+                            "fill_model": exit_fill,
+                            "fee_details": exit_fee_details,
+                            "position_net_pnl": trade_net,
+                        },
                     )
                     _log(run_id, "POSITION_CLOSED", f"{symbol} closed via {exit_reason}.", {"cycle_index": cycle_index, "symbol": symbol, "net_pnl": trade_net, "fill_liquidity": exit_fill.get("liquidity"), "order_type": exit_order_type, "stop_action": exit_fill.get("action")})
                     del open_positions[symbol]
@@ -1715,7 +1791,18 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     details={"position_id": position["position_id"], "cycle_index": last_snapshot.cycle_index, "fill_model": final_exit_fill, "fee_details": final_exit_fee_details},
                 )
                 _record_order(run_id, symbol, final_exit_side, "market_exit", requested_exit, filled_exit, final_exit_size, exit_fee, "END_OF_BACKTEST", last_snapshot.timestamp, {"position_id": position["position_id"], "cycle_index": last_snapshot.cycle_index, "order_lifecycle": final_lifecycle, "fill_model": final_exit_fill, "fee_details": final_exit_fee_details})
-                _close_position(run_id, position, last_snapshot.timestamp, filled_exit, gross, exit_fee, trade_net, "END_OF_BACKTEST")
+                _close_position(
+                    run_id,
+                    position,
+                    last_snapshot.timestamp,
+                    filled_exit,
+                    final_exit_size,
+                    final_remaining_gross,
+                    exit_fee,
+                    gross,
+                    trade_net,
+                    "END_OF_BACKTEST",
+                )
                 record_position_event(
                     run_id=run_id,
                     position=position,
@@ -1725,10 +1812,14 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     quantity=final_exit_size,
                     gross_pnl=final_remaining_gross,
                     fee=exit_fee,
-                    net_pnl=trade_net,
+                    net_pnl=cash_delta,
                     remaining_size=0.0,
                     reason="END_OF_BACKTEST",
-                    details={"fill_model": final_exit_fill, "fee_details": final_exit_fee_details},
+                    details={
+                        "fill_model": final_exit_fill,
+                        "fee_details": final_exit_fee_details,
+                        "position_net_pnl": trade_net,
+                    },
                 )
                 del open_positions[symbol]
 
@@ -1738,12 +1829,13 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
         # chart can end below/above the final finalized equity.
         if last_snapshot is not None:
             final_equity_before_finalize = float(cash)
+            final_equity_timestamp = last_snapshot.timestamp + timedelta(microseconds=1)
             peak_equity = max(peak_equity, final_equity_before_finalize)
             final_drawdown_pct = ((peak_equity - final_equity_before_finalize) / peak_equity * 100.0) if peak_equity else 0.0
             max_drawdown_pct = max(max_drawdown_pct, final_drawdown_pct)
             _record_equity(
                 run_id,
-                last_snapshot.timestamp,
+                final_equity_timestamp,
                 final_equity_before_finalize,
                 cash,
                 realized_pnl,
@@ -1755,7 +1847,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 "FINAL_EQUITY_SYNC",
                 "Final post-settlement equity point recorded.",
                 {
-                    "timestamp": last_snapshot.timestamp.isoformat(),
+                    "timestamp": final_equity_timestamp.isoformat(),
                     "final_equity_before_finalize": final_equity_before_finalize,
                     "cash": cash,
                     "realized_pnl": realized_pnl,

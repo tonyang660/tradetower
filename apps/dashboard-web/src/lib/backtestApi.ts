@@ -30,6 +30,38 @@ async function getJson<T>(path: string): Promise<T> {
   return JSON.parse(text) as T;
 }
 
+function isNotFound(error: unknown) {
+  return error instanceof Error && error.message.startsWith("Request failed: 404");
+}
+
+function pageFromBundle(
+  payload: BacktestResultBundleResponse,
+  key: "positions" | "exit_legs" | "position_events",
+  limit: number,
+  offset: number,
+): BacktestPagedRowsResponse {
+  const section = (payload as any)?.[key];
+  const allRows = Array.isArray(section)
+    ? section
+    : Array.isArray(section?.rows)
+      ? section.rows
+      : [];
+  const rows = allRows.slice(offset, offset + limit);
+  const total = typeof section?.total === "number" ? section.total : allRows.length;
+
+  return {
+    ok: payload.ok,
+    run_id: payload.run_id,
+    [key]: rows,
+    rows,
+    total,
+    count: rows.length,
+    limit,
+    offset,
+    has_more: offset + rows.length < total,
+  };
+}
+
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     method: "POST",
@@ -100,16 +132,32 @@ export function fetchBacktestTrades(runId: number, limit = 250, offset = 0) {
   return getJson<BacktestPagedRowsResponse>(`/backtest/trades?run_id=${runId}&limit=${limit}&offset=${offset}`);
 }
 
-export function fetchBacktestExitLegs(runId: number, limit = 250, offset = 0) {
-  return getJson<BacktestPagedRowsResponse>(`/backtest/exit-legs?run_id=${runId}&limit=${limit}&offset=${offset}`);
+export async function fetchBacktestExitLegs(runId: number, limit = 250, offset = 0) {
+  try {
+    return await getJson<BacktestPagedRowsResponse>(`/backtest/exit-legs?run_id=${runId}&limit=${limit}&offset=${offset}`);
+  } catch (error) {
+    if (!isNotFound(error)) throw error;
+    const legacy = await fetchBacktestTrades(runId, limit, offset);
+    return { ...legacy, exit_legs: legacy.trades ?? legacy.rows ?? [] };
+  }
 }
 
-export function fetchBacktestPositions(runId: number, limit = 250, offset = 0) {
-  return getJson<BacktestPagedRowsResponse>(`/backtest/positions?run_id=${runId}&limit=${limit}&offset=${offset}`);
+export async function fetchBacktestPositions(runId: number, limit = 250, offset = 0) {
+  try {
+    return await getJson<BacktestPagedRowsResponse>(`/backtest/positions?run_id=${runId}&limit=${limit}&offset=${offset}`);
+  } catch (error) {
+    if (!isNotFound(error)) throw error;
+    return pageFromBundle(await fetchBacktestResultBundle(runId), "positions", limit, offset);
+  }
 }
 
-export function fetchBacktestPositionEvents(runId: number, limit = 1000, offset = 0) {
-  return getJson<BacktestPagedRowsResponse>(`/backtest/position-events?run_id=${runId}&limit=${limit}&offset=${offset}`);
+export async function fetchBacktestPositionEvents(runId: number, limit = 1000, offset = 0) {
+  try {
+    return await getJson<BacktestPagedRowsResponse>(`/backtest/position-events?run_id=${runId}&limit=${limit}&offset=${offset}`);
+  } catch (error) {
+    if (!isNotFound(error)) throw error;
+    return pageFromBundle(await fetchBacktestResultBundle(runId), "position_events", limit, offset);
+  }
 }
 
 export function fetchBacktestLogs(runId: number, limit = 250, offset = 0) {

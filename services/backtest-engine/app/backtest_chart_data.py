@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from db import get_conn
@@ -105,24 +105,11 @@ def _timestamp(point: dict[str, Any]) -> str:
     return str(value) if value is not None else ""
 
 
-def _next_timestamp(value: Any) -> str:
-    parsed = _parse_dt(value)
-    if parsed is not None:
-        return (parsed + timedelta(microseconds=1)).isoformat()
-    return f"{value or 'final'}+1us"
-
-
 def _reconcile_final_equity(
     run: dict[str, Any],
     raw_points: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Expose the persisted curve and run summary relationship honestly.
-
-    Older and current runs can finish with a run-level final equity that is not
-    the last stored curve value. The chart response keeps the raw value in
-    metadata and appends a display-only final point with a unique timestamp.
-    No database row or historical run is mutated.
-    """
+    """Report curve/summary accounting without inventing a chart point."""
     points = [dict(point) for point in raw_points]
     raw_values = [_equity_value(point) for point in raw_points]
     raw_last = raw_values[-1] if raw_values else None
@@ -136,25 +123,9 @@ def _reconcile_final_equity(
         if final_equity is not None and raw_last is not None
         else None
     )
-    appended = False
-
-    if final_equity is not None and (raw_last is None or abs(final_equity - raw_last) > 1e-9):
-        previous = dict(points[-1]) if points else {}
-        previous_timestamp = _first(previous, ["timestamp", "created_at"], None)
-        previous.update({
-            "timestamp": _next_timestamp(previous_timestamp),
-            "equity": final_equity,
-            "cash": final_equity,
-            "unrealized_pnl": 0.0,
-            "is_final_reconciliation": True,
-        })
-        if starting_equity is not None:
-            previous["realized_pnl"] = final_equity - starting_equity
-        points.append(previous)
-        appended = True
-
-    chart_values = [_equity_value(point) for point in points]
-    status = "reconciled" if appended else "matched"
+    summary_matches_curve = final_delta is not None and abs(final_delta) <= 0.01
+    chart_values = raw_values
+    status = "matched" if summary_matches_curve else "mismatch"
     if final_equity is None:
         status = "final_equity_unavailable"
     elif raw_last is None:
@@ -172,7 +143,8 @@ def _reconcile_final_equity(
         "equity_curve_max": max(chart_values) if chart_values else None,
         "raw_points": len(raw_points),
         "display_points": len(points),
-        "final_point_appended": appended,
+        "final_point_appended": False,
+        "summary_matches_curve": summary_matches_curve,
         "reconciliation_status": status,
     }
 
@@ -215,7 +187,7 @@ def _monthly_returns(equity_points: list[dict[str, Any]]) -> list[dict[str, Any]
         if ts < bucket["first_ts"]:
             bucket["first_ts"] = ts
             bucket["first_equity"] = value
-        if ts > bucket["last_ts"]:
+        if ts >= bucket["last_ts"]:
             bucket["last_ts"] = ts
             bucket["last_equity"] = value
     rows = []

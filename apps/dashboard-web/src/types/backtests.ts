@@ -237,6 +237,7 @@ export type BacktestChartDataResponse = {
     raw_points: number;
     display_points: number;
     final_point_appended: boolean;
+    summary_matches_curve: boolean;
     reconciliation_status: string;
   };
   charts?: {

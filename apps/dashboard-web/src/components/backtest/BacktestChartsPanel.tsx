@@ -167,16 +167,16 @@ export default function BacktestChartsPanel({ runId }: { runId: number | null | 
       <div className="grid gap-4 xl:grid-cols-2">
         <ChartCard
           title="Equity curve"
-          subtitle={`${equityRows.length} display points${equityMetadata?.final_point_appended ? " · final summary reconciled" : ""}`}
+          subtitle={`${equityRows.length} stored points${equityMetadata?.summary_matches_curve === false ? " · accounting mismatch" : ""}`}
           icon={<Activity size={15} className="text-cyan-200" />}
         >
           <Sparkline rows={equityRows} valueKey="equity" />
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             {[
               ["Starting", money(equityMetadata?.starting_equity)],
-              ["Raw curve last", money(equityMetadata?.raw_last_equity_curve_value)],
-              ["Final equity", money(equityMetadata?.final_equity)],
-              ["Reconciliation", signedMoney(equityMetadata?.final_equity_delta)],
+              ["Stored curve last", money(equityMetadata?.raw_last_equity_curve_value)],
+              ["Stored run summary", money(equityMetadata?.final_equity)],
+              ["Difference", signedMoney(equityMetadata?.final_equity_delta)],
             ].map(([label, value]) => (
               <div key={label} className="rounded-xl border border-white/10 bg-black/18 p-3">
                 <div className="text-[10px] uppercase tracking-[0.14em] text-white/35">{label}</div>
@@ -184,9 +184,9 @@ export default function BacktestChartsPanel({ runId }: { runId: number | null | 
               </div>
             ))}
           </div>
-          {equityMetadata?.final_point_appended ? (
-            <div className="mt-3 rounded-xl border border-amber-300/15 bg-amber-500/8 px-3 py-2 text-xs text-amber-100/70">
-              The stored curve ended {signedMoney(equityMetadata.final_equity_delta)} from the run summary. A display-only final point makes the chart end at final equity; stored history was not changed.
+          {equityMetadata?.summary_matches_curve === false ? (
+            <div className="mt-3 rounded-xl border border-rose-300/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100/75">
+              The stored run summary differs from the persisted equity curve by {signedMoney(equityMetadata.final_equity_delta)}. The chart remains on stored equity and does not add a synthetic final jump. Rerun this backtest after the accounting fix.
             </div>
           ) : null}
         </ChartCard>
