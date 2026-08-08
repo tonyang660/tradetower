@@ -14,6 +14,7 @@ from datasets.config import (
     DEFAULT_SYMBOLS,
     DEFAULT_TIMEFRAMES,
     TIMEFRAME_MINUTES,
+    available_from,
     normalize_symbols,
     normalize_timeframes,
 )
@@ -150,10 +151,16 @@ def register_dataset(payload: dict[str, Any]) -> dict[str, Any]:
     expected_total = 0
     asset_specs = []
     for symbol in symbols:
+        archive_start_raw = available_from(symbol)
+        archive_start = _parse_time(
+            f"{archive_start_raw}T00:00:00Z" if archive_start_raw else None,
+            start_time,
+        )
+        asset_start = max(start_time, archive_start)
         for timeframe in timeframes:
-            expected = expected_rows_for_timeframe(start_time, end_time, timeframe)
+            expected = expected_rows_for_timeframe(asset_start, end_time, timeframe)
             expected_total += expected
-            asset_specs.append((symbol, timeframe, expected))
+            asset_specs.append((symbol, timeframe, asset_start, expected))
 
     manifest = {
         "phase": "16A",
@@ -167,6 +174,10 @@ def register_dataset(payload: dict[str, Any]) -> dict[str, Any]:
         "end_time": end_time.isoformat(),
         "storage_format": "parquet",
         "storage_root": payload.get("storage_root") or DEFAULT_STORAGE_ROOT,
+        "archive_available_from": {
+            symbol: available_from(symbol)
+            for symbol in symbols
+        },
         "expected_total_rows": expected_total,
         "notes": payload.get("notes"),
         "candidate_filter_phase": "16F",
@@ -210,7 +221,7 @@ def register_dataset(payload: dict[str, Any]) -> dict[str, Any]:
         )
         dataset_id = int(cur.fetchone()[0])
 
-        for symbol, timeframe, expected in asset_specs:
+        for symbol, timeframe, asset_start, expected in asset_specs:
             storage_path = (
                 f"{payload.get('storage_root') or DEFAULT_STORAGE_ROOT}/"
                 f"{market_type}/{symbol}/{timeframe}"
@@ -235,7 +246,7 @@ def register_dataset(payload: dict[str, Any]) -> dict[str, Any]:
                     dataset_id,
                     symbol,
                     timeframe,
-                    start_time,
+                    asset_start,
                     end_time,
                     expected,
                     storage_path,

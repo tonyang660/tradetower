@@ -203,21 +203,23 @@ def _scan_asset(asset: dict[str, Any], dataset: dict[str, Any]) -> dict[str, Any
     last_dt = _dt_from_ms(unique_times[-1])
     dataset_start = _parse_iso(dataset.get("start_time")) or first_dt
     dataset_end = _parse_iso(dataset.get("end_time")) or last_dt
-    scan_start = max(first_dt, dataset_start) if first_dt and dataset_start else first_dt
+    asset_start = _parse_iso(asset.get("start_time")) or dataset_start
+    asset_end = _parse_iso(asset.get("end_time")) or dataset_end
+    scan_start = max(first_dt, asset_start) if first_dt and asset_start else first_dt
     scan_end = last_dt
 
     expected_within_actual = _expected_count(scan_start, scan_end, timeframe) if scan_start and scan_end else len(unique_times)
     actual_missing = max(0, expected_within_actual - len(unique_times))
-    requested_expected = _expected_count(dataset_start, dataset_end, timeframe) if dataset_start and dataset_end else expected_within_actual
+    requested_expected = _expected_count(asset_start, asset_end, timeframe) if asset_start and asset_end else expected_within_actual
     expected_archive_missing = max(0, requested_expected - expected_within_actual)
 
     if expected_archive_missing > 0:
         issues.append(_issue(
             "info",
             "ARCHIVE_RANGE_ENDS_BEFORE_REQUESTED_END",
-            f"{symbol} {timeframe} ends at {_iso(last_dt)} while dataset requested through {_iso(dataset_end)}.",
+            f"{symbol} {timeframe} ends at {_iso(last_dt)} while the asset requested through {_iso(asset_end)}.",
             _iso(last_dt),
-            _iso(dataset_end),
+            _iso(asset_end),
             {"expected_archive_missing_count": expected_archive_missing},
         ))
 

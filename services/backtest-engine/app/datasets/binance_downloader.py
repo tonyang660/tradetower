@@ -8,7 +8,7 @@ import os
 import tempfile
 import zipfile
 from dataclasses import dataclass, asdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -181,39 +181,72 @@ def download_binance_asset(
         warnings.append(f"start_time_clamped_to_available_from:{available}")
         start_time = available_dt
 
-    if end_time <= start_time:
+    if end_time < start_time:
         return DownloadAssetResult(symbol, timeframe, "empty_range", 0, 0, 0, None, None, None, warnings, ["end_time_before_available_start"])
 
     rows_all: list[list[str]] = []
     files_downloaded = 0
     files_missing = 0
 
+    monthly_files = 0
+    daily_fallback_files = 0
+    stop_for_file_limit = False
+
+    def fetch(url: str) -> bytes | None:
+        nonlocal files_downloaded, files_missing, stop_for_file_limit
+        if max_files is not None and files_downloaded + files_missing >= max_files:
+            if "max_files_reached" not in warnings:
+                warnings.append("max_files_reached")
+            stop_for_file_limit = True
+            return None
+        raw = _read_url_bytes(url)
+        if raw is None:
+            files_missing += 1
+        else:
+            files_downloaded += 1
+        return raw
+
     if prefer_monthly:
-        periods = list(_month_iter(start_time, end_time))
-        for year, month in periods:
-            if max_files is not None and files_downloaded + files_missing >= max_files:
-                warnings.append("max_files_reached")
+        # Use one monthly archive whenever Binance has published it. Missing
+        # boundary/current months fall back to daily archives so recent data is
+        # not silently omitted while waiting for the next monthly publication.
+        for year, month in _month_iter(start_time, end_time):
+            raw = fetch(_binance_monthly_url(symbol, timeframe, year, month))
+            if stop_for_file_limit:
                 break
-            url = _binance_monthly_url(symbol, timeframe, year, month)
-            raw = _read_url_bytes(url)
-            if raw is None:
-                files_missing += 1
+            if raw is not None:
+                rows_all.extend(_rows_from_zip_bytes(raw))
+                monthly_files += 1
                 continue
-            rows_all.extend(_rows_from_zip_bytes(raw))
-            files_downloaded += 1
+
+            month_start = datetime(year, month, 1, tzinfo=timezone.utc)
+            if month == 12:
+                next_month = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+            else:
+                next_month = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+            fallback_start = max(start_time, month_start)
+            fallback_end = min(end_time, next_month - timedelta(microseconds=1))
+            for day in _date_iter(fallback_start, fallback_end):
+                daily_raw = fetch(_binance_daily_url(symbol, timeframe, day))
+                if stop_for_file_limit:
+                    break
+                if daily_raw is None:
+                    continue
+                rows_all.extend(_rows_from_zip_bytes(daily_raw))
+                daily_fallback_files += 1
+            if stop_for_file_limit:
+                break
     else:
-        days = list(_date_iter(start_time, end_time))
-        for day in days:
-            if max_files is not None and files_downloaded + files_missing >= max_files:
-                warnings.append("max_files_reached")
+        for day in _date_iter(start_time, end_time):
+            raw = fetch(_binance_daily_url(symbol, timeframe, day))
+            if stop_for_file_limit:
                 break
-            url = _binance_daily_url(symbol, timeframe, day)
-            raw = _read_url_bytes(url)
             if raw is None:
-                files_missing += 1
                 continue
             rows_all.extend(_rows_from_zip_bytes(raw))
-            files_downloaded += 1
+            daily_fallback_files += 1
+
+    warnings.append(f"archive_mix:monthly={monthly_files},daily={daily_fallback_files}")
 
     rows = _filter_rows_for_range(rows_all, start_time, end_time)
     rows.sort(key=_row_timestamp_ms)

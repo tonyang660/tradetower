@@ -30,8 +30,9 @@ DEFAULT_SYMBOLS = [
     "HYPEUSDT"
 ]
 
-# Production strategy parity target plus useful resampling/context frames.
-DEFAULT_TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
+# Production-parity backtests consume only these persisted candle intervals.
+# Logical 1m execution remains virtual and does not require 1m downloads.
+DEFAULT_TIMEFRAMES = ["5m", "15m", "1h", "4h"]
 
 TIMEFRAME_MINUTES = {
     "1m": 1,
@@ -48,26 +49,27 @@ TIMEFRAME_MINUTES = {
     "1d": 1440,
 }
 
-# Binance USD-M Futures public archive availability as provided for Phase 16B.
+# First Binance USD-M daily kline archive for every supported interval above.
+# These are archive boundaries, which are not always the contract launch dates.
 BINANCE_UM_FUTURES_AVAILABLE_FROM = {
-    "BTCUSDT": "2019-09-08",
-    "ETHUSDT": "2019-11-27",
+    "BTCUSDT": "2019-12-31",
+    "ETHUSDT": "2019-12-31",
     "XRPUSDT": "2020-01-06",
     "LTCUSDT": "2020-01-09",
     "LINKUSDT": "2020-01-17",
     "ADAUSDT": "2020-01-31",
     "BNBUSDT": "2020-02-10",
-    "ZECUSDT": "2020-02-18",
-    "XLMUSDT": "2020-02-20",
-    "XMRUSDT": "2020-05-20",
+    "ZECUSDT": "2020-02-05",
+    "XLMUSDT": "2020-01-20",
+    "XMRUSDT": "2020-02-03",
     "DOGEUSDT": "2020-07-10",
-    "DOTUSDT": "2020-08-18",
-    "SOLUSDT": "2020-09-13",
-    "HBARUSDT": "2021-10-18",
+    "DOTUSDT": "2020-08-22",
+    "SOLUSDT": "2020-09-14",
+    "HBARUSDT": "2021-03-17",
     "ARBUSDT": "2023-03-23",
     "SUIUSDT": "2023-05-03",
     "1000PEPEUSDT": "2023-05-05",
-    "SEIUSDT": "2023-08-15",
+    "SEIUSDT": "2023-08-17",
     "TAOUSDT": "2024-04-11",
     "HYPEUSDT": "2025-05-30"
 }
