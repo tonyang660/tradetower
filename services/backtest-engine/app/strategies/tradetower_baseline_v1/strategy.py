@@ -5,7 +5,10 @@ from typing import Any
 
 from market_snapshot import MarketSnapshot
 from parity.production_candidate_filter import rank_market_snapshots
-from parity.production_feature_factory import ProductionFeatureSnapshotCache
+from parity.production_feature_factory import (
+    ProductionFeatureSnapshotCache,
+    default_persistent_feature_cache_path,
+)
 from parity.production_strategy_engine import analyze_market_snapshot_v2
 from strategies.base import (
     StrategyContext,
@@ -67,7 +70,15 @@ class TradeTowerBaselineV1Strategy:
         self._cycle_timestamp = None
         self._market_snapshots: dict[str, dict[str, Any]] = {}
         self._candidate_payload: dict[str, Any] = {"by_symbol": {}}
-        self._feature_cache = ProductionFeatureSnapshotCache()
+        persistent_enabled = bool(self.config.get('backtest_persistent_feature_cache_enabled', True))
+        persistent_enabled = persistent_enabled and self.config.get('data_mode') == 'local_historical_dataset'
+        persistent_path = self.config.get('backtest_persistent_feature_cache_path') or (
+            default_persistent_feature_cache_path(int(self.config.get('dataset_id', 0) or 0))
+        )
+        self._feature_cache = ProductionFeatureSnapshotCache(
+            persistent_enabled=persistent_enabled,
+            persistent_path=str(persistent_path),
+        )
         requested_workers = max(1, int(self.config.get('backtest_feature_workers', 1) or 1))
         symbol_count = max(1, len(self.config.get('symbols', []) or []))
         self._feature_workers = min(8, requested_workers, symbol_count)
@@ -117,6 +128,11 @@ class TradeTowerBaselineV1Strategy:
                 'blocks_reused': 0,
                 'compute_seconds': 0.0,
                 'wall_seconds': 0.0,
+                'persistent_hits': 0,
+                'persistent_misses': 0,
+                'shared_series_hits': 0,
+                'shared_series_misses': 0,
+                'persistent_cache': self._feature_cache.persistent_diagnostics(),
                 'by_timeframe': {},
             }
 
@@ -150,18 +166,38 @@ class TradeTowerBaselineV1Strategy:
         blocks_built = 0
         blocks_reused = 0
         compute_seconds = 0.0
+        persistent_hits = 0
+        persistent_misses = 0
+        shared_series_hits = 0
+        shared_series_misses = 0
         for _, _, diagnostics in results:
             blocks_built += int(diagnostics.get('blocks_built', 0))
             blocks_reused += int(diagnostics.get('blocks_reused', 0))
             compute_seconds += float(diagnostics.get('compute_seconds', 0.0))
+            persistent_hits += int(diagnostics.get('persistent_hits', 0))
+            persistent_misses += int(diagnostics.get('persistent_misses', 0))
+            shared_series_hits += int(diagnostics.get('shared_series_hits', 0))
+            shared_series_misses += int(diagnostics.get('shared_series_misses', 0))
             for timeframe, values in (diagnostics.get('by_timeframe', {}) or {}).items():
                 aggregate = by_timeframe.setdefault(
                     timeframe,
-                    {'built': 0, 'reused': 0, 'compute_seconds': 0.0},
+                    {
+                        'built': 0,
+                        'reused': 0,
+                        'compute_seconds': 0.0,
+                        'persistent_hit': 0,
+                        'persistent_miss': 0,
+                        'shared_series_hits': 0,
+                        'shared_series_misses': 0,
+                    },
                 )
                 aggregate['built'] += int(values.get('built', 0))
                 aggregate['reused'] += int(values.get('reused', 0))
                 aggregate['compute_seconds'] += float(values.get('compute_seconds', 0.0))
+                aggregate['persistent_hit'] += int(values.get('persistent_hit', 0))
+                aggregate['persistent_miss'] += int(values.get('persistent_miss', 0))
+                aggregate['shared_series_hits'] += int(values.get('shared_series_hits', 0))
+                aggregate['shared_series_misses'] += int(values.get('shared_series_misses', 0))
 
         self._last_feature_diagnostics = {
             'cycle_snapshot_reused': False,
@@ -171,6 +207,11 @@ class TradeTowerBaselineV1Strategy:
             'blocks_reused': blocks_reused,
             'compute_seconds': compute_seconds,
             'wall_seconds': time.perf_counter() - started_at,
+            'persistent_hits': persistent_hits,
+            'persistent_misses': persistent_misses,
+            'shared_series_hits': shared_series_hits,
+            'shared_series_misses': shared_series_misses,
+            'persistent_cache': self._feature_cache.persistent_diagnostics(),
             'by_timeframe': by_timeframe,
         }
         return self._last_feature_diagnostics
@@ -201,6 +242,7 @@ class TradeTowerBaselineV1Strategy:
         if self._feature_executor is not None:
             self._feature_executor.shutdown(wait=True)
             self._feature_executor = None
+        self._feature_cache.close()
 
     def current_regime(self, symbol: str) -> str | None:
         snapshot = self._market_snapshots.get(str(symbol).upper()) or {}

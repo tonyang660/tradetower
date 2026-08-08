@@ -5,7 +5,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
-from datasets.local_dataset import LOCAL_DATASET_ADAPTER_VERSION, LocalCandle, load_candles, validate_local_dataset_request
+from datasets.local_dataset import (
+    LOCAL_DATASET_ADAPTER_VERSION,
+    LocalCandle,
+    load_candle_open_times,
+    load_candles,
+    validate_local_dataset_request,
+)
 
 TIMEFRAME_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
 PRODUCTION_FEATURE_WARMUP_ROWS = 72
@@ -42,6 +48,7 @@ class LocalHistoricalDatasetFeed:
         self._candles: dict[str, dict[str, list[LocalCandle]]] = {}
         self._cycle_timestamps: list[datetime] = []
         self._cursor_indices: dict[str, dict[str, int]] = {}
+        self._effective_end_time: datetime | str | None = self.end_time
 
     def preflight(self) -> LocalFeedPreflight:
         validation = validate_local_dataset_request(
@@ -72,6 +79,30 @@ class LocalHistoricalDatasetFeed:
     def _load(self) -> None:
         if self._candles:
             return
+
+        # Resolve the exact first max_cycles timestamps from the union of the
+        # selected symbols using only the parquet open_time column. This keeps
+        # max_cycles behavior identical even when an asset has gaps or a later
+        # listing date, while preventing all OHLCV files from loading through
+        # the much later configured end_time.
+        if self.max_cycles > 0:
+            boundary_candidates = {
+                timestamp
+                for symbol in self.symbols
+                for timestamp in load_candle_open_times(
+                    dataset_id=self.dataset_id,
+                    symbol=symbol,
+                    timeframe=self.cycle_timeframe,
+                    start_time=self.start_time,
+                    end_time=self.end_time,
+                    limit=self.max_cycles,
+                )
+            }
+            ordered_candidates = sorted(boundary_candidates)
+            if ordered_candidates:
+                selected = ordered_candidates[:self.max_cycles]
+                self._effective_end_time = selected[-1]
+
         for symbol in self.symbols:
             self._candles[symbol] = {}
             self._cursor_indices[symbol] = {}
@@ -89,7 +120,7 @@ class LocalHistoricalDatasetFeed:
                     symbol=symbol,
                     timeframe=timeframe,
                     start_time=requested_start,
-                    end_time=self.end_time,
+                    end_time=self._effective_end_time,
                 )
                 self._cursor_indices[symbol][timeframe] = -1
         cycle_rows = [
@@ -170,6 +201,13 @@ class LocalHistoricalDatasetFeed:
             "cycle_count": len(self._cycle_timestamps),
             "first_cycle": self._cycle_timestamps[0].isoformat() if self._cycle_timestamps else None,
             "last_cycle": self._cycle_timestamps[-1].isoformat() if self._cycle_timestamps else None,
+            "configured_end_time": str(self.end_time) if self.end_time is not None else None,
+            "effective_load_end_time": (
+                self._effective_end_time.isoformat()
+                if isinstance(self._effective_end_time, datetime)
+                else str(self._effective_end_time) if self._effective_end_time is not None else None
+            ),
+            "range_aware_parquet_loading": True,
             "candle_availability": "close_time_lte_cycle_close",
             "cycle_rows_require_exact_open_time": True,
             "bootstrap_rows": len(self.bootstrap_history()),

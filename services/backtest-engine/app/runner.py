@@ -194,6 +194,8 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "warmup_required_bars": int(payload.get("warmup_required_bars", 8)),
         "cycle_decision_log_interval": int(payload.get("cycle_decision_log_interval", 25)),
         "backtest_feature_workers": max(1, min(8, int(payload.get("backtest_feature_workers", 1) or 1))),
+        "backtest_persistent_feature_cache_enabled": bool(payload.get("backtest_persistent_feature_cache_enabled", True)),
+        "backtest_persistent_feature_cache_path": payload.get("backtest_persistent_feature_cache_path"),
         "strategy_validation_strict_timeframes": bool(payload.get("strategy_validation_strict_timeframes", False)),
         "guardian_account_enabled": bool(payload.get("guardian_account_enabled", True)),
         "guardian_account_active": bool(payload.get("guardian_account_active", True)),
@@ -816,8 +818,13 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     feature_cache_totals = {
         "blocks_built": 0,
         "blocks_reused": 0,
+        "persistent_hits": 0,
+        "persistent_misses": 0,
+        "shared_series_hits": 0,
+        "shared_series_misses": 0,
         "by_timeframe": {},
     }
+    last_persistent_cache_diagnostics: dict[str, Any] = {"enabled": False}
     performance_batch_cycles = 0
     performance_batch_seconds = 0.0
     previous_cycle_completed_at = time.perf_counter()
@@ -867,14 +874,33 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 performance_totals["strategy_evaluation_seconds"] += feature_wall_seconds
                 feature_cache_totals["blocks_built"] += int((feature_diagnostics or {}).get("blocks_built", 0))
                 feature_cache_totals["blocks_reused"] += int((feature_diagnostics or {}).get("blocks_reused", 0))
+                feature_cache_totals["persistent_hits"] += int((feature_diagnostics or {}).get("persistent_hits", 0))
+                feature_cache_totals["persistent_misses"] += int((feature_diagnostics or {}).get("persistent_misses", 0))
+                feature_cache_totals["shared_series_hits"] += int((feature_diagnostics or {}).get("shared_series_hits", 0))
+                feature_cache_totals["shared_series_misses"] += int((feature_diagnostics or {}).get("shared_series_misses", 0))
+                last_persistent_cache_diagnostics = dict(
+                    (feature_diagnostics or {}).get("persistent_cache", last_persistent_cache_diagnostics) or {}
+                )
                 for timeframe, values in ((feature_diagnostics or {}).get("by_timeframe", {}) or {}).items():
                     aggregate = feature_cache_totals["by_timeframe"].setdefault(
                         timeframe,
-                        {"built": 0, "reused": 0, "compute_seconds": 0.0},
+                        {
+                            "built": 0,
+                            "reused": 0,
+                            "compute_seconds": 0.0,
+                            "persistent_hit": 0,
+                            "persistent_miss": 0,
+                            "shared_series_hits": 0,
+                            "shared_series_misses": 0,
+                        },
                     )
                     aggregate["built"] += int(values.get("built", 0))
                     aggregate["reused"] += int(values.get("reused", 0))
                     aggregate["compute_seconds"] += float(values.get("compute_seconds", 0.0))
+                    aggregate["persistent_hit"] += int(values.get("persistent_hit", 0))
+                    aggregate["persistent_miss"] += int(values.get("persistent_miss", 0))
+                    aggregate["shared_series_hits"] += int(values.get("shared_series_hits", 0))
+                    aggregate["shared_series_misses"] += int(values.get("shared_series_misses", 0))
             elif hasattr(strategy, "prepare_cycle"):
                 strategy_prepare_started_at = time.perf_counter()
                 strategy.prepare_cycle(
@@ -2059,6 +2085,11 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                             "workers": config["backtest_feature_workers"],
                             "blocks_built": feature_cache_totals["blocks_built"],
                             "blocks_reused": feature_cache_totals["blocks_reused"],
+                            "persistent_hits": feature_cache_totals["persistent_hits"],
+                            "persistent_misses": feature_cache_totals["persistent_misses"],
+                            "shared_series_hits": feature_cache_totals["shared_series_hits"],
+                            "shared_series_misses": feature_cache_totals["shared_series_misses"],
+                            "persistent": last_persistent_cache_diagnostics,
                         },
                         "stage_total_seconds": {
                             key: round(performance_totals[key], 6)
@@ -2231,23 +2262,34 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             "risk_rejections": risk_rejections,
             "production_parity_runtime": True,
             "performance": {
-                "version": "backtest_production_parity_performance_v2",
+                "version": "backtest_production_parity_performance_v3",
                 "history_limit": snapshot_builder.history_limit,
                 "strategy_evaluations_cached_per_symbol_cycle": True,
                 "atr_cached_per_symbol_cycle": True,
                 "equity_connection_reused": True,
                 "production_feature_timeframe_cache": True,
+                "production_feature_shared_computation_adapter": True,
+                "production_feature_persistent_cache": bool(config["backtest_persistent_feature_cache_enabled"]),
                 "candidate_filter_ranked_once_per_cycle": True,
                 "routine_cycle_log_mode": "compact_production_parity_refs",
                 "production_feature_workers": config["backtest_feature_workers"],
                 "production_feature_cache": {
                     "blocks_built": feature_cache_totals["blocks_built"],
                     "blocks_reused": feature_cache_totals["blocks_reused"],
+                    "persistent_hits": feature_cache_totals["persistent_hits"],
+                    "persistent_misses": feature_cache_totals["persistent_misses"],
+                    "shared_series_hits": feature_cache_totals["shared_series_hits"],
+                    "shared_series_misses": feature_cache_totals["shared_series_misses"],
+                    "persistent": last_persistent_cache_diagnostics,
                     "by_timeframe": {
                         timeframe: {
                             "built": values["built"],
                             "reused": values["reused"],
                             "compute_seconds": round(values["compute_seconds"], 6),
+                            "persistent_hits": values["persistent_hit"],
+                            "persistent_misses": values["persistent_miss"],
+                            "shared_series_hits": values["shared_series_hits"],
+                            "shared_series_misses": values["shared_series_misses"],
                         }
                         for timeframe, values in feature_cache_totals["by_timeframe"].items()
                     },

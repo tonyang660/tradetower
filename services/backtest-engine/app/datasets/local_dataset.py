@@ -8,7 +8,7 @@ from typing import Any
 
 from db import get_conn
 
-LOCAL_DATASET_ADAPTER_VERSION = "phase16e_local_historical_dataset_adapter"
+LOCAL_DATASET_ADAPTER_VERSION = "phase18_range_aware_local_historical_dataset_adapter_v2"
 
 @dataclass(frozen=True)
 class LocalCandle:
@@ -63,13 +63,31 @@ def _load_asset(dataset_id: int, symbol: str, timeframe: str) -> dict[str, Any] 
         row = cur.fetchone()
         return row[0] if row else None
 
-def _read_storage(path: str) -> list[dict[str, Any]]:
+def _read_storage(
+    path: str,
+    *,
+    start_dt: datetime | None = None,
+    end_dt: datetime | None = None,
+    columns: list[str] | None = None,
+) -> list[dict[str, Any]]:
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(path)
     if p.suffix == ".parquet":
         import pandas as pd  # type: ignore
-        return pd.read_parquet(p).to_dict(orient="records")
+        # Binance parquet assets keep open_time as epoch milliseconds. Pushing
+        # this predicate into the parquet reader avoids materializing an entire
+        # multi-year asset before Python applies the requested backtest range.
+        filters = []
+        if start_dt is not None:
+            filters.append(("open_time", ">=", int(start_dt.timestamp() * 1000)))
+        if end_dt is not None:
+            filters.append(("open_time", "<=", int(end_dt.timestamp() * 1000)))
+        return pd.read_parquet(
+            p,
+            columns=columns,
+            filters=filters or None,
+        ).to_dict(orient="records")
     if p.suffix == ".jsonl":
         import pandas as pd  # type: ignore
         return pd.read_json(p, lines=True).to_dict(orient="records")
@@ -92,9 +110,13 @@ def load_candles(
     if not asset:
         raise ValueError(f"dataset_asset_not_found:{dataset_id}:{symbol}:{timeframe}")
 
-    rows = _read_storage(str(asset["storage_path"]))
     start_dt = _parse_datetime(start_time) if start_time else None
     end_dt = _parse_datetime(end_time) if end_time else None
+    rows = _read_storage(
+        str(asset["storage_path"]),
+        start_dt=start_dt,
+        end_dt=end_dt,
+    )
 
     out: list[LocalCandle] = []
     for row in rows:
@@ -118,6 +140,49 @@ def load_candles(
     if limit is not None:
         out = out[:max(0, int(limit))]
     return out
+
+
+def load_candle_open_times(
+    *,
+    dataset_id: int,
+    symbol: str,
+    timeframe: str,
+    start_time: str | datetime | None = None,
+    end_time: str | datetime | None = None,
+    limit: int | None = None,
+) -> list[datetime]:
+    """Read only timestamps when resolving the exact max-cycles boundary.
+
+    Reading the first N timestamps for every symbol is sufficient to construct
+    the first N timestamps in their union, including assets with gaps or later
+    listing dates. No OHLCV frame is materialized during this boundary pass.
+    """
+    asset = _load_asset(dataset_id, symbol, timeframe)
+    if not asset:
+        raise ValueError(f"dataset_asset_not_found:{dataset_id}:{symbol}:{timeframe}")
+
+    start_dt = _parse_datetime(start_time) if start_time else None
+    end_dt = _parse_datetime(end_time) if end_time else None
+    storage_path = str(asset["storage_path"])
+    if Path(storage_path).suffix == ".parquet":
+        rows = _read_storage(
+            storage_path,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            columns=["open_time"],
+        )
+    else:
+        rows = _read_storage(storage_path)
+
+    timestamps = sorted({
+        _row_timestamp(row)
+        for row in rows
+        if (start_dt is None or _row_timestamp(row) >= start_dt)
+        and (end_dt is None or _row_timestamp(row) <= end_dt)
+    })
+    if limit is not None:
+        timestamps = timestamps[:max(0, int(limit))]
+    return timestamps
 
 def dataset_assets_summary(dataset_id: int) -> list[dict[str, Any]]:
     with get_conn() as conn, conn.cursor() as cur:
