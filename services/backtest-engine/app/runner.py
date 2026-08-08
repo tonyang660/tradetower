@@ -24,9 +24,11 @@ from adaptive_stop_simulator import build_adaptive_stop_update, adaptive_stop_mo
 from regime_change_exit_simulator import evaluate_regime_change_exit, regime_change_model_contract
 from volatility_spike_exit_simulator import atr_from_rows, evaluate_volatility_spike_exit, volatility_spike_model_contract
 from position_lifecycle_ledger import ensure_position_lifecycle_table, lifecycle_ledger_contract, record_position_event
+from near_tp_reversal_simulator import evaluate_near_tp_reversal
 
 from fee_model import FeeModel
-from guardian_risk import GuardianPolicy, evaluate_entry_guard
+from guardian_risk import GuardianPolicy, HistoricalGuardianState, evaluate_entry_guard
+from production_risk import dynamic_risk_pct, evaluate_production_risk
 
 
 def _json(value: Any) -> str:
@@ -85,7 +87,7 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "strategy_name": payload.get("strategy_name", "tradetower_baseline_v1"),
-        "strategy_version": payload.get("strategy_version", "0.2.0" if payload.get("strategy_name", "tradetower_baseline_v1") == "tradetower_baseline_v1" else "0.1.0"),
+        "strategy_version": payload.get("strategy_version", "1.0.0" if payload.get("strategy_name", "tradetower_baseline_v1") == "tradetower_baseline_v1" else "0.1.0"),
         "symbols": [str(s).upper().replace("/", "").replace("-", "") for s in symbols],
         "timeframes": [str(t) for t in timeframes],
         "cycle_timeframe": timeline.decision_timeframe,
@@ -142,6 +144,10 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "adaptive_stop_after_tp1_enabled": bool(payload.get("adaptive_stop_after_tp1_enabled", True)),
         "adaptive_stop_after_tp2_enabled": bool(payload.get("adaptive_stop_after_tp2_enabled", True)),
         "adaptive_stop_breakeven_buffer_bps": float(payload.get("adaptive_stop_breakeven_buffer_bps", 2.0)),
+        "near_tp_reversal_enabled": bool(payload.get("near_tp_reversal_enabled", True)),
+        "near_tp_progress_threshold": float(payload.get("near_tp_progress_threshold", 0.92)),
+        "near_tp_pullback_threshold_pct": float(payload.get("near_tp_pullback_threshold_pct", 0.005)),
+        "near_tp_breakeven_buffer_pct": float(payload.get("near_tp_breakeven_buffer_pct", 0.0)),
         "data_mode": payload.get("data_mode", "phase14b_sample_historical_feed"),
         "dataset_id": int(payload.get("dataset_id", 0) or 0),
         "execution_model": payload.get("execution_model", "phase18_virtual_1m_order_lifecycle"),
@@ -149,15 +155,34 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "warmup_required_bars": int(payload.get("warmup_required_bars", 8)),
         "cycle_decision_log_interval": int(payload.get("cycle_decision_log_interval", 25)),
         "strategy_validation_strict_timeframes": bool(payload.get("strategy_validation_strict_timeframes", False)),
+        "guardian_account_enabled": bool(payload.get("guardian_account_enabled", True)),
+        "guardian_account_active": bool(payload.get("guardian_account_active", True)),
         "guardian_trading_enabled": bool(payload.get("guardian_trading_enabled", True)),
+        "guardian_manual_halt": bool(payload.get("guardian_manual_halt", False)),
         "guardian_read_only_mode": bool(payload.get("guardian_read_only_mode", False)),
         "guardian_maintenance_only_mode": bool(payload.get("guardian_maintenance_only_mode", False)),
-        "guardian_max_concurrent_positions": int(payload.get("guardian_max_concurrent_positions", 3)),
+        "guardian_max_concurrent_positions": int(payload.get("guardian_max_concurrent_positions", 5)),
         "guardian_max_account_exposure_pct": float(payload.get("guardian_max_account_exposure_pct", 80.0)),
         "guardian_max_position_leverage": float(payload.get("guardian_max_position_leverage", payload.get("guardian_max_leverage", 15.0))),
         "guardian_account_max_notional_multiplier": float(payload.get("guardian_account_max_notional_multiplier", payload.get("guardian_account_exposure_multiplier", 10.0))),
         "guardian_daily_loss_limit_pct": float(payload.get("guardian_daily_loss_limit_pct", 3.0)),
         "guardian_weekly_loss_limit_pct": float(payload.get("guardian_weekly_loss_limit_pct", 6.0)),
+        "guardian_max_consecutive_losses": int(payload.get("guardian_max_consecutive_losses", 3)),
+        "guardian_consecutive_loss_cooldown_hours": int(payload.get("guardian_consecutive_loss_cooldown_hours", 4)),
+        "risk_max_risk_pct": float(payload.get("risk_max_risk_pct", payload.get("risk_per_trade_pct", 1.0))),
+        "risk_max_leverage": float(payload.get("risk_max_leverage", 15.0)),
+        "risk_min_liquidation_buffer_pct": float(payload.get("risk_min_liquidation_buffer_pct", 0.35)),
+        "risk_min_notional_pct_of_max_deployable": float(payload.get("risk_min_notional_pct_of_max_deployable", 1.0)),
+        "risk_max_open_positions": int(payload.get("risk_max_open_positions", 5)),
+        "risk_max_pending_entries": int(payload.get("risk_max_pending_entries", 5)),
+        "risk_max_total_active_entries": int(payload.get("risk_max_total_active_entries", 5)),
+        "risk_max_directional_entries": int(payload.get("risk_max_directional_entries", 4)),
+        "risk_max_portfolio_notional_multiple": float(payload.get("risk_max_portfolio_notional_multiple", 10.0)),
+        "risk_max_margin_usage_pct": float(payload.get("risk_max_margin_usage_pct", 80.0)),
+        "risk_max_correlated_entries": int(payload.get("risk_max_correlated_entries", 2)),
+        "risk_weekly_drawdown_threshold_pct": float(payload.get("risk_weekly_drawdown_threshold_pct", 5.0)),
+        "risk_weekly_drawdown_score_penalty": int(payload.get("risk_weekly_drawdown_score_penalty", 10)),
+        "risk_base_trade_score_threshold": int(payload.get("risk_base_trade_score_threshold", 75)),
     }
 
 
@@ -685,6 +710,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
 
     fee_model = FeeModel.from_config(config)
     guardian_policy = GuardianPolicy.from_config(config)
+    guardian_state = HistoricalGuardianState()
 
     guard_rejections = 0
     risk_approved = 0
@@ -713,10 +739,19 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
     volatility_spike_checks = 0
     volatility_spike_sl2_created = 0
     volatility_spike_sl2_fills = 0
+    near_tp_reversal_checks = 0
+    near_tp_stop_updates = 0
+    risk_rejections = 0
 
     _emit_progress(progress_callback, status="running", run_id=run_id, cycle_count=0, cycles_processed=0, candles_processed=0, trades_generated=0, progress_pct=0.0, message="Backtest initialized")
 
-    snapshot_builder = MarketSnapshotBuilder(config["symbols"], warmup_required_bars=config["warmup_required_bars"])
+    snapshot_builder = MarketSnapshotBuilder(
+        config["symbols"],
+        warmup_required_bars=max(config["warmup_required_bars"], 72),
+        cycle_timeframe=config["cycle_timeframe"],
+    )
+    if hasattr(feed, "bootstrap_history"):
+        snapshot_builder.seed(feed.bootstrap_history())
     strategy = build_strategy(config["strategy_name"], config)
     strategy_context = StrategyContext(run_config=config)
     cycle_count = 0
@@ -758,6 +793,24 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             snapshot = snapshot_builder.build(cycle_index, candles)
             performance_totals["snapshot_seconds"] += time.perf_counter() - snapshot_started_at
             last_snapshot = snapshot
+
+            provisional_unrealized = sum(
+                _unrealized(position, snapshot.closes[symbol])
+                for symbol, position in open_positions.items()
+                if symbol in snapshot.closes
+            )
+            provisional_equity = cash + provisional_unrealized
+            guardian_state.refresh(timestamp=snapshot.timestamp, equity=provisional_equity, policy=guardian_policy)
+            strategy_context.account_context.clear()
+            strategy_context.account_context.update(guardian_state.to_dict(equity=provisional_equity))
+            if hasattr(strategy, "prepare_cycle"):
+                strategy_prepare_started_at = time.perf_counter()
+                strategy.prepare_cycle(
+                    snapshot,
+                    symbols=config["symbols"],
+                    excluded_symbols=set(open_positions) | set(pending_entry_orders),
+                )
+                performance_totals["strategy_evaluation_seconds"] += time.perf_counter() - strategy_prepare_started_at
 
             cycle_strategy_decisions: dict[str, Any] = {}
             cycle_atr_values: dict[str, float | None] = {}
@@ -872,6 +925,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     "reason_tags": plan["reason_tags"], "debug": plan["debug"],
                     "level_reprice": level_reprice,
                     "entry_atr": atr_for_symbol(symbol),
+                    "margin_used": float(pending_order.get("margin_required", 0.0)),
+                    "leverage": float(pending_order.get("leverage", 0.0)),
                 }
 
                 initialize_sl2_state(position)
@@ -940,6 +995,40 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 requested_exit = snapshot.closes[symbol]
                 exit_reason = None
 
+                if config.get("near_tp_reversal_enabled", True):
+                    near_tp_event = evaluate_near_tp_reversal(
+                        position=position,
+                        current_price=snapshot.closes[symbol],
+                        candle_high=snapshot.highs[symbol],
+                        candle_low=snapshot.lows[symbol],
+                        config=config,
+                    )
+                    near_tp_reversal_checks += 1
+                    if near_tp_event.get("action") == "MOVE_STOP_TO_BREAKEVEN":
+                        position["stop"] = float(near_tp_event["proposed_stop"])
+                        stop_id = (position.get("protective_order_ids") or {}).get("stop_loss")
+                        if stop_id:
+                            _update_open_order_price_quantity(
+                                int(stop_id),
+                                position["stop"],
+                                position["qty"],
+                                snapshot.timestamp,
+                                {"reason": "NEAR_TP_REVERSAL_MOVE_STOP_TO_BREAKEVEN", "near_tp_reversal": near_tp_event},
+                            )
+                        record_position_event(
+                            run_id=run_id,
+                            position=position,
+                            event_type="NEAR_TP_REVERSAL_STOP_UPDATED",
+                            event_time=snapshot.timestamp,
+                            price=position["stop"],
+                            remaining_size=position["qty"],
+                            order_id=int(stop_id) if stop_id else None,
+                            reason="NEAR_TP_REVERSAL_MOVE_STOP_TO_BREAKEVEN",
+                            details={"near_tp_reversal": near_tp_event},
+                        )
+                        near_tp_stop_updates += 1
+                        _log(run_id, "NEAR_TP_REVERSAL_STOP_UPDATED", f"{symbol} stop moved to breakeven after near-TP reversal.", {"cycle_index": cycle_index, "near_tp_reversal": near_tp_event})
+
                 defensive_sl2_active = bool(position.get("sl2_order_id") and position.get("sl2"))
                 defensive_sl2_consumed = bool(
                     position.get("defensive_sl2_consumed", False)
@@ -960,8 +1049,11 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     regime_sl2_created_this_cycle = False
                     current_regime = None
                     try:
-                        regime_decision = strategy_decision_for(symbol)
-                        current_regime = regime_decision.regime
+                        if hasattr(strategy, "current_regime"):
+                            current_regime = strategy.current_regime(symbol)
+                        else:
+                            regime_decision = strategy_decision_for(symbol)
+                            current_regime = regime_decision.regime
                     except Exception:
                         current_regime = None
 
@@ -1653,6 +1745,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                         trade_net,
                         exit_reason,
                     )
+                    guardian_state.record_completed_trade(timestamp=snapshot.timestamp, realized_pnl=trade_net, policy=guardian_policy)
                     record_position_event(
                         run_id=run_id,
                         position=position,
@@ -1695,10 +1788,28 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             performance_totals["equity_persistence_seconds"] += time.perf_counter() - equity_persistence_started_at
             performance_totals["execution_seconds"] += time.perf_counter() - execution_started_at
 
+            guardian_state.refresh(timestamp=snapshot.timestamp, equity=equity, policy=guardian_policy)
+            strategy_context.account_context.clear()
+            strategy_context.account_context.update(guardian_state.to_dict(equity=equity))
+            if hasattr(strategy, "prepare_cycle"):
+                strategy_prepare_started_at = time.perf_counter()
+                strategy.prepare_cycle(
+                    snapshot,
+                    symbols=config["symbols"],
+                    excluded_symbols=set(open_positions) | set(pending_entry_orders),
+                )
+                performance_totals["strategy_evaluation_seconds"] += time.perf_counter() - strategy_prepare_started_at
+                cycle_strategy_decisions.clear()
+
             # 3) Evaluate decisions from point-in-time snapshot.
             decision_started_at = time.perf_counter()
             cycle_decisions = []
-            for symbol in config["symbols"]:
+            decision_symbols = (
+                strategy.decision_symbol_order(config["symbols"])
+                if hasattr(strategy, "decision_symbol_order")
+                else config["symbols"]
+            )
+            for symbol in decision_symbols:
                 if symbol not in snapshot.closes:
                     continue
 
@@ -1716,10 +1827,32 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 if symbol in open_positions or symbol in pending_entry_orders:
                     continue
 
-                plan = strategy.build_entry_plan(snapshot, decision, equity, config["risk_per_trade_pct"])
+                plan = strategy.build_entry_plan(
+                    snapshot,
+                    decision,
+                    equity,
+                    dynamic_risk_pct(equity, config["risk_max_risk_pct"]),
+                )
                 if not plan:
                     continue
 
+                strategy_signal = (decision.debug.get("strategy_signal", {}) or {})
+                risk = evaluate_production_risk(
+                    plan=plan,
+                    strategy_signal=strategy_signal,
+                    equity=equity,
+                    cash_balance=cash,
+                    open_positions=open_positions,
+                    pending_entries=pending_entry_orders,
+                    guardian_state=guardian_state.to_dict(equity=equity),
+                    config=config,
+                )
+                if not risk.get("ok"):
+                    risk_rejections += 1
+                    _log(run_id, "RISK_ENTRY_REJECTED", f"{symbol} entry rejected by production risk policies.", {"cycle_index": cycle_index, "symbol": symbol, "risk": risk}, "WARNING")
+                    continue
+                plan["qty"] = float(risk["quantity"])
+                plan["debug"]["production_risk"] = risk
                 entry, side, qty = plan["entry"], plan["side"], plan["qty"]
                 planned_notional = abs(entry * qty)
 
@@ -1731,6 +1864,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     starting_capital=config["starting_capital"],
                     realized_pnl=realized_pnl,
                     open_positions=open_positions,
+                    pending_entries=pending_entry_orders,
+                    state=guardian_state,
                 )
 
                 risk_notional_requested += planned_notional
@@ -1801,6 +1936,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     status="open",
                 )
                 pending_order["order_id"] = entry_order_id
+                pending_order["margin_required"] = risk["margin_required"]
+                pending_order["leverage"] = risk["leverage"]
                 pending_entry_orders[symbol] = pending_order
                 entry_orders_submitted += 1
                 _log(run_id, "ENTRY_ORDER_SUBMITTED", f"{symbol} {side} limit entry submitted.", {"cycle_index": cycle_index, "entry": entry, "quantity": qty, "score": plan["score"], "lookahead_guard": snapshot.lookahead_guard})
@@ -1895,6 +2032,7 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                     trade_net,
                     "END_OF_BACKTEST",
                 )
+                guardian_state.record_completed_trade(timestamp=last_snapshot.timestamp, realized_pnl=trade_net, policy=guardian_policy)
                 record_position_event(
                     run_id=run_id,
                     position=position,
@@ -1984,6 +2122,10 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             "volatility_spike_checks": volatility_spike_checks,
             "volatility_spike_sl2_created": volatility_spike_sl2_created,
             "volatility_spike_sl2_fills": volatility_spike_sl2_fills,
+            "near_tp_reversal_checks": near_tp_reversal_checks,
+            "near_tp_stop_updates": near_tp_stop_updates,
+            "risk_rejections": risk_rejections,
+            "production_parity_runtime": True,
             "performance": {
                 "version": "backtest_linear_time_diagnostics_v1",
                 "history_limit": snapshot_builder.history_limit,

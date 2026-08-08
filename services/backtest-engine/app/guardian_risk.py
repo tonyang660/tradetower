@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
 @dataclass(frozen=True)
 class GuardianPolicy:
+    account_enabled: bool = True
+    account_active: bool = True
     trading_enabled: bool = True
+    manual_halt: bool = False
     read_only_mode: bool = False
     maintenance_only_mode: bool = False
-    max_concurrent_positions: int = 3
+    max_concurrent_positions: int = 5
 
     # Percent of the account-level notional cap allowed to be used.
     #
@@ -34,14 +38,19 @@ class GuardianPolicy:
 
     daily_loss_limit_pct: float = 3.0
     weekly_loss_limit_pct: float = 6.0
+    max_consecutive_losses: int = 3
+    consecutive_loss_cooldown_hours: int = 4
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "GuardianPolicy":
         return cls(
+            account_enabled=bool(config.get("guardian_account_enabled", True)),
+            account_active=bool(config.get("guardian_account_active", True)),
             trading_enabled=bool(config.get("guardian_trading_enabled", True)),
+            manual_halt=bool(config.get("guardian_manual_halt", False)),
             read_only_mode=bool(config.get("guardian_read_only_mode", False)),
             maintenance_only_mode=bool(config.get("guardian_maintenance_only_mode", False)),
-            max_concurrent_positions=int(config.get("guardian_max_concurrent_positions", 3)),
+            max_concurrent_positions=int(config.get("guardian_max_concurrent_positions", 5)),
             max_account_exposure_pct=float(config.get("guardian_max_account_exposure_pct", 80.0)),
 
             # New names. Old names remain accepted as compatibility aliases.
@@ -60,6 +69,8 @@ class GuardianPolicy:
 
             daily_loss_limit_pct=float(config.get("guardian_daily_loss_limit_pct", 3.0)),
             weekly_loss_limit_pct=float(config.get("guardian_weekly_loss_limit_pct", 6.0)),
+            max_consecutive_losses=int(config.get("guardian_max_consecutive_losses", 3)),
+            consecutive_loss_cooldown_hours=int(config.get("guardian_consecutive_loss_cooldown_hours", 4)),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -77,6 +88,79 @@ class GuardianDecision:
         return asdict(self)
 
 
+@dataclass
+class HistoricalGuardianState:
+    daily_basis_date: str | None = None
+    daily_basis_equity: float = 0.0
+    weekly_basis_start: str | None = None
+    weekly_basis_equity: float = 0.0
+    daily_kill_switch: bool = False
+    weekly_kill_switch: bool = False
+    weekly_kill_switch_expires_at: datetime | None = None
+    daily_realized_pnl: float = 0.0
+    weekly_realized_pnl: float = 0.0
+    consecutive_losses: int = 0
+    consecutive_loss_cooldown_until: datetime | None = None
+
+    @staticmethod
+    def _utc(timestamp) -> datetime:
+        value = timestamp if isinstance(timestamp, datetime) else datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def refresh(self, *, timestamp, equity: float, policy: GuardianPolicy) -> None:
+        now = self._utc(timestamp)
+        day = now.date().isoformat()
+        week_start = (now.date() - timedelta(days=now.weekday())).isoformat()
+        if self.daily_basis_date != day:
+            self.daily_basis_date = day
+            self.daily_basis_equity = float(equity)
+            self.daily_realized_pnl = 0.0
+            self.daily_kill_switch = False
+        if self.weekly_basis_start != week_start:
+            self.weekly_basis_start = week_start
+            self.weekly_basis_equity = float(equity)
+            self.weekly_realized_pnl = 0.0
+            self.weekly_kill_switch = False
+            self.weekly_kill_switch_expires_at = None
+        if self.weekly_kill_switch_expires_at and now >= self.weekly_kill_switch_expires_at:
+            self.weekly_kill_switch = False
+            self.weekly_kill_switch_expires_at = None
+        if self.consecutive_loss_cooldown_until and now >= self.consecutive_loss_cooldown_until:
+            self.consecutive_losses = 0
+            self.consecutive_loss_cooldown_until = None
+        if self.daily_basis_equity - equity >= self.daily_basis_equity * policy.daily_loss_limit_pct / 100.0:
+            self.daily_kill_switch = True
+        if self.weekly_basis_equity - equity >= self.weekly_basis_equity * policy.weekly_loss_limit_pct / 100.0:
+            self.weekly_kill_switch = True
+            sunday_end = now + timedelta(days=6 - now.weekday())
+            sunday_end = sunday_end.replace(hour=23, minute=59, second=59, microsecond=999999)
+            self.weekly_kill_switch_expires_at = min(now + timedelta(hours=48), sunday_end)
+
+    def record_completed_trade(self, *, timestamp, realized_pnl: float, policy: GuardianPolicy) -> None:
+        now = self._utc(timestamp)
+        self.daily_realized_pnl += float(realized_pnl)
+        self.weekly_realized_pnl += float(realized_pnl)
+        if realized_pnl < 0:
+            self.consecutive_losses += 1
+            if self.consecutive_losses >= policy.max_consecutive_losses:
+                self.consecutive_loss_cooldown_until = now + timedelta(hours=policy.consecutive_loss_cooldown_hours)
+        else:
+            self.consecutive_losses = 0
+            self.consecutive_loss_cooldown_until = None
+
+    def to_dict(self, *, equity: float) -> dict[str, Any]:
+        return {
+            **asdict(self),
+            "equity": float(equity),
+            "weekly_pnl": self.weekly_realized_pnl,
+            "daily_pnl": self.daily_realized_pnl,
+            "daily_drawdown_active": self.daily_kill_switch,
+            "in_drawdown": self.daily_kill_switch or self.weekly_kill_switch,
+        }
+
+
 def evaluate_entry_guard(
     *,
     policy: GuardianPolicy,
@@ -86,11 +170,22 @@ def evaluate_entry_guard(
     starting_capital: float,
     realized_pnl: float,
     open_positions: dict[str, dict[str, Any]],
+    pending_entries: dict[str, dict[str, Any]] | None = None,
+    state: HistoricalGuardianState | None = None,
 ) -> GuardianDecision:
     reasons: list[str] = []
 
+    if not policy.account_enabled:
+        reasons.append("ACCOUNT_DISABLED")
+
+    if not policy.account_active:
+        reasons.append("ACCOUNT_INACTIVE")
+
     if not policy.trading_enabled:
         reasons.append("TRADING_DISABLED")
+
+    if policy.manual_halt:
+        reasons.append("MANUAL_HALT")
 
     if policy.read_only_mode:
         reasons.append("READ_ONLY_MODE")
@@ -103,6 +198,17 @@ def evaluate_entry_guard(
 
     if len(open_positions) >= policy.max_concurrent_positions:
         reasons.append("MAX_CONCURRENT_POSITIONS")
+
+    if symbol in (pending_entries or {}):
+        reasons.append("SYMBOL_ALREADY_HAS_PENDING_ORDER")
+
+    if state is not None:
+        if state.daily_kill_switch:
+            reasons.append("DAILY_KILL_SWITCH")
+        if state.weekly_kill_switch:
+            reasons.append("WEEKLY_KILL_SWITCH")
+        if state.consecutive_loss_cooldown_until is not None:
+            reasons.append("CONSECUTIVE_LOSS_COOLDOWN")
 
     if planned_notional <= 0:
         reasons.append("INVALID_NOTIONAL")
@@ -148,14 +254,6 @@ def evaluate_entry_guard(
 
     realized_loss_pct = max(0.0, -realized_pnl / starting_capital * 100.0) if starting_capital > 0 else 0.0
 
-    # Phase 14D does not yet segment calendar days/weeks. It uses cumulative
-    # run-to-date realized loss as a conservative first guardian simulation.
-    if realized_loss_pct >= policy.daily_loss_limit_pct:
-        reasons.append("DAILY_LOSS_LIMIT")
-
-    if realized_loss_pct >= policy.weekly_loss_limit_pct:
-        reasons.append("WEEKLY_LOSS_LIMIT")
-
     details = {
         "symbol": symbol,
 
@@ -179,6 +277,8 @@ def evaluate_entry_guard(
         "realized_pnl": realized_pnl,
         "realized_loss_pct": realized_loss_pct,
         "open_position_count": len(open_positions),
+        "pending_entry_count": len(pending_entries or {}),
+        "historical_guardian_state": state.to_dict(equity=equity) if state is not None else None,
         "policy": policy.to_dict(),
     }
 

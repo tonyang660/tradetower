@@ -35,7 +35,7 @@ type PageTab = "run" | "results" | "history";
 
 const DEFAULT_CONFIG: BacktestRunConfig = {
   strategy_name: "tradetower_baseline_v1",
-  strategy_version: "0.2.0",
+  strategy_version: "1.0.0",
   symbols: ["BTCUSDT", "ETHUSDT"],
   timeframes: ["5m", "15m", "1h", "4h"],
   cycle_timeframe: "5m",

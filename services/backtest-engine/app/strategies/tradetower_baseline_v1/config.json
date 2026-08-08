@@ -1,11 +1,11 @@
 {
   "strategy_name": "tradetower_baseline_v1",
-  "strategy_version": "0.2.0",
+  "strategy_version": "1.0.0",
   "schema_version": "strategy_config_v1",
   "created_in_phase": "16F",
-  "status": "phase16f_feature_candidate_strategy_parity",
+  "status": "production_source_runtime_parity",
   "strategy_family": "production_parity",
-  "description": "Production-parity TradeTower baseline using Feature Factory v2, Candidate Filter v2, and Strategy Engine v1 parity modules.",
+  "description": "Backtest baseline executing exact production Feature Factory, Candidate Filter, and Strategy Engine policy modules through isolated adapters.",
   "parity_target": {
     "production_service": "services/strategy-engine",
     "pipeline": [
@@ -18,9 +18,9 @@
       "v1_trade_levels",
       "v1_decision_policy"
     ],
-    "current_phase": "16F",
-    "parity_status": "implemented_for_signal_generation",
-    "note": "Execution lifecycle features such as adaptive stop movement remain Phase 18."
+    "current_phase": "production_parity_hf1",
+    "parity_status": "exact_production_source_runtime",
+    "note": "Production service source is copied read-only into the backtest image; production files and state are not modified."
   },
   "timeframe_roles": {
     "entry": "5m",
@@ -31,11 +31,10 @@
   "required_timeframes": [
     "5m",
     "15m",
+    "1h",
     "4h"
   ],
-  "optional_timeframes": [
-    "1h"
-  ],
+  "optional_timeframes": [],
   "active_phase_timeframes": [
     "5m",
     "15m",

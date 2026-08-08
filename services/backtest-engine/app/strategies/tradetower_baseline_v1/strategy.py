@@ -2,8 +2,9 @@ from __future__ import annotations
 from typing import Any
 
 from market_snapshot import MarketSnapshot
-from parity.feature_factory_v2 import build_market_snapshot_v2
-from parity.production_parity import analyze_market_snapshot_v2
+from parity.production_candidate_filter import rank_market_snapshots
+from parity.production_feature_factory import build_market_snapshot_v2
+from parity.production_strategy_engine import analyze_market_snapshot_v2
 from strategies.base import (
     StrategyContext,
     StrategyDecision,
@@ -16,17 +17,17 @@ from strategies.base import (
 class TradeTowerBaselineV1Strategy:
     metadata = StrategyMetadata(
         name='tradetower_baseline_v1',
-        version='0.2.0',
+        version='1.0.0',
         family='production_parity',
-        description='Phase 16F Feature Factory + Candidate Filter + Strategy Engine parity layer.',
-        required_timeframes=['5m', '15m', '4h'],
+        description='Backtest adapter over exact production Feature Factory, Candidate Filter, and Strategy Engine policies.',
+        required_timeframes=['5m', '15m', '1h', '4h'],
         required_indicators=[
             'market_snapshot_v2',
             'candidate_filter_v2',
             'strategy_signal_v2',
         ],
         tags=[
-            'phase16f',
+            'production_source_runtime',
             'production_parity',
             'feature_factory',
             'candidate_filter',
@@ -36,6 +37,9 @@ class TradeTowerBaselineV1Strategy:
 
     def __init__(self, config: dict[str, Any] | None = None):
         self.config = config or {}
+        self._cycle_timestamp = None
+        self._market_snapshots: dict[str, dict[str, Any]] = {}
+        self._candidate_payload: dict[str, Any] = {"by_symbol": {}}
 
     def _timeframe_rows(self, snapshot: MarketSnapshot, symbol: str):
         # Preferred future shape from cycle simulator: snapshot.timeframe_history[symbol][timeframe]
@@ -58,6 +62,40 @@ class TradeTowerBaselineV1Strategy:
             
         return {'5m': rows, '15m': rows, '1h': rows, '4h': rows}
 
+    def prepare_cycle(
+        self,
+        snapshot: MarketSnapshot,
+        *,
+        symbols: list[str],
+        excluded_symbols: set[str] | None = None,
+    ) -> dict[str, Any]:
+        if self._cycle_timestamp != snapshot.timestamp:
+            self._cycle_timestamp = snapshot.timestamp
+            self._market_snapshots = {
+                str(symbol).upper(): build_market_snapshot_v2(
+                    str(symbol).upper(),
+                    self._timeframe_rows(snapshot, str(symbol).upper()),
+                    timestamp=snapshot.timestamp,
+                )
+                for symbol in symbols
+                if str(symbol).upper() in snapshot.closes
+            }
+        self._candidate_payload = rank_market_snapshots(
+            self._market_snapshots,
+            excluded_symbols=excluded_symbols,
+        )
+        return self._candidate_payload
+
+    def current_regime(self, symbol: str) -> str | None:
+        snapshot = self._market_snapshots.get(str(symbol).upper()) or {}
+        primary = ((snapshot.get('timeframes', {}) or {}).get('15m', {}) or {})
+        return (primary.get('regime_inputs', {}) or {}).get('v1_regime')
+
+    def decision_symbol_order(self, symbols: list[str]) -> list[str]:
+        selected = [item['symbol'] for item in (self._candidate_payload.get('candidates', []) or [])]
+        selected_set = set(selected)
+        return selected + [str(symbol).upper() for symbol in symbols if str(symbol).upper() not in selected_set]
+
     def evaluate_symbol(
         self,
         snapshot: MarketSnapshot,
@@ -65,11 +103,29 @@ class TradeTowerBaselineV1Strategy:
         context: StrategyContext | None = None,
     ) -> StrategyDecision:
         symbol = str(symbol).upper()
-        ms = build_market_snapshot_v2(
-            symbol,
-            self._timeframe_rows(snapshot, symbol),
-            timestamp=snapshot.timestamp,
-        )
+        if self._cycle_timestamp != snapshot.timestamp or symbol not in self._market_snapshots:
+            self.prepare_cycle(snapshot, symbols=list(snapshot.symbols))
+        ms = self._market_snapshots[symbol]
+        candidate = (self._candidate_payload.get('by_symbol', {}) or {}).get(symbol)
+
+        if candidate is None:
+            return StrategyDecision(
+                symbol=symbol,
+                action='skip',
+                side='neutral',
+                score=0.0,
+                confidence=0.0,
+                regime='unknown',
+                macro_bias='neutral',
+                selected_strategy='none',
+                reason='CANDIDATE_FILTER_NOT_SELECTED',
+                reason_tags=['CANDIDATE_FILTER_NOT_SELECTED'],
+                debug={
+                    'market_snapshot_v2': ms,
+                    'candidate_filter_payload': self._candidate_payload,
+                    'production_parity_version': 'production_source_runtime_v1',
+                },
+            )
         
         acct = {}
         if context and getattr(context, 'account_context', None):
@@ -81,11 +137,16 @@ class TradeTowerBaselineV1Strategy:
             'strategy_observe_threshold': self.config.get('strategy_observe_threshold', 50),
         })
 
-        signal = analyze_market_snapshot_v2(symbol, ms, account_context=acct)
+        signal = analyze_market_snapshot_v2(
+            symbol,
+            ms,
+            account_context=acct,
+            candidate_filter_context=candidate,
+        )
         side = signal.get('decision_side')
         action = (
             'enter'
-            if signal.get('decision') == 'trade_candidate' and side in ('long', 'short')
+            if signal.get('v2_decision') == 'trade_candidate' and side in ('long', 'short')
             else 'skip'
         )
 
@@ -103,8 +164,8 @@ class TradeTowerBaselineV1Strategy:
             debug={
                 'strategy_signal': signal,
                 'market_snapshot_v2': ms,
-                'candidate_filter_context': signal.get('candidate_filter_context'),
-                'production_parity_version': 'phase16f_feature_candidate_strategy_parity',
+                'candidate_filter_context': candidate,
+                'production_parity_version': 'production_source_runtime_v1',
             },
         )
 

@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
 from datasets.local_dataset import LOCAL_DATASET_ADAPTER_VERSION, LocalCandle, load_candles, validate_local_dataset_request
+
+TIMEFRAME_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}
+PRODUCTION_FEATURE_WARMUP_ROWS = 72
 
 @dataclass(frozen=True)
 class LocalFeedPreflight:
@@ -73,38 +76,72 @@ class LocalHistoricalDatasetFeed:
             self._candles[symbol] = {}
             self._cursor_indices[symbol] = {}
             for timeframe in self.timeframes:
+                requested_start = self.start_time
+                if requested_start is not None:
+                    requested_start = requested_start if isinstance(requested_start, datetime) else datetime.fromisoformat(str(requested_start).replace("Z", "+00:00"))
+                    if requested_start.tzinfo is None:
+                        requested_start = requested_start.replace(tzinfo=timezone.utc)
+                    requested_start = requested_start - timedelta(
+                        minutes=TIMEFRAME_MINUTES.get(timeframe, 5) * PRODUCTION_FEATURE_WARMUP_ROWS
+                    )
                 self._candles[symbol][timeframe] = load_candles(
                     dataset_id=self.dataset_id,
                     symbol=symbol,
                     timeframe=timeframe,
-                    start_time=self.start_time,
+                    start_time=requested_start,
                     end_time=self.end_time,
                 )
                 self._cursor_indices[symbol][timeframe] = -1
-        cycle_rows = []
-        for symbol in self.symbols:
-            rows = self._candles.get(symbol, {}).get(self.cycle_timeframe, [])
-            if rows:
-                cycle_rows = rows
-                break
-        self._cycle_timestamps = [row.timestamp for row in cycle_rows]
+        cycle_rows = [
+            row
+            for symbol in self.symbols
+            for row in self._candles.get(symbol, {}).get(self.cycle_timeframe, [])
+        ]
+        start = self.start_time
+        if start is not None and not isinstance(start, datetime):
+            start = datetime.fromisoformat(str(start).replace("Z", "+00:00"))
+        if isinstance(start, datetime) and start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        self._cycle_timestamps = sorted({
+            row.timestamp for row in cycle_rows
+            if start is None or row.timestamp >= start
+        })
         if self.max_cycles > 0:
             self._cycle_timestamps = self._cycle_timestamps[:self.max_cycles]
 
-    def _latest_at_or_before_cursor(self, symbol: str, timeframe: str, ts: datetime) -> LocalCandle | None:
+    def _latest_closed_cursor(self, symbol: str, timeframe: str, ts: datetime) -> LocalCandle | None:
         rows = self._candles[symbol][timeframe]
         index = self._cursor_indices[symbol][timeframe]
+        cycle_close = ts + timedelta(minutes=TIMEFRAME_MINUTES.get(self.cycle_timeframe, 5))
+        timeframe_delta = timedelta(minutes=TIMEFRAME_MINUTES.get(timeframe, 5))
 
         # Iteration is normally monotonic. Reset only if this feed instance is
         # explicitly rewound and iterated again.
-        if index >= 0 and rows[index].timestamp > ts:
+        if index >= 0 and rows[index].timestamp + timeframe_delta > cycle_close:
             index = -1
 
-        while index + 1 < len(rows) and rows[index + 1].timestamp <= ts:
+        while index + 1 < len(rows) and rows[index + 1].timestamp + timeframe_delta <= cycle_close:
             index += 1
 
         self._cursor_indices[symbol][timeframe] = index
-        return rows[index] if index >= 0 else None
+        selected = rows[index] if index >= 0 else None
+        if timeframe == self.cycle_timeframe and (selected is None or selected.timestamp != ts):
+            return None
+        return selected
+
+    def bootstrap_history(self) -> list[LocalCandle]:
+        """Rows fully closed before the first simulated decision candle opens."""
+        self._load()
+        if not self._cycle_timestamps:
+            return []
+        first_cycle = self._cycle_timestamps[0]
+        history: list[LocalCandle] = []
+        for symbol in self.symbols:
+            for timeframe in self.timeframes:
+                delta = timedelta(minutes=TIMEFRAME_MINUTES.get(timeframe, 5))
+                rows = [row for row in self._candles[symbol][timeframe] if row.timestamp + delta <= first_cycle]
+                history.extend(rows[-PRODUCTION_FEATURE_WARMUP_ROWS:])
+        return sorted(history, key=lambda row: (row.timestamp, row.symbol, row.timeframe))
 
     def iter_cycles(self) -> Iterator[list[Any]]:
         self._load()
@@ -117,7 +154,7 @@ class LocalHistoricalDatasetFeed:
             ordered_timeframes = [self.cycle_timeframe] + [tf for tf in self.timeframes if tf != self.cycle_timeframe]
             for symbol in self.symbols:
                 for timeframe in ordered_timeframes:
-                    row = self._latest_at_or_before_cursor(symbol, timeframe, ts)
+                    row = self._latest_closed_cursor(symbol, timeframe, ts)
                     if row is not None:
                         cycle.append(row)
             yield cycle
@@ -133,4 +170,7 @@ class LocalHistoricalDatasetFeed:
             "cycle_count": len(self._cycle_timestamps),
             "first_cycle": self._cycle_timestamps[0].isoformat() if self._cycle_timestamps else None,
             "last_cycle": self._cycle_timestamps[-1].isoformat() if self._cycle_timestamps else None,
+            "candle_availability": "close_time_lte_cycle_close",
+            "cycle_rows_require_exact_open_time": True,
+            "bootstrap_rows": len(self.bootstrap_history()),
         }
