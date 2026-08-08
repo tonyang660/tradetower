@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -2266,10 +2267,32 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
         return {"ok": True, "run_id": run_id, "summary": summary, "diagnostics": diagnostics, "preflight": preflight.to_dict(), "config": config}
 
     except Exception as exc:
+        exception_type = type(exc).__name__
+        exception_message = str(exc) or repr(exc)
+        error_text = f"{exception_type}: {exception_message}"
+        failure_context = {
+            "cycle_index": locals().get("cycle_index"),
+            "cycle_count": cycle_count,
+            "snapshot_timestamp": last_snapshot.timestamp.isoformat() if last_snapshot is not None else None,
+        }
         with get_conn() as conn, conn.cursor() as cur:
-            cur.execute("UPDATE backtest_runs SET status='failed', completed_at=NOW(), error=%s WHERE run_id=%s", (str(exc), run_id))
-        _log(run_id, "BACKTEST_FAILED", str(exc), config, "ERROR")
-        return {"ok": False, "run_id": run_id, "error": str(exc), "config": config, "preflight": preflight.to_dict()}
+            cur.execute("UPDATE backtest_runs SET status='failed', completed_at=NOW(), error=%s WHERE run_id=%s", (error_text, run_id))
+        _log(run_id, "BACKTEST_FAILED", error_text, {
+            "exception_type": exception_type,
+            "exception_message": exception_message,
+            "traceback": traceback.format_exc(),
+            "failure_context": failure_context,
+            "config": config,
+        }, "ERROR")
+        return {
+            "ok": False,
+            "run_id": run_id,
+            "error": error_text,
+            "exception_type": exception_type,
+            "failure_context": failure_context,
+            "config": config,
+            "preflight": preflight.to_dict(),
+        }
 
     finally:
         try:

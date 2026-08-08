@@ -16,6 +16,31 @@ from strategies.base import (
 )
 
 
+def production_take_profit_prices(take_profits: Any, entry_price: float) -> tuple[float, float, float]:
+    """Normalize the production keyed TP contract without changing its values."""
+    if isinstance(take_profits, dict):
+        ordered = [
+            take_profits.get('tp1'),
+            take_profits.get('tp2'),
+            take_profits.get('tp3'),
+        ]
+    elif isinstance(take_profits, (list, tuple)):
+        ordered = list(take_profits[:3])
+    else:
+        ordered = []
+
+    prices: list[float] = []
+    fallback = float(entry_price)
+    for item in ordered:
+        if isinstance(item, dict) and item.get('price') is not None:
+            fallback = float(item['price'])
+        prices.append(fallback)
+
+    while len(prices) < 3:
+        prices.append(prices[-1] if prices else fallback)
+    return prices[0], prices[1], prices[2]
+
+
 class TradeTowerBaselineV1Strategy:
     metadata = StrategyMetadata(
         name='tradetower_baseline_v1',
@@ -280,10 +305,10 @@ class TradeTowerBaselineV1Strategy:
         if qty <= 0:
             return None
 
-        tps = trade.get('take_profits') or []
-        tp1 = float(tps[0]['price']) if len(tps) > 0 else entry
-        tp2 = float(tps[1]['price']) if len(tps) > 1 else tp1
-        tp3 = float(tps[2]['price']) if len(tps) > 2 else tp2
+        tp1, tp2, tp3 = production_take_profit_prices(
+            trade.get('take_profits'),
+            entry,
+        )
 
         return {
             'symbol': decision.symbol,
