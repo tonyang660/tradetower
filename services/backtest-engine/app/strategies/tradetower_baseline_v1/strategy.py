@@ -1,9 +1,11 @@
 from __future__ import annotations
+from concurrent.futures import ThreadPoolExecutor
+import time
 from typing import Any
 
 from market_snapshot import MarketSnapshot
 from parity.production_candidate_filter import rank_market_snapshots
-from parity.production_feature_factory import build_market_snapshot_v2
+from parity.production_feature_factory import ProductionFeatureSnapshotCache
 from parity.production_strategy_engine import analyze_market_snapshot_v2
 from strategies.base import (
     StrategyContext,
@@ -40,6 +42,19 @@ class TradeTowerBaselineV1Strategy:
         self._cycle_timestamp = None
         self._market_snapshots: dict[str, dict[str, Any]] = {}
         self._candidate_payload: dict[str, Any] = {"by_symbol": {}}
+        self._feature_cache = ProductionFeatureSnapshotCache()
+        requested_workers = max(1, int(self.config.get('backtest_feature_workers', 1) or 1))
+        symbol_count = max(1, len(self.config.get('symbols', []) or []))
+        self._feature_workers = min(8, requested_workers, symbol_count)
+        self._feature_executor = (
+            ThreadPoolExecutor(
+                max_workers=self._feature_workers,
+                thread_name_prefix='backtest-production-feature',
+            )
+            if self._feature_workers > 1
+            else None
+        )
+        self._last_feature_diagnostics: dict[str, Any] = {}
 
     def _timeframe_rows(self, snapshot: MarketSnapshot, symbol: str):
         # Preferred future shape from cycle simulator: snapshot.timeframe_history[symbol][timeframe]
@@ -62,6 +77,90 @@ class TradeTowerBaselineV1Strategy:
             
         return {'5m': rows, '15m': rows, '1h': rows, '4h': rows}
 
+    def prepare_features(
+        self,
+        snapshot: MarketSnapshot,
+        *,
+        symbols: list[str],
+    ) -> dict[str, Any]:
+        if self._cycle_timestamp == snapshot.timestamp:
+            return {
+                'cycle_snapshot_reused': True,
+                'symbols': len(self._market_snapshots),
+                'workers': self._feature_workers,
+                'blocks_built': 0,
+                'blocks_reused': 0,
+                'compute_seconds': 0.0,
+                'wall_seconds': 0.0,
+                'by_timeframe': {},
+            }
+
+        started_at = time.perf_counter()
+        selected_symbols = [
+            str(symbol).upper()
+            for symbol in symbols
+            if str(symbol).upper() in snapshot.closes
+        ]
+
+        def build_symbol(symbol: str):
+            market_snapshot, diagnostics = self._feature_cache.build_market_snapshot_v2(
+                symbol,
+                self._timeframe_rows(snapshot, symbol),
+                timestamp=snapshot.timestamp,
+            )
+            return symbol, market_snapshot, diagnostics
+
+        if self._feature_executor is not None and len(selected_symbols) > 1:
+            results = list(self._feature_executor.map(build_symbol, selected_symbols))
+        else:
+            results = [build_symbol(symbol) for symbol in selected_symbols]
+
+        self._cycle_timestamp = snapshot.timestamp
+        self._market_snapshots = {
+            symbol: market_snapshot
+            for symbol, market_snapshot, _ in results
+        }
+
+        by_timeframe: dict[str, dict[str, float | int]] = {}
+        blocks_built = 0
+        blocks_reused = 0
+        compute_seconds = 0.0
+        for _, _, diagnostics in results:
+            blocks_built += int(diagnostics.get('blocks_built', 0))
+            blocks_reused += int(diagnostics.get('blocks_reused', 0))
+            compute_seconds += float(diagnostics.get('compute_seconds', 0.0))
+            for timeframe, values in (diagnostics.get('by_timeframe', {}) or {}).items():
+                aggregate = by_timeframe.setdefault(
+                    timeframe,
+                    {'built': 0, 'reused': 0, 'compute_seconds': 0.0},
+                )
+                aggregate['built'] += int(values.get('built', 0))
+                aggregate['reused'] += int(values.get('reused', 0))
+                aggregate['compute_seconds'] += float(values.get('compute_seconds', 0.0))
+
+        self._last_feature_diagnostics = {
+            'cycle_snapshot_reused': False,
+            'symbols': len(results),
+            'workers': self._feature_workers,
+            'blocks_built': blocks_built,
+            'blocks_reused': blocks_reused,
+            'compute_seconds': compute_seconds,
+            'wall_seconds': time.perf_counter() - started_at,
+            'by_timeframe': by_timeframe,
+        }
+        return self._last_feature_diagnostics
+
+    def rank_candidates(
+        self,
+        *,
+        excluded_symbols: set[str] | None = None,
+    ) -> dict[str, Any]:
+        self._candidate_payload = rank_market_snapshots(
+            self._market_snapshots,
+            excluded_symbols=excluded_symbols,
+        )
+        return self._candidate_payload
+
     def prepare_cycle(
         self,
         snapshot: MarketSnapshot,
@@ -69,22 +168,14 @@ class TradeTowerBaselineV1Strategy:
         symbols: list[str],
         excluded_symbols: set[str] | None = None,
     ) -> dict[str, Any]:
-        if self._cycle_timestamp != snapshot.timestamp:
-            self._cycle_timestamp = snapshot.timestamp
-            self._market_snapshots = {
-                str(symbol).upper(): build_market_snapshot_v2(
-                    str(symbol).upper(),
-                    self._timeframe_rows(snapshot, str(symbol).upper()),
-                    timestamp=snapshot.timestamp,
-                )
-                for symbol in symbols
-                if str(symbol).upper() in snapshot.closes
-            }
-        self._candidate_payload = rank_market_snapshots(
-            self._market_snapshots,
-            excluded_symbols=excluded_symbols,
-        )
-        return self._candidate_payload
+        """Compatibility entrypoint for callers that do not split the stages."""
+        self.prepare_features(snapshot, symbols=symbols)
+        return self.rank_candidates(excluded_symbols=excluded_symbols)
+
+    def close(self) -> None:
+        if self._feature_executor is not None:
+            self._feature_executor.shutdown(wait=True)
+            self._feature_executor = None
 
     def current_regime(self, symbol: str) -> str | None:
         snapshot = self._market_snapshots.get(str(symbol).upper()) or {}

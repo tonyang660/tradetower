@@ -35,6 +35,44 @@ def _json(value: Any) -> str:
     return json.dumps(value, default=str)
 
 
+def _compact_cycle_decision_debug(debug: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep routine cycle logs useful without persisting full candle snapshots."""
+    debug = debug or {}
+    signal = debug.get("strategy_signal", {}) or {}
+    candidate = debug.get("candidate_filter_context", {}) or {}
+    market_snapshot = debug.get("market_snapshot_v2", {}) or {}
+    snapshot_meta = market_snapshot.get("snapshot_meta", {}) or {}
+    data_quality = market_snapshot.get("data_quality", {}) or {}
+    return {
+        "production_parity_version": debug.get("production_parity_version"),
+        "snapshot": {
+            "schema_version": market_snapshot.get("schema_version"),
+            "timestamp": market_snapshot.get("snapshot_timestamp"),
+            "feature_factory_version": snapshot_meta.get("feature_factory_version"),
+            "adapter_version": snapshot_meta.get("backtest_adapter_version"),
+            "data_quality_healthy": data_quality.get("healthy"),
+        },
+        "candidate": {
+            "selected": bool(candidate),
+            "score": candidate.get("candidate_score"),
+            "tier": candidate.get("candidate_tier"),
+            "bias": candidate.get("candidate_bias"),
+            "reason_tags": candidate.get("reason_tags", []),
+        },
+        "strategy_signal": {
+            "decision": signal.get("v2_decision", signal.get("decision")),
+            "side": signal.get("decision_side"),
+            "score": signal.get("score"),
+            "confidence": signal.get("confidence"),
+            "regime": signal.get("regime"),
+            "selected_strategy": signal.get("selected_strategy"),
+            "reason": signal.get("reason"),
+            "reason_tags": signal.get("reason_tags", []),
+            "adapter_version": signal.get("backtest_adapter_version"),
+        },
+    }
+
+
 
 def _normalize_backtest_timeline_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Force production-parity backtest clocking.
@@ -154,6 +192,7 @@ def _normalize_config(payload: dict[str, Any]) -> dict[str, Any]:
         "preflight_strict": bool(payload.get("preflight_strict", True)),
         "warmup_required_bars": int(payload.get("warmup_required_bars", 8)),
         "cycle_decision_log_interval": int(payload.get("cycle_decision_log_interval", 25)),
+        "backtest_feature_workers": max(1, min(8, int(payload.get("backtest_feature_workers", 1) or 1))),
         "strategy_validation_strict_timeframes": bool(payload.get("strategy_validation_strict_timeframes", False)),
         "guardian_account_enabled": bool(payload.get("guardian_account_enabled", True)),
         "guardian_account_active": bool(payload.get("guardian_account_active", True)),
@@ -763,10 +802,20 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
         "snapshot_seconds": 0.0,
         "execution_seconds": 0.0,
         "equity_persistence_seconds": 0.0,
+        "production_feature_wall_seconds": 0.0,
+        "production_feature_compute_seconds": 0.0,
+        "candidate_filter_seconds": 0.0,
+        "strategy_engine_seconds": 0.0,
         "strategy_evaluation_seconds": 0.0,
         "atr_seconds": 0.0,
         "decision_seconds": 0.0,
+        "cycle_log_seconds": 0.0,
         "cycle_seconds": 0.0,
+    }
+    feature_cache_totals = {
+        "blocks_built": 0,
+        "blocks_reused": 0,
+        "by_timeframe": {},
     }
     performance_batch_cycles = 0
     performance_batch_seconds = 0.0
@@ -803,7 +852,29 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             guardian_state.refresh(timestamp=snapshot.timestamp, equity=provisional_equity, policy=guardian_policy)
             strategy_context.account_context.clear()
             strategy_context.account_context.update(guardian_state.to_dict(equity=provisional_equity))
-            if hasattr(strategy, "prepare_cycle"):
+            if hasattr(strategy, "prepare_features"):
+                strategy_prepare_started_at = time.perf_counter()
+                feature_diagnostics = strategy.prepare_features(
+                    snapshot,
+                    symbols=config["symbols"],
+                )
+                feature_wall_seconds = time.perf_counter() - strategy_prepare_started_at
+                performance_totals["production_feature_wall_seconds"] += feature_wall_seconds
+                performance_totals["production_feature_compute_seconds"] += float(
+                    (feature_diagnostics or {}).get("compute_seconds", feature_wall_seconds)
+                )
+                performance_totals["strategy_evaluation_seconds"] += feature_wall_seconds
+                feature_cache_totals["blocks_built"] += int((feature_diagnostics or {}).get("blocks_built", 0))
+                feature_cache_totals["blocks_reused"] += int((feature_diagnostics or {}).get("blocks_reused", 0))
+                for timeframe, values in ((feature_diagnostics or {}).get("by_timeframe", {}) or {}).items():
+                    aggregate = feature_cache_totals["by_timeframe"].setdefault(
+                        timeframe,
+                        {"built": 0, "reused": 0, "compute_seconds": 0.0},
+                    )
+                    aggregate["built"] += int(values.get("built", 0))
+                    aggregate["reused"] += int(values.get("reused", 0))
+                    aggregate["compute_seconds"] += float(values.get("compute_seconds", 0.0))
+            elif hasattr(strategy, "prepare_cycle"):
                 strategy_prepare_started_at = time.perf_counter()
                 strategy.prepare_cycle(
                     snapshot,
@@ -823,7 +894,9 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                         symbol,
                         strategy_context,
                     )
-                    performance_totals["strategy_evaluation_seconds"] += time.perf_counter() - strategy_started_at
+                    strategy_seconds = time.perf_counter() - strategy_started_at
+                    performance_totals["strategy_engine_seconds"] += strategy_seconds
+                    performance_totals["strategy_evaluation_seconds"] += strategy_seconds
                 return cycle_strategy_decisions[symbol]
 
             def atr_for_symbol(symbol: str) -> float | None:
@@ -1791,7 +1864,16 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             guardian_state.refresh(timestamp=snapshot.timestamp, equity=equity, policy=guardian_policy)
             strategy_context.account_context.clear()
             strategy_context.account_context.update(guardian_state.to_dict(equity=equity))
-            if hasattr(strategy, "prepare_cycle"):
+            if hasattr(strategy, "rank_candidates"):
+                candidate_started_at = time.perf_counter()
+                strategy.rank_candidates(
+                    excluded_symbols=set(open_positions) | set(pending_entry_orders),
+                )
+                candidate_seconds = time.perf_counter() - candidate_started_at
+                performance_totals["candidate_filter_seconds"] += candidate_seconds
+                performance_totals["strategy_evaluation_seconds"] += candidate_seconds
+                cycle_strategy_decisions.clear()
+            elif hasattr(strategy, "prepare_cycle"):
                 strategy_prepare_started_at = time.perf_counter()
                 strategy.prepare_cycle(
                     snapshot,
@@ -1821,7 +1903,8 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                 cycle_decisions.append({
                     "symbol": decision.symbol, "action": decision.action, "side": decision.side,
                     "reason": decision.reason, "score": decision.score, "confidence": decision.confidence,
-                    "reason_tags": decision.reason_tags, "debug": decision.debug,
+                    "reason_tags": decision.reason_tags,
+                    "diagnostics": _compact_cycle_decision_debug(decision.debug),
                 })
 
                 if symbol in open_positions or symbol in pending_entry_orders:
@@ -1950,10 +2033,13 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             performance_batch_seconds += cycle_seconds
 
             if cycle_index < 3 or cycle_index % max(1, config["cycle_decision_log_interval"]) == 0:
+                cycle_log_started_at = time.perf_counter()
                 _log(run_id, "CYCLE_DECISIONS", "Cycle decisions recorded.", {
                     "cycle_index": cycle_index, "timestamp": snapshot.timestamp.isoformat(),
                     "equity": equity, "open_positions": list(open_positions.keys()),
-                    "snapshot": snapshot.to_log_dict(), "decisions": cycle_decisions,
+                    "snapshot": snapshot.to_log_dict(),
+                    "decision_debug_mode": "compact_production_parity_refs",
+                    "decisions": cycle_decisions,
                     "performance": {
                         "latest_cycle_ms": round(cycle_seconds * 1000.0, 3),
                         "batch_average_cycle_ms": round(
@@ -1968,8 +2054,25 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
                             symbol: {timeframe: len(rows) for timeframe, rows in timeframe_rows.items()}
                             for symbol, timeframe_rows in snapshot.timeframe_history.items()
                         },
+                        "production_feature_cache": {
+                            "workers": config["backtest_feature_workers"],
+                            "blocks_built": feature_cache_totals["blocks_built"],
+                            "blocks_reused": feature_cache_totals["blocks_reused"],
+                        },
+                        "stage_total_seconds": {
+                            key: round(performance_totals[key], 6)
+                            for key in (
+                                "production_feature_wall_seconds",
+                                "production_feature_compute_seconds",
+                                "candidate_filter_seconds",
+                                "strategy_engine_seconds",
+                                "equity_persistence_seconds",
+                                "cycle_log_seconds",
+                            )
+                        },
                     },
                 })
+                performance_totals["cycle_log_seconds"] += time.perf_counter() - cycle_log_started_at
                 performance_batch_cycles = 0
                 performance_batch_seconds = 0.0
 
@@ -2127,11 +2230,27 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
             "risk_rejections": risk_rejections,
             "production_parity_runtime": True,
             "performance": {
-                "version": "backtest_linear_time_diagnostics_v1",
+                "version": "backtest_production_parity_performance_v2",
                 "history_limit": snapshot_builder.history_limit,
                 "strategy_evaluations_cached_per_symbol_cycle": True,
                 "atr_cached_per_symbol_cycle": True,
                 "equity_connection_reused": True,
+                "production_feature_timeframe_cache": True,
+                "candidate_filter_ranked_once_per_cycle": True,
+                "routine_cycle_log_mode": "compact_production_parity_refs",
+                "production_feature_workers": config["backtest_feature_workers"],
+                "production_feature_cache": {
+                    "blocks_built": feature_cache_totals["blocks_built"],
+                    "blocks_reused": feature_cache_totals["blocks_reused"],
+                    "by_timeframe": {
+                        timeframe: {
+                            "built": values["built"],
+                            "reused": values["reused"],
+                            "compute_seconds": round(values["compute_seconds"], 6),
+                        }
+                        for timeframe, values in feature_cache_totals["by_timeframe"].items()
+                    },
+                },
                 "total_seconds": {
                     key: round(value, 6)
                     for key, value in performance_totals.items()
@@ -2153,8 +2272,12 @@ def run_backtest(payload: dict[str, Any], progress_callback=None, cancel_event=N
         return {"ok": False, "run_id": run_id, "error": str(exc), "config": config, "preflight": preflight.to_dict()}
 
     finally:
-        if equity_conn is not None:
-            equity_conn.close()
+        try:
+            if hasattr(strategy, "close"):
+                strategy.close()
+        finally:
+            if equity_conn is not None:
+                equity_conn.close()
 
 
 def list_runs(limit: int = 20) -> list[dict[str, Any]]:
